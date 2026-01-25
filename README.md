@@ -1,65 +1,65 @@
-# Aiogram 3 Bot Template
+# Шаблон Telegram-бота на Aiogram 3
 
-## 📚 Description
-This is a fully-featured Telegram bot template built with **aiogram 3.x** (currently 3.7). It includes an admin panel, payment integration, database support, and modular architecture for scalable development.
+## 📚 Описание
+Это полнофункциональный шаблон Telegram-бота на **aiogram 3.x** (текущая версия в requirements — 3.24.0). Включает админ‑панель, интеграцию оплаты, поддержку БД и модульную архитектуру для масштабируемой разработки.
 
-## 🚀 Features
-- **Admin Panel**: Manage users, announcements, and administrative tasks.
-- **Payment Integration**: Support for YooKassa transactions.
-- **Reminder System**: Schedule and manage automated reminders.
-- **User Profiles**: Store and manage user data in a structured database.
-- **State Management**: Easily manage bot states using FSM.
-- **Environment Configuration**: Securely manage configurations with `.env` files.
+## 🚀 Возможности
+- **Админ‑панель**: управление пользователями, рассылками и админ‑задачами.
+- **Оплата**: поддержка YooKassa (опционально).
+- **Напоминания**: планирование и отправка напоминаний.
+- **Профили пользователей**: хранение данных в базе.
+- **FSM‑состояния**: удобное управление состояниями диалога.
+- **Конфигурация окружения**: хранение секретов в `.env`.
 
-## 🛠️ Installation
+## 🛠️ Установка
 
-1. Clone the repository:
+1. Клонируйте репозиторий:
    ```bash
    git clone https://github.com/mlt-melt/aiogram3BotTemplate.git
    cd aiogram3BotTemplate
    ```
 
-2. Install dependencies:
+2. Установите зависимости:
    ```bash
    pip install -r storage/requirements.txt
    ```
 
-3. Create a `.env` file in `storage/` and add your telegram bot and yookassa tokens and other configurations.
+3. Создайте файл `.env` в `storage/` и добавьте токены бота и (опционально) YooKassa.
 
-4. Fill a `config.py` file in `storage/` with your telegram bot url and admins ids list.
+4. Заполните `storage/config.py`: укажите URL бота и список ID администраторов.
 
-5. Start the bot:
+5. Запустите бота:
    ```bash
    python bot.py
    ```
 
-## 📄 Configuration
-Settings are managed in the `.env` and `storage/config.py` files.
+## 📄 Конфигурация
+Настройки находятся в `.env` и `storage/config.py`.
 
-### Example `.env` file:
+### Пример `.env`:
 ```
 BOT_TOKEN=tg_bot_token
 YOOKASSA_SHOP_ID=your_shop_id
 YOOKASSA_SECRET_TOKEN=your_secret_token
 ```
 
-## 💻 Usage
-- Start the bot using `python bot.py`
-- Access admin panel commands with `/admin`
-- Customize bot handlers and commands in `handlers/`
+## 💻 Использование
+- Запуск: `python bot.py`
+- Команды админ‑панели: `/admin`
+- Обработчики и команды находятся в `handlers/`
 
-## 🧠 Technologies
+## 🧠 Технологии
 - **Python**
 - **Aiogram 3.x**
 - **SQLite**
 - **YooKassa API**
 
-## 📊 Database
-- The bot uses an SQLite database (`db.db`) for user and session data.
+## 📊 База данных
+- Используется SQLite база `db.db` для данных пользователей и сессий.
 
-## 👤 Author
+## 👤 Автор
 **Melt**  
 [GitHub Profile](https://github.com/mlt-melt)
 
-## 📜 License
-This project is licensed under the MIT License.
+## 📜 Лицензия
+Проект распространяется по лицензии MIT.
