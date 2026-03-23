@@ -1,8 +1,9 @@
 import logging
 import requests
-from storage.config import admins, bot_token
+from storage.config import admins, bot_token, DEBUG_MODE
 
-logging.basicConfig(level=logging.INFO, format="SCRIPT | %(levelname)s | %(message)s")
+log_level = logging.DEBUG if DEBUG_MODE else logging.INFO
+logging.basicConfig(level=log_level, format="SCRIPT | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
 
 def log(department, level, msg, user_id="SYSTEM"):
