@@ -16,6 +16,11 @@ from aiogram import types
 def start_mkp():
     btns = [
         [
+            types.InlineKeyboardButton(
+                text="Мой план", callback_data="workout_plan"
+            )
+        ],
+        [
             types.InlineKeyboardButton(text="Профиль", callback_data="profile")
         ],
     ]
@@ -45,6 +50,19 @@ def profile_mpk():
         ],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=btns)
+
+
+def workout_plan_mkp():
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="Вернуться в меню",
+                    callback_data="start",
+                )
+            ]
+        ]
+    )
 
 
 def onboarding_sex_mkp():

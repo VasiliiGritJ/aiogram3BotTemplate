@@ -10,6 +10,7 @@ import admin_panel.mailing.mailing
 import handlers.onboarding
 import handlers.start
 import handlers.profile
+import handlers.workout_plan
 import handlers.chat_join
 
 async def bot_stopped():

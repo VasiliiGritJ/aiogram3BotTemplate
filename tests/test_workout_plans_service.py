@@ -218,6 +218,18 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         self.assertIn("отдых", text)
         self.assertIn("Подсказка:", text)
 
+    def test_longest_supported_plan_fits_one_telegram_message(self) -> None:
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+            profile.workouts_per_week = 4
+            profile.session_duration_minutes = 60
+            session.commit()
+
+        result = assign_workout_plan(self.user_id, self.database)
+        text = format_workout_plan(result.plan, result.fallback_notes)
+
+        self.assertLessEqual(len(text), 4096)
+
     def test_profile_is_required(self) -> None:
         with self.database() as session:
             session.delete(session.get(FitnessProfile, self.user_id))
