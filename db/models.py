@@ -1,16 +1,27 @@
 from datetime import datetime
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import CheckConstraint, DateTime, Float, Integer, create_engine, event
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
 class Base(DeclarativeBase):
     pass
 
 class SqliteSession:
-    def __init__(self):
-        self._engine = create_engine("sqlite:///db.db")
-        self._session = sessionmaker(bind=self._engine)
-        # self._session = Session()
+    def __init__(self, database_url: str = "sqlite:///db.db"):
+        self._engine = create_engine(database_url)
+        event.listen(self._engine, "connect", self._enable_foreign_keys)
+        self._session = sessionmaker(bind=self._engine, expire_on_commit=False)
+
+    @staticmethod
+    def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+        del connection_record
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    @property
+    def engine(self):
+        return self._engine
     
     def __call__(self):
         return self._session()
@@ -18,10 +29,17 @@ class SqliteSession:
     def __getattr__(self, name):
         return getattr(self._session, name)
     
-    async def create_all(self):
-        async with self._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        await self._engine.dispose()
+    def create_all(self) -> None:
+        """Create mapped tables synchronously; migrations remain authoritative."""
+        Base.metadata.create_all(self._engine)
+
+    def migrate(self) -> tuple[int, ...]:
+        from db.migrations import run_migrations
+
+        return run_migrations(self._engine)
+
+    def dispose(self) -> None:
+        self._engine.dispose()
 
 dbSession = SqliteSession()
 
@@ -141,7 +159,7 @@ class User(Base, ModelAdmin):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    tg_id: Mapped[int] = mapped_column(BigInteger())
+    tg_id: Mapped[int] = mapped_column(BigInteger(), unique=True)
     fullname: Mapped[str] = mapped_column(Text())
     username: Mapped[str] = mapped_column(Text())
     inviter_id: Mapped[int] = mapped_column(BigInteger())
@@ -172,5 +190,51 @@ class Payments(Base, ModelAdmin):
     )
 
 
-# engine = create_engine("sqlite:///db.db")
-# Base.metadata.create_all(engine)
+class FitnessProfile(Base):
+    __tablename__ = "fitness_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "goal IN ('muscle_gain', 'fat_loss')",
+            name="ck_fitness_profiles_goal",
+        ),
+        CheckConstraint(
+            "experience_level IN ('beginner', 'some_experience')",
+            name="ck_fitness_profiles_experience_level",
+        ),
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    age: Mapped[int] = mapped_column(Integer())
+    sex: Mapped[str] = mapped_column(Text())
+    height_cm: Mapped[int] = mapped_column(Integer())
+    weight_kg: Mapped[float] = mapped_column(Float())
+    goal: Mapped[str] = mapped_column(Text())
+    experience_level: Mapped[str] = mapped_column(Text())
+    workouts_per_week: Mapped[int] = mapped_column(Integer())
+    session_duration_minutes: Mapped[int] = mapped_column(Integer())
+    limitations: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+
+
+class UserAccess(Base):
+    __tablename__ = "user_access"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    trial_started_at: Mapped[datetime] = mapped_column(DateTime())
+    trial_ends_at: Mapped[datetime] = mapped_column(DateTime())
+    subscription_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    subscription_ends_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
