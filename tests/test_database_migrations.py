@@ -1,5 +1,3 @@
-import hashlib
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,18 +7,6 @@ from sqlalchemy.exc import IntegrityError
 
 from db.migrations import DuplicateTelegramIdsError, run_migrations
 from db.models import SqliteSession
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-REAL_DATABASE = PROJECT_ROOT / "db.db"
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(64 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def sqlite_url(path: Path) -> str:
@@ -166,12 +152,54 @@ class DatabaseMigrationTests(unittest.TestCase):
             any(index["unique"] for index in inspector.get_indexes("users"))
         )
 
-    def test_existing_database_copy_preserves_user_data(self) -> None:
-        real_database_hash = sha256(REAL_DATABASE)
-        copied_database = Path(self.temp_directory.name) / "existing-copy.db"
-        shutil.copy2(REAL_DATABASE, copied_database)
-        session = SqliteSession(sqlite_url(copied_database))
-        self.sessions.append(session)
+    def test_legacy_database_migration_preserves_user_data(self) -> None:
+        session = self.make_session("legacy.db")
+
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE users (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    tg_id BIGINT NOT NULL,
+                    fullname TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    inviter_id BIGINT NOT NULL,
+                    reg_datetime DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE payments (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    user INTEGER NOT NULL REFERENCES users (id),
+                    yoo_id TEXT NOT NULL,
+                    link TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    reg_datetime DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO users (
+                    id, tg_id, fullname, username, inviter_id, reg_datetime
+                ) VALUES (
+                    1, 123456789, 'Test User', 'test_user', 0,
+                    '2026-01-01 12:00:00'
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO payments (
+                    id, user, yoo_id, link, status, reg_datetime
+                ) VALUES (
+                    1, 1, 'test-payment', 'https://example.invalid/payment',
+                    'pending', '2026-01-01 12:05:00'
+                )
+                """
+            )
 
         with session.engine.connect() as connection:
             users_before = connection.exec_driver_sql(
@@ -194,7 +222,6 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual((1, 2), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
-        self.assertEqual(real_database_hash, sha256(REAL_DATABASE))
 
     def test_create_all_uses_synchronous_sqlalchemy_api(self) -> None:
         session = self.make_session()

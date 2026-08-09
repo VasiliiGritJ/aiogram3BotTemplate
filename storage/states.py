@@ -1,4 +1,4 @@
-from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.state import State as FSMState, StatesGroup
 
 async def tryFinish(state):
     try:
@@ -7,20 +7,20 @@ async def tryFinish(state):
         pass
 
 class State(StatesGroup):
-    State = State()
+    State = FSMState()
 
 class ContactWithDevs(StatesGroup):
-    Message = State()
+    Message = FSMState()
 
 
 class Onboarding(StatesGroup):
-    age = State()
-    sex = State()
-    height_cm = State()
-    weight_kg = State()
-    goal = State()
-    experience_level = State()
-    workouts_per_week = State()
-    session_duration_minutes = State()
-    limitations = State()
-    confirmation = State()
+    age = FSMState()
+    sex = FSMState()
+    height_cm = FSMState()
+    weight_kg = FSMState()
+    goal = FSMState()
+    experience_level = FSMState()
+    workouts_per_week = FSMState()
+    session_duration_minutes = FSMState()
+    limitations = FSMState()
+    confirmation = FSMState()
