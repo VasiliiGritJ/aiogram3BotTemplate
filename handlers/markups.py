@@ -45,3 +45,79 @@ def profile_mpk():
         ],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=btns)
+
+
+def onboarding_sex_mkp():
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="Мужской", callback_data="onboarding:sex:male"
+                ),
+                types.InlineKeyboardButton(
+                    text="Женский", callback_data="onboarding:sex:female"
+                ),
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="Не указывать",
+                    callback_data="onboarding:sex:not_specified",
+                )
+            ],
+        ]
+    )
+
+
+def onboarding_goal_mkp():
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="Набор мышечной массы / веса",
+                    callback_data="onboarding:goal:muscle_gain",
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="Снижение веса / жира",
+                    callback_data="onboarding:goal:fat_loss",
+                )
+            ],
+        ]
+    )
+
+
+def onboarding_experience_mkp():
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="Новичок",
+                    callback_data="onboarding:experience:beginner",
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="Есть небольшой опыт",
+                    callback_data="onboarding:experience:some_experience",
+                )
+            ],
+        ]
+    )
+
+
+def onboarding_confirmation_mkp():
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="Подтвердить", callback_data="onboarding:confirm"
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="Заполнить заново", callback_data="onboarding:restart"
+                )
+            ],
+        ]
+    )

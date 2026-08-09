@@ -7,6 +7,7 @@ import utils.custom_logger as cl
 import admin_panel.admin.admin
 import admin_panel.mailing.mailing
 
+import handlers.onboarding
 import handlers.start
 import handlers.profile
 import handlers.chat_join

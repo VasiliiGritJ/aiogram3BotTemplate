@@ -11,3 +11,16 @@ class State(StatesGroup):
 
 class ContactWithDevs(StatesGroup):
     Message = State()
+
+
+class Onboarding(StatesGroup):
+    age = State()
+    sex = State()
+    height_cm = State()
+    weight_kg = State()
+    goal = State()
+    experience_level = State()
+    workouts_per_week = State()
+    session_duration_minutes = State()
+    limitations = State()
+    confirmation = State()
