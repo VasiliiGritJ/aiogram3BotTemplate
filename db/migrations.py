@@ -108,9 +108,151 @@ def _create_fitness_foundation(connection: Connection) -> None:
     )
 
 
+def _create_workout_planning(connection: Connection) -> None:
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS exercises (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            muscle_group TEXT NOT NULL,
+            equipment TEXT NOT NULL,
+            hint TEXT NOT NULL,
+            restriction_tags TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS workout_templates (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            experience_level TEXT NOT NULL,
+            workouts_per_week INTEGER NOT NULL,
+            duration_bucket TEXT NOT NULL,
+            equipment TEXT NOT NULL,
+            CONSTRAINT ck_workout_templates_goal
+                CHECK (goal IN ('muscle_gain', 'fat_loss')),
+            CONSTRAINT ck_workout_templates_experience_level
+                CHECK (experience_level IN ('beginner', 'some_experience')),
+            CONSTRAINT ck_workout_templates_workouts_per_week
+                CHECK (workouts_per_week BETWEEN 1 AND 4),
+            CONSTRAINT ck_workout_templates_duration_bucket
+                CHECK (duration_bucket IN ('short', 'standard'))
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS workout_template_days (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL,
+            day_number INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            CONSTRAINT uq_workout_template_days_order
+                UNIQUE (template_id, day_number),
+            CONSTRAINT ck_workout_template_days_day_number
+                CHECK (day_number >= 1),
+            FOREIGN KEY(template_id) REFERENCES workout_templates (id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS workout_template_exercises (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            template_day_id INTEGER NOT NULL,
+            exercise_id INTEGER NOT NULL,
+            exercise_order INTEGER NOT NULL,
+            sets INTEGER NOT NULL,
+            reps_min INTEGER NOT NULL,
+            reps_max INTEGER NOT NULL,
+            rest_seconds INTEGER NOT NULL,
+            CONSTRAINT uq_workout_template_exercises_order
+                UNIQUE (template_day_id, exercise_order),
+            CONSTRAINT ck_workout_template_exercises_order
+                CHECK (exercise_order >= 1),
+            CONSTRAINT ck_workout_template_exercises_sets CHECK (sets >= 1),
+            CONSTRAINT ck_workout_template_exercises_reps
+                CHECK (reps_min >= 1 AND reps_max >= reps_min),
+            CONSTRAINT ck_workout_template_exercises_rest
+                CHECK (rest_seconds >= 0),
+            FOREIGN KEY(template_day_id) REFERENCES workout_template_days (id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(exercise_id) REFERENCES exercises (id)
+                ON DELETE RESTRICT
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS user_workout_plans (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            template_id INTEGER NOT NULL,
+            profile_signature TEXT NOT NULL,
+            assigned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE,
+            FOREIGN KEY(template_id) REFERENCES workout_templates (id)
+                ON DELETE RESTRICT
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS user_workout_plan_days (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL,
+            day_number INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            CONSTRAINT uq_user_workout_plan_days_order
+                UNIQUE (plan_id, day_number),
+            CONSTRAINT ck_user_workout_plan_days_day_number
+                CHECK (day_number >= 1),
+            FOREIGN KEY(plan_id) REFERENCES user_workout_plans (id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS user_workout_plan_exercises (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            plan_day_id INTEGER NOT NULL,
+            exercise_id INTEGER NOT NULL,
+            exercise_order INTEGER NOT NULL,
+            exercise_name TEXT NOT NULL,
+            sets INTEGER NOT NULL,
+            reps_min INTEGER NOT NULL,
+            reps_max INTEGER NOT NULL,
+            rest_seconds INTEGER NOT NULL,
+            hint TEXT NOT NULL,
+            CONSTRAINT uq_user_workout_plan_exercises_order
+                UNIQUE (plan_day_id, exercise_order),
+            CONSTRAINT ck_user_workout_plan_exercises_order
+                CHECK (exercise_order >= 1),
+            CONSTRAINT ck_user_workout_plan_exercises_sets CHECK (sets >= 1),
+            CONSTRAINT ck_user_workout_plan_exercises_reps
+                CHECK (reps_min >= 1 AND reps_max >= reps_min),
+            CONSTRAINT ck_user_workout_plan_exercises_rest
+                CHECK (rest_seconds >= 0),
+            FOREIGN KEY(plan_day_id) REFERENCES user_workout_plan_days (id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(exercise_id) REFERENCES exercises (id)
+                ON DELETE RESTRICT
+        )
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
+    Migration(3, "workout_planning", _create_workout_planning),
 )
 
 
@@ -126,13 +268,18 @@ def _ensure_migration_table(connection: Connection) -> None:
     )
 
 
-def run_migrations(engine: Engine) -> tuple[int, ...]:
+def run_migrations(
+    engine: Engine,
+    target_version: int | None = None,
+) -> tuple[int, ...]:
     """Apply pending migrations in order and return newly applied versions."""
     with engine.begin() as connection:
         _ensure_migration_table(connection)
 
     applied_now: list[int] = []
     for migration in MIGRATIONS:
+        if target_version is not None and migration.version > target_version:
+            break
         with engine.begin() as connection:
             already_applied = connection.exec_driver_sql(
                 "SELECT 1 FROM schema_migrations WHERE version = ?",
@@ -149,4 +296,3 @@ def run_migrations(engine: Engine) -> tuple[int, ...]:
             applied_now.append(migration.version)
 
     return tuple(applied_now)
-

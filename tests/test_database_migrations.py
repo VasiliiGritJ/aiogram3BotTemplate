@@ -35,10 +35,22 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2), applied)
+        self.assertEqual((1, 2, 3), applied)
         self.assertTrue(
-            {"users", "payments", "fitness_profiles", "user_access",
-             "schema_migrations"}.issubset(table_names)
+            {
+                "users",
+                "payments",
+                "fitness_profiles",
+                "user_access",
+                "exercises",
+                "workout_templates",
+                "workout_template_days",
+                "workout_template_exercises",
+                "user_workout_plans",
+                "user_workout_plan_days",
+                "user_workout_plan_exercises",
+                "schema_migrations",
+            }.issubset(table_names)
         )
 
     def test_migrations_are_safe_to_run_repeatedly(self) -> None:
@@ -51,9 +63,87 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2), first_run)
+        self.assertEqual((1, 2, 3), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(2, applied_count)
+        self.assertEqual(3, applied_count)
+
+    def test_migration_three_preserves_stage_one_data(self) -> None:
+        session = self.make_session("stage-one.db")
+        self.assertEqual((1, 2), run_migrations(session.engine, target_version=2))
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                INSERT INTO users (id, tg_id, fullname, username, inviter_id)
+                VALUES (1, 123456789, 'Test User', 'test_user', 0)
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO fitness_profiles (
+                    user_id, age, sex, height_cm, weight_kg, goal,
+                    experience_level, workouts_per_week,
+                    session_duration_minutes, limitations, completed_at
+                ) VALUES (
+                    1, 30, 'male', 180, 80.5, 'muscle_gain',
+                    'beginner', 3, 60, NULL, '2026-08-09 12:00:00'
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO user_access (
+                    user_id, trial_started_at, trial_ends_at
+                ) VALUES (
+                    1, '2026-08-09 12:00:00', '2026-08-12 12:00:00'
+                )
+                """
+            )
+
+        applied = run_migrations(session.engine)
+
+        with session.engine.connect() as connection:
+            profile = connection.exec_driver_sql(
+                "SELECT goal, workouts_per_week FROM fitness_profiles WHERE user_id = 1"
+            ).one()
+            access = connection.exec_driver_sql(
+                "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
+            ).one()
+
+        self.assertEqual((3,), applied)
+        self.assertEqual(("muscle_gain", 3), profile)
+        self.assertEqual(
+            ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
+            access,
+        )
+
+    def test_workout_planning_schema_has_required_constraints(self) -> None:
+        session = self.make_session("planning-schema.db")
+        run_migrations(session.engine)
+        inspector = inspect(session.engine)
+
+        plan_unique_constraints = inspector.get_unique_constraints(
+            "user_workout_plans"
+        )
+        self.assertTrue(
+            any(
+                constraint["column_names"] == ["user_id"]
+                for constraint in plan_unique_constraints
+            )
+        )
+
+        with self.assertRaises(IntegrityError):
+            with session.engine.begin() as connection:
+                connection.exec_driver_sql(
+                    """
+                    INSERT INTO workout_templates (
+                        code, name, goal, experience_level,
+                        workouts_per_week, duration_bucket, equipment
+                    ) VALUES (
+                        'invalid', 'Invalid', 'muscle_gain', 'beginner',
+                        5, 'standard', 'gym'
+                    )
+                    """
+                )
 
     def test_fitness_profile_and_access_schema(self) -> None:
         session = self.make_session()
@@ -219,7 +309,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2), applied)
+        self.assertEqual((1, 2, 3), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

@@ -1,3 +1,27 @@
-from db.models import FitnessProfile, Payments, User, UserAccess
+from db.models import (
+    Exercise,
+    FitnessProfile,
+    Payments,
+    User,
+    UserAccess,
+    UserWorkoutPlan,
+    UserWorkoutPlanDay,
+    UserWorkoutPlanExercise,
+    WorkoutTemplate,
+    WorkoutTemplateDay,
+    WorkoutTemplateExercise,
+)
 
-__all__ = ("FitnessProfile", "Payments", "User", "UserAccess")
+__all__ = (
+    "Exercise",
+    "FitnessProfile",
+    "Payments",
+    "User",
+    "UserAccess",
+    "UserWorkoutPlan",
+    "UserWorkoutPlanDay",
+    "UserWorkoutPlanExercise",
+    "WorkoutTemplate",
+    "WorkoutTemplateDay",
+    "WorkoutTemplateExercise",
+)

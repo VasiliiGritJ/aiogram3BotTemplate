@@ -1,5 +1,13 @@
 from datetime import datetime
-from sqlalchemy import CheckConstraint, DateTime, Float, Integer, create_engine, event
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Float,
+    Integer,
+    UniqueConstraint,
+    create_engine,
+    event,
+)
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -238,3 +246,185 @@ class UserAccess(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(), server_default=func.now()
     )
+
+
+class Exercise(Base):
+    __tablename__ = "exercises"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(Text(), unique=True)
+    name: Mapped[str] = mapped_column(Text())
+    muscle_group: Mapped[str] = mapped_column(Text())
+    equipment: Mapped[str] = mapped_column(Text())
+    hint: Mapped[str] = mapped_column(Text())
+    restriction_tags: Mapped[str] = mapped_column(Text(), server_default="")
+
+
+class WorkoutTemplate(Base):
+    __tablename__ = "workout_templates"
+    __table_args__ = (
+        CheckConstraint(
+            "goal IN ('muscle_gain', 'fat_loss')",
+            name="ck_workout_templates_goal",
+        ),
+        CheckConstraint(
+            "experience_level IN ('beginner', 'some_experience')",
+            name="ck_workout_templates_experience_level",
+        ),
+        CheckConstraint(
+            "workouts_per_week BETWEEN 1 AND 4",
+            name="ck_workout_templates_workouts_per_week",
+        ),
+        CheckConstraint(
+            "duration_bucket IN ('short', 'standard')",
+            name="ck_workout_templates_duration_bucket",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(Text(), unique=True)
+    name: Mapped[str] = mapped_column(Text())
+    goal: Mapped[str] = mapped_column(Text())
+    experience_level: Mapped[str] = mapped_column(Text())
+    workouts_per_week: Mapped[int] = mapped_column(Integer())
+    duration_bucket: Mapped[str] = mapped_column(Text())
+    equipment: Mapped[str] = mapped_column(Text())
+
+
+class WorkoutTemplateDay(Base):
+    __tablename__ = "workout_template_days"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_id",
+            "day_number",
+            name="uq_workout_template_days_order",
+        ),
+        CheckConstraint(
+            "day_number >= 1",
+            name="ck_workout_template_days_day_number",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    template_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_templates.id", ondelete="CASCADE")
+    )
+    day_number: Mapped[int] = mapped_column(Integer())
+    title: Mapped[str] = mapped_column(Text())
+
+
+class WorkoutTemplateExercise(Base):
+    __tablename__ = "workout_template_exercises"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_day_id",
+            "exercise_order",
+            name="uq_workout_template_exercises_order",
+        ),
+        CheckConstraint(
+            "exercise_order >= 1",
+            name="ck_workout_template_exercises_order",
+        ),
+        CheckConstraint("sets >= 1", name="ck_workout_template_exercises_sets"),
+        CheckConstraint(
+            "reps_min >= 1 AND reps_max >= reps_min",
+            name="ck_workout_template_exercises_reps",
+        ),
+        CheckConstraint(
+            "rest_seconds >= 0",
+            name="ck_workout_template_exercises_rest",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    template_day_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_template_days.id", ondelete="CASCADE")
+    )
+    exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("exercises.id", ondelete="RESTRICT")
+    )
+    exercise_order: Mapped[int] = mapped_column(Integer())
+    sets: Mapped[int] = mapped_column(Integer())
+    reps_min: Mapped[int] = mapped_column(Integer())
+    reps_max: Mapped[int] = mapped_column(Integer())
+    rest_seconds: Mapped[int] = mapped_column(Integer())
+
+
+class UserWorkoutPlan(Base):
+    __tablename__ = "user_workout_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
+    template_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_templates.id", ondelete="RESTRICT")
+    )
+    profile_signature: Mapped[str] = mapped_column(Text())
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+
+
+class UserWorkoutPlanDay(Base):
+    __tablename__ = "user_workout_plan_days"
+    __table_args__ = (
+        UniqueConstraint(
+            "plan_id",
+            "day_number",
+            name="uq_user_workout_plan_days_order",
+        ),
+        CheckConstraint(
+            "day_number >= 1",
+            name="ck_user_workout_plan_days_day_number",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey("user_workout_plans.id", ondelete="CASCADE")
+    )
+    day_number: Mapped[int] = mapped_column(Integer())
+    title: Mapped[str] = mapped_column(Text())
+
+
+class UserWorkoutPlanExercise(Base):
+    __tablename__ = "user_workout_plan_exercises"
+    __table_args__ = (
+        UniqueConstraint(
+            "plan_day_id",
+            "exercise_order",
+            name="uq_user_workout_plan_exercises_order",
+        ),
+        CheckConstraint(
+            "exercise_order >= 1",
+            name="ck_user_workout_plan_exercises_order",
+        ),
+        CheckConstraint("sets >= 1", name="ck_user_workout_plan_exercises_sets"),
+        CheckConstraint(
+            "reps_min >= 1 AND reps_max >= reps_min",
+            name="ck_user_workout_plan_exercises_reps",
+        ),
+        CheckConstraint(
+            "rest_seconds >= 0",
+            name="ck_user_workout_plan_exercises_rest",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_day_id: Mapped[int] = mapped_column(
+        ForeignKey("user_workout_plan_days.id", ondelete="CASCADE")
+    )
+    exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("exercises.id", ondelete="RESTRICT")
+    )
+    exercise_order: Mapped[int] = mapped_column(Integer())
+    exercise_name: Mapped[str] = mapped_column(Text())
+    sets: Mapped[int] = mapped_column(Integer())
+    reps_min: Mapped[int] = mapped_column(Integer())
+    reps_max: Mapped[int] = mapped_column(Integer())
+    rest_seconds: Mapped[int] = mapped_column(Integer())
+    hint: Mapped[str] = mapped_column(Text())
