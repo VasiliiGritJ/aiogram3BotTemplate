@@ -299,11 +299,136 @@ def _upgrade_stage_two_architecture(connection: Connection) -> None:
     connection.exec_driver_sql("ALTER TABLE user_access_v4 RENAME TO user_access")
 
 
+def _create_workout_execution(connection: Connection) -> None:
+    """Add durable workout sessions, exercise snapshots, and set results."""
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS workout_sessions (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            source_plan_id INTEGER,
+            source_plan_day_id INTEGER,
+            day_number INTEGER NOT NULL,
+            day_title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'in_progress',
+            started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            finished_at DATETIME,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_workout_sessions_status
+                CHECK (status IN ('in_progress', 'completed', 'cancelled')),
+            CONSTRAINT ck_workout_sessions_day_number
+                CHECK (day_number >= 1),
+            CONSTRAINT ck_workout_sessions_finished_at CHECK (
+                (status = 'in_progress' AND finished_at IS NULL)
+                OR (status IN ('completed', 'cancelled') AND finished_at IS NOT NULL)
+            ),
+            CONSTRAINT ck_workout_sessions_time_order
+                CHECK (finished_at IS NULL OR finished_at >= started_at),
+            FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE,
+            FOREIGN KEY(source_plan_id) REFERENCES user_workout_plans (id)
+                ON DELETE SET NULL,
+            FOREIGN KEY(source_plan_day_id) REFERENCES user_workout_plan_days (id)
+                ON DELETE SET NULL
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_workout_sessions_active_user
+        ON workout_sessions (user_id)
+        WHERE status = 'in_progress'
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE INDEX IF NOT EXISTS ix_workout_sessions_user_finished_at
+        ON workout_sessions (user_id, finished_at)
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS workout_session_exercises (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            source_plan_exercise_id INTEGER,
+            exercise_order INTEGER NOT NULL,
+            planned_exercise_id INTEGER,
+            planned_exercise_name TEXT NOT NULL,
+            planned_primary_muscle_group TEXT NOT NULL,
+            planned_target_sets INTEGER NOT NULL,
+            planned_target_reps_min INTEGER NOT NULL,
+            planned_target_reps_max INTEGER NOT NULL,
+            planned_rest_seconds INTEGER NOT NULL,
+            planned_hint TEXT NOT NULL,
+            selected_exercise_id INTEGER,
+            selected_exercise_name TEXT NOT NULL,
+            selected_primary_muscle_group TEXT NOT NULL,
+            selected_target_sets INTEGER NOT NULL,
+            selected_target_reps_min INTEGER NOT NULL,
+            selected_target_reps_max INTEGER NOT NULL,
+            selected_rest_seconds INTEGER NOT NULL,
+            selected_hint TEXT NOT NULL,
+            CONSTRAINT uq_workout_session_exercises_order
+                UNIQUE (session_id, exercise_order),
+            CONSTRAINT ck_workout_session_exercises_order
+                CHECK (exercise_order >= 1),
+            CONSTRAINT ck_workout_session_exercises_planned_sets
+                CHECK (planned_target_sets >= 1),
+            CONSTRAINT ck_workout_session_exercises_planned_reps CHECK (
+                planned_target_reps_min >= 1
+                AND planned_target_reps_max >= planned_target_reps_min
+            ),
+            CONSTRAINT ck_workout_session_exercises_planned_rest
+                CHECK (planned_rest_seconds >= 0),
+            CONSTRAINT ck_workout_session_exercises_selected_sets
+                CHECK (selected_target_sets >= 1),
+            CONSTRAINT ck_workout_session_exercises_selected_reps CHECK (
+                selected_target_reps_min >= 1
+                AND selected_target_reps_max >= selected_target_reps_min
+            ),
+            CONSTRAINT ck_workout_session_exercises_selected_rest
+                CHECK (selected_rest_seconds >= 0),
+            FOREIGN KEY(session_id) REFERENCES workout_sessions (id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(source_plan_exercise_id)
+                REFERENCES user_workout_plan_exercises (id) ON DELETE SET NULL,
+            FOREIGN KEY(planned_exercise_id) REFERENCES exercises (id)
+                ON DELETE SET NULL,
+            FOREIGN KEY(selected_exercise_id) REFERENCES exercises (id)
+                ON DELETE SET NULL
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS workout_set_results (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            session_exercise_id INTEGER NOT NULL,
+            set_number INTEGER NOT NULL,
+            actual_weight_kg FLOAT NOT NULL,
+            actual_reps INTEGER NOT NULL,
+            completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_workout_set_results_set_number
+                UNIQUE (session_exercise_id, set_number),
+            CONSTRAINT ck_workout_set_results_set_number
+                CHECK (set_number >= 1),
+            CONSTRAINT ck_workout_set_results_weight
+                CHECK (actual_weight_kg >= 0),
+            CONSTRAINT ck_workout_set_results_reps
+                CHECK (actual_reps >= 1),
+            FOREIGN KEY(session_exercise_id)
+                REFERENCES workout_session_exercises (id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
     Migration(3, "workout_planning", _create_workout_planning),
     Migration(4, "stage_two_architecture", _upgrade_stage_two_architecture),
+    Migration(5, "workout_execution", _create_workout_execution),
 )
 
 

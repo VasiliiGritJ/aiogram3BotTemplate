@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3, 4), applied)
+        self.assertEqual((1, 2, 3, 4, 5), applied)
         self.assertTrue(
             {
                 "users",
@@ -49,6 +49,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "user_workout_plans",
                 "user_workout_plan_days",
                 "user_workout_plan_exercises",
+                "workout_sessions",
+                "workout_session_exercises",
+                "workout_set_results",
                 "schema_migrations",
             }.issubset(table_names)
         )
@@ -63,9 +66,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3, 4), first_run)
+        self.assertEqual((1, 2, 3, 4, 5), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(4, applied_count)
+        self.assertEqual(5, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -109,7 +112,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3, 4), applied)
+        self.assertEqual((3, 4, 5), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
@@ -144,6 +147,133 @@ class DatabaseMigrationTests(unittest.TestCase):
                     )
                     """
                 )
+
+    def test_migration_five_preserves_stage_one_and_two_data(self) -> None:
+        session = self.make_session("stage-two.db")
+        self.assertEqual(
+            (1, 2, 3, 4),
+            run_migrations(session.engine, target_version=4),
+        )
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                INSERT INTO users (id, tg_id, fullname, username, inviter_id)
+                VALUES (1, 123456789, 'Test User', 'test_user', 0)
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO fitness_profiles (
+                    user_id, age, sex, height_cm, weight_kg, goal,
+                    experience_level, workouts_per_week,
+                    session_duration_minutes, limitations, completed_at
+                ) VALUES (
+                    1, 30, 'male', 180, 80.5, 'muscle_gain',
+                    'beginner', 1, 60, NULL, '2026-08-10 12:00:00'
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO user_access (
+                    user_id, trial_started_at, trial_ends_at
+                ) VALUES (
+                    1, '2026-08-10 12:00:00', '2026-08-13 12:00:00'
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO exercises (
+                    id, code, name, muscle_group, primary_muscle_group,
+                    equipment, variant, alternative_name, hint, restriction_tags
+                ) VALUES (
+                    1, 'test_press', 'Тестовый жим', 'chest', 'грудь',
+                    'machine', NULL, NULL, 'Без рывков.', ''
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO workout_templates (
+                    id, code, name, goal, experience_level,
+                    workouts_per_week, duration_bucket, equipment
+                ) VALUES (
+                    1, 'test_template', 'Тестовый план', 'muscle_gain',
+                    'beginner', 1, 'standard', 'gym'
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO workout_template_days (id, template_id, day_number, title)
+                VALUES (1, 1, 1, 'Тренировка 1')
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO workout_template_exercises (
+                    id, template_day_id, exercise_id, exercise_order,
+                    sets, reps_min, reps_max, rest_seconds
+                ) VALUES (1, 1, 1, 1, 3, 8, 12, 90)
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO user_workout_plans (
+                    id, user_id, template_id, profile_signature
+                ) VALUES (1, 1, 1, 'test-signature')
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO user_workout_plan_days (id, plan_id, day_number, title)
+                VALUES (1, 1, 1, 'Тренировка 1')
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO user_workout_plan_exercises (
+                    id, plan_day_id, exercise_id, exercise_order,
+                    exercise_name, primary_muscle_group, sets,
+                    reps_min, reps_max, rest_seconds, hint
+                ) VALUES (
+                    1, 1, 1, 1, 'Тестовый жим', 'грудь',
+                    3, 8, 12, 90, 'Без рывков.'
+                )
+                """
+            )
+
+        tables = (
+            "users",
+            "fitness_profiles",
+            "user_access",
+            "exercises",
+            "workout_templates",
+            "workout_template_days",
+            "workout_template_exercises",
+            "user_workout_plans",
+            "user_workout_plan_days",
+            "user_workout_plan_exercises",
+        )
+        with session.engine.connect() as connection:
+            before = {
+                table: connection.exec_driver_sql(
+                    f"SELECT * FROM {table} ORDER BY 1"
+                ).fetchall()
+                for table in tables
+            }
+
+        self.assertEqual((5,), run_migrations(session.engine))
+
+        with session.engine.connect() as connection:
+            after = {
+                table: connection.exec_driver_sql(
+                    f"SELECT * FROM {table} ORDER BY 1"
+                ).fetchall()
+                for table in tables
+            }
+        self.assertEqual(before, after)
 
     def test_fitness_profile_and_access_schema(self) -> None:
         session = self.make_session()
@@ -311,7 +441,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3, 4), applied)
+        self.assertEqual((1, 2, 3, 4, 5), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

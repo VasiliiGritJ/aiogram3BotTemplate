@@ -3,10 +3,12 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Float,
+    Index,
     Integer,
     UniqueConstraint,
     create_engine,
     event,
+    text,
 )
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -57,7 +59,7 @@ from sqlalchemy.schema import ForeignKey
 from sqlalchemy.types import Text, BigInteger 
 from sqlalchemy.sql import select, insert, update as sqlalchemy_update
 from sqlalchemy.sql.functions import func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.orm.strategy_options import load_only
 
 
@@ -432,3 +434,194 @@ class UserWorkoutPlanExercise(Base):
     reps_max: Mapped[int] = mapped_column(Integer())
     rest_seconds: Mapped[int] = mapped_column(Integer())
     hint: Mapped[str] = mapped_column(Text())
+
+
+class WorkoutSession(Base):
+    __tablename__ = "workout_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('in_progress', 'completed', 'cancelled')",
+            name="ck_workout_sessions_status",
+        ),
+        CheckConstraint(
+            "day_number >= 1",
+            name="ck_workout_sessions_day_number",
+        ),
+        CheckConstraint(
+            "(status = 'in_progress' AND finished_at IS NULL) OR "
+            "(status IN ('completed', 'cancelled') AND finished_at IS NOT NULL)",
+            name="ck_workout_sessions_finished_at",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR finished_at >= started_at",
+            name="ck_workout_sessions_time_order",
+        ),
+        Index(
+            "uq_workout_sessions_active_user",
+            "user_id",
+            unique=True,
+            sqlite_where=text("status = 'in_progress'"),
+        ),
+        Index(
+            "ix_workout_sessions_user_finished_at",
+            "user_id",
+            "finished_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE")
+    )
+    source_plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plans.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_plan_day_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plan_days.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    day_number: Mapped[int] = mapped_column(Integer())
+    day_title: Mapped[str] = mapped_column(Text())
+    status: Mapped[str] = mapped_column(
+        Text(), server_default="in_progress"
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+
+    exercises: Mapped[list["WorkoutSessionExercise"]] = relationship(
+        back_populates="workout_session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="WorkoutSessionExercise.exercise_order",
+    )
+
+
+class WorkoutSessionExercise(Base):
+    __tablename__ = "workout_session_exercises"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "exercise_order",
+            name="uq_workout_session_exercises_order",
+        ),
+        CheckConstraint(
+            "exercise_order >= 1",
+            name="ck_workout_session_exercises_order",
+        ),
+        CheckConstraint(
+            "planned_target_sets >= 1",
+            name="ck_workout_session_exercises_planned_sets",
+        ),
+        CheckConstraint(
+            "planned_target_reps_min >= 1 "
+            "AND planned_target_reps_max >= planned_target_reps_min",
+            name="ck_workout_session_exercises_planned_reps",
+        ),
+        CheckConstraint(
+            "planned_rest_seconds >= 0",
+            name="ck_workout_session_exercises_planned_rest",
+        ),
+        CheckConstraint(
+            "selected_target_sets >= 1",
+            name="ck_workout_session_exercises_selected_sets",
+        ),
+        CheckConstraint(
+            "selected_target_reps_min >= 1 "
+            "AND selected_target_reps_max >= selected_target_reps_min",
+            name="ck_workout_session_exercises_selected_reps",
+        ),
+        CheckConstraint(
+            "selected_rest_seconds >= 0",
+            name="ck_workout_session_exercises_selected_rest",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_sessions.id", ondelete="CASCADE")
+    )
+    source_plan_exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plan_exercises.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    exercise_order: Mapped[int] = mapped_column(Integer())
+
+    planned_exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("exercises.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    planned_exercise_name: Mapped[str] = mapped_column(Text())
+    planned_primary_muscle_group: Mapped[str] = mapped_column(Text())
+    planned_target_sets: Mapped[int] = mapped_column(Integer())
+    planned_target_reps_min: Mapped[int] = mapped_column(Integer())
+    planned_target_reps_max: Mapped[int] = mapped_column(Integer())
+    planned_rest_seconds: Mapped[int] = mapped_column(Integer())
+    planned_hint: Mapped[str] = mapped_column(Text())
+
+    selected_exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("exercises.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    selected_exercise_name: Mapped[str] = mapped_column(Text())
+    selected_primary_muscle_group: Mapped[str] = mapped_column(Text())
+    selected_target_sets: Mapped[int] = mapped_column(Integer())
+    selected_target_reps_min: Mapped[int] = mapped_column(Integer())
+    selected_target_reps_max: Mapped[int] = mapped_column(Integer())
+    selected_rest_seconds: Mapped[int] = mapped_column(Integer())
+    selected_hint: Mapped[str] = mapped_column(Text())
+
+    workout_session: Mapped["WorkoutSession"] = relationship(
+        back_populates="exercises"
+    )
+    set_results: Mapped[list["WorkoutSetResult"]] = relationship(
+        back_populates="session_exercise",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="WorkoutSetResult.set_number",
+    )
+
+
+class WorkoutSetResult(Base):
+    __tablename__ = "workout_set_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_exercise_id",
+            "set_number",
+            name="uq_workout_set_results_set_number",
+        ),
+        CheckConstraint(
+            "set_number >= 1",
+            name="ck_workout_set_results_set_number",
+        ),
+        CheckConstraint(
+            "actual_weight_kg >= 0",
+            name="ck_workout_set_results_weight",
+        ),
+        CheckConstraint(
+            "actual_reps >= 1",
+            name="ck_workout_set_results_reps",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_session_exercises.id", ondelete="CASCADE")
+    )
+    set_number: Mapped[int] = mapped_column(Integer())
+    actual_weight_kg: Mapped[float] = mapped_column(Float())
+    actual_reps: Mapped[int] = mapped_column(Integer())
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+
+    session_exercise: Mapped["WorkoutSessionExercise"] = relationship(
+        back_populates="set_results"
+    )
