@@ -9,7 +9,6 @@ from handlers.markups import to_menu_mpk, workout_plan_mkp
 from handlers.onboarding import start_onboarding
 from services.workout_plans import (
     FitnessProfileRequiredError,
-    PlanSafetyReviewRequired,
     WorkoutPlanError,
     assign_workout_plan,
     format_workout_plan,
@@ -37,13 +36,6 @@ async def workout_plan_call(
         result = assign_workout_plan(user.id)
     except FitnessProfileRequiredError:
         await start_onboarding(call.message, state, edit=True)
-        await call.answer()
-        return
-    except PlanSafetyReviewRequired as error:
-        await call.message.edit_text(
-            str(error),
-            reply_markup=workout_plan_mkp(),
-        )
         await call.answer()
         return
     except (WorkoutPlanError, SQLAlchemyError):

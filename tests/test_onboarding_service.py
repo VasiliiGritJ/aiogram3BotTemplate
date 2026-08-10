@@ -23,7 +23,7 @@ from services.onboarding import (
     update_existing_profile,
     validate_choice,
 )
-from services.workout_plans import PlanSafetyReviewRequired, assign_workout_plan
+from services.workout_plans import LIMITATIONS_NOTICE, assign_workout_plan
 
 
 def sqlite_url(path: Path) -> str:
@@ -203,8 +203,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
             first_confirmation,
             self.database,
         )
-        with self.assertRaises(PlanSafetyReviewRequired):
-            assign_workout_plan(self.user_id, self.database)
+        plan_with_limitations = assign_workout_plan(self.user_id, self.database)
 
         with self.database() as session:
             access_before = session.get(UserAccess, self.user_id)
@@ -233,7 +232,10 @@ class OnboardingPersistenceTests(unittest.TestCase):
         self.assertIsNone(profile_after.limitations)
         self.assertEqual(trial_started_before, access_after.trial_started_at)
         self.assertEqual(trial_ends_before, access_after.trial_ends_at)
+        self.assertTrue(plan_with_limitations.created)
+        self.assertIn(LIMITATIONS_NOTICE, plan_with_limitations.fallback_notes)
         self.assertTrue(plan.created)
+        self.assertNotIn(LIMITATIONS_NOTICE, plan.fallback_notes)
 
     def test_editing_profile_keeps_actual_limitation_description(self) -> None:
         confirmed_at = datetime(2026, 8, 9, 12, 0)

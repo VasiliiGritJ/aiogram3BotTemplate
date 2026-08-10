@@ -21,7 +21,7 @@ from services.workout_plans import (
     EXERCISE_DEFINITIONS,
     TEMPLATE_DEFINITIONS,
     FitnessProfileRequiredError,
-    PlanSafetyReviewRequired,
+    LIMITATIONS_NOTICE,
     assign_workout_plan,
     ensure_workout_catalog,
     format_workout_plan,
@@ -140,7 +140,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         self.assertEqual("gym", normalized.equipment)
         self.assertEqual(4, len(normalized.fallback_notes))
 
-    def test_supported_knee_limitation_filters_tagged_exercises(self) -> None:
+    def test_limitations_do_not_filter_controlled_exercises(self) -> None:
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             profile.limitations = "Есть ограничение по колену"
@@ -148,30 +148,26 @@ class WorkoutPlanServiceTests(unittest.TestCase):
 
         result = assign_workout_plan(self.user_id, self.database)
 
-        with self.database() as session:
-            restriction_values = session.scalars(
-                select(Exercise.restriction_tags)
-                .join(
-                    UserWorkoutPlanExercise,
-                    UserWorkoutPlanExercise.exercise_id == Exercise.id,
-                )
-            ).all()
-
         self.assertTrue(result.plan.days)
-        self.assertTrue(
-            all("knee" not in value.split(",") for value in restriction_values)
-        )
+        self.assertIn(LIMITATIONS_NOTICE, result.fallback_notes)
 
-    def test_unknown_limitation_requires_safety_review(self) -> None:
+    def test_arbitrary_limitation_does_not_block_plan(self) -> None:
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             profile.limitations = "Непонятное индивидуальное ограничение"
             session.commit()
 
-        with self.assertRaises(PlanSafetyReviewRequired):
-            assign_workout_plan(self.user_id, self.database)
+        result = assign_workout_plan(self.user_id, self.database)
 
-        self.assertIsNone(get_assigned_workout_plan(self.user_id, self.database))
+        self.assertTrue(result.created)
+        self.assertTrue(result.plan.days)
+        self.assertIn(LIMITATIONS_NOTICE, result.fallback_notes)
+
+    def test_absent_limitations_assign_plan_without_notice(self) -> None:
+        result = assign_workout_plan(self.user_id, self.database)
+
+        self.assertTrue(result.created)
+        self.assertNotIn(LIMITATIONS_NOTICE, result.fallback_notes)
 
     def test_profile_change_replaces_plan_without_active_duplicate(self) -> None:
         first = assign_workout_plan(self.user_id, self.database)

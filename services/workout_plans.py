@@ -29,7 +29,6 @@ DEFAULT_EXPERIENCE = "beginner"
 DEFAULT_EQUIPMENT = "gym"
 MAX_TEMPLATE_WORKOUTS_PER_WEEK = 4
 SHORT_SESSION_MAX_MINUTES = 45
-MIN_EXERCISES_PER_DAY = 2
 
 SUPPORTED_GOALS = {"muscle_gain", "fat_loss"}
 SUPPORTED_EXPERIENCE = {"beginner", "some_experience"}
@@ -50,10 +49,6 @@ class WorkoutPlanError(RuntimeError):
 
 class FitnessProfileRequiredError(WorkoutPlanError):
     """Raised when a workout plan is requested before onboarding."""
-
-
-class PlanSafetyReviewRequired(WorkoutPlanError):
-    """Raised when free-text limitations cannot be handled conservatively."""
 
 
 class WorkoutCatalogError(WorkoutPlanError):
@@ -105,7 +100,7 @@ class NormalizedProfile:
     workouts_per_week: int
     duration_bucket: str
     equipment: str
-    restriction_tags: tuple[str, ...]
+    has_limitations: bool
     fallback_notes: tuple[str, ...]
 
 
@@ -320,11 +315,21 @@ DAY_BLUEPRINTS = {
 }
 
 
-LIMITATION_KEYWORDS = {
-    "knee": ("колен", "knee"),
-    "back": ("спин", "позвоноч", "поясниц", "back"),
-    "shoulder": ("плеч", "shoulder"),
+NO_LIMITATIONS_VALUES = {
+    "",
+    "нет",
+    "нету",
+    "нет ограничений",
+    "отсутствуют",
+    "no",
+    "none",
+    "-",
 }
+LIMITATIONS_NOTICE = (
+    "Указанные ограничения сохранены в профиле. Если нагрузка вызывает боль "
+    "или у вас есть медицинские противопоказания, скорректируйте тренировку "
+    "со специалистом."
+)
 
 
 def _template_code(
@@ -410,29 +415,8 @@ def build_template_definitions() -> tuple[TemplateDefinition, ...]:
 TEMPLATE_DEFINITIONS = build_template_definitions()
 
 
-def _parse_restriction_tags(value: str) -> frozenset[str]:
-    return frozenset(tag for tag in value.split(",") if tag)
-
-
-def _normalize_limitations(value: str | None) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    normalized = value.strip().casefold()
-    if normalized in {"", "нет", "нет ограничений", "отсутствуют", "-"}:
-        return ()
-
-    tags = tuple(
-        tag
-        for tag, keywords in LIMITATION_KEYWORDS.items()
-        if any(keyword in normalized for keyword in keywords)
-    )
-    if not tags:
-        raise PlanSafetyReviewRequired(
-            "По указанным ограничениям нельзя безопасно назначить "
-            "автоматический план. Обсудите допустимую нагрузку со "
-            "специалистом, затем уточните профиль."
-        )
-    return tags
+def _has_limitations(value: str | None) -> bool:
+    return value is not None and value.strip().casefold() not in NO_LIMITATIONS_VALUES
 
 
 def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
@@ -477,6 +461,9 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
     duration_bucket = (
         "short" if duration <= SHORT_SESSION_MAX_MINUTES else "standard"
     )
+    has_limitations = _has_limitations(profile.limitations)
+    if has_limitations:
+        fallback_notes.append(LIMITATIONS_NOTICE)
 
     return NormalizedProfile(
         goal=goal,
@@ -484,7 +471,7 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
         workouts_per_week=workouts_per_week,
         duration_bucket=duration_bucket,
         equipment=DEFAULT_EQUIPMENT,
-        restriction_tags=_normalize_limitations(profile.limitations),
+        has_limitations=has_limitations,
         fallback_notes=tuple(fallback_notes),
     )
 
@@ -496,7 +483,7 @@ def _profile_signature(profile: NormalizedProfile) -> str:
         "equipment": profile.equipment,
         "experience_level": profile.experience_level,
         "goal": profile.goal,
-        "restriction_tags": profile.restriction_tags,
+        "has_limitations": profile.has_limitations,
         "workouts_per_week": profile.workouts_per_week,
     }
     serialized = json.dumps(payload, ensure_ascii=True, sort_keys=True)
@@ -723,21 +710,7 @@ def assign_workout_plan(
                     )
                     .order_by(WorkoutTemplateExercise.exercise_order)
                 ).all()
-                allowed = [
-                    (item, exercise)
-                    for item, exercise in rows
-                    if not (
-                        _parse_restriction_tags(exercise.restriction_tags)
-                        & set(normalized.restriction_tags)
-                    )
-                ]
-                if len(allowed) < MIN_EXERCISES_PER_DAY:
-                    raise PlanSafetyReviewRequired(
-                        "По указанным ограничениям нельзя безопасно составить "
-                        "полный автоматический план. Обсудите допустимую "
-                        "нагрузку со специалистом."
-                    )
-                selected_days.append((template_day, allowed))
+                selected_days.append((template_day, list(rows)))
 
             if not selected_days:
                 raise WorkoutCatalogError("Controlled template has no days.")

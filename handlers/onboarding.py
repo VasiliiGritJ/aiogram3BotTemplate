@@ -11,6 +11,7 @@ from handlers.markups import (
     onboarding_confirmation_mkp,
     onboarding_experience_mkp,
     onboarding_goal_mkp,
+    onboarding_limitations_mkp,
     onboarding_sex_mkp,
     start_mkp,
 )
@@ -179,9 +180,10 @@ async def onboarding_duration(message: types.Message, state: FSMContext):
     await state.update_data(session_duration_minutes=duration)
     await state.set_state(Onboarding.limitations)
     await message.answer(
-        "Есть ли травмы, ограничения или упражнения, которые вам нельзя выполнять? "
-        "Кратко опишите их или напишите «нет».\n\n"
-        "Бот не ставит диагнозы. При сомнениях обсудите нагрузку со специалистом."
+        "Травмы или ограничения (необязательно). "
+        "Кратко опишите их или выберите «Нет ограничений».\n\n"
+        "Бот не ставит диагнозы. При сомнениях обсудите нагрузку со специалистом.",
+        reply_markup=onboarding_limitations_mkp(),
     )
 
 
@@ -214,6 +216,24 @@ async def onboarding_limitations(message: types.Message, state: FSMContext):
     data = await state.get_data()
     await state.set_state(Onboarding.confirmation)
     await message.answer(_summary(data), reply_markup=onboarding_confirmation_mkp())
+
+
+@dp.callback_query(
+    StateFilter(Onboarding.limitations),
+    F.data == "onboarding:limitations:none",
+)
+async def onboarding_no_limitations(
+    call: types.CallbackQuery,
+    state: FSMContext,
+):
+    await state.update_data(limitations=normalize_limitations("нет"))
+    data = await state.get_data()
+    await state.set_state(Onboarding.confirmation)
+    await call.message.edit_text(
+        _summary(data),
+        reply_markup=onboarding_confirmation_mkp(),
+    )
+    await call.answer()
 
 
 @dp.callback_query(
