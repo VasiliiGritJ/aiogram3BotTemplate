@@ -19,6 +19,7 @@ from db.models import (
 )
 from services.workout_plans import (
     EXERCISE_DEFINITIONS,
+    EXERCISE_ALTERNATIVES,
     TEMPLATE_DEFINITIONS,
     FitnessProfileRequiredError,
     LIMITATIONS_NOTICE,
@@ -115,7 +116,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
             template = session.get(WorkoutTemplate, plan.template_id)
 
         self.assertEqual(
-            "v1_fat_loss_some_experience_2_short_gym",
+            "v2_fat_loss_some_experience_2_short_gym",
             template.code,
         )
         self.assertEqual(2, len(result.plan.days))
@@ -215,6 +216,31 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         self.assertIn("отдых", text)
         self.assertIn("Подсказка:", text)
         self.assertIn("Группа мышц:", text)
+        self.assertIn("1. Тренировка 1 —", text)
+
+    def test_day_title_uses_ordered_unique_groups_from_its_exercises(self) -> None:
+        result = assign_workout_plan(self.user_id, self.database)
+        text = format_workout_plan(result.plan)
+        first_day = result.plan.days[0]
+        groups = [item.primary_muscle_group for item in first_day.exercises]
+
+        self.assertIn(
+            f"1. Тренировка 1 — {', '.join(dict.fromkeys(groups))}",
+            text,
+        )
+
+    def test_concrete_names_and_alternatives_are_controlled(self) -> None:
+        names = {definition.code: definition.name for definition in EXERCISE_DEFINITIONS}
+
+        self.assertEqual(
+            "Горизонтальный жим сидя в рычажном тренажёре",
+            names["chest_press"],
+        )
+        self.assertNotIn("Жим от груди в тренажёре", names.values())
+        self.assertEqual(
+            ("dumbbell_bench_press", "chest_press"),
+            EXERCISE_ALTERNATIVES["barbell_bench_press"],
+        )
 
     def test_exercise_metadata_and_preview_are_structured(self) -> None:
         result = assign_workout_plan(self.user_id, self.database)

@@ -23,7 +23,7 @@ from db.models import (
 )
 
 
-CATALOG_VERSION = 1
+CATALOG_VERSION = 2
 DEFAULT_GOAL = "muscle_gain"
 DEFAULT_EXPERIENCE = "beginner"
 DEFAULT_EQUIPMENT = "gym"
@@ -51,11 +51,20 @@ PRIMARY_MUSCLE_GROUPS = {
     "cable_curl": "бицепс", "cable_crunch": "пресс",
     "back_extension": "ягодичные", "calf_raise": "икры",
     "hip_abduction": "ягодичные",
+    "barbell_bench_press": "грудь", "dumbbell_bench_press": "грудь",
+    "barbell_back_squat": "квадрицепс",
 }
 EXERCISE_METADATA = {
     "chest_press": ("горизонтальный", "жим от груди в тренажёре"),
     "leg_press": ("под углом", "жим платформы ногами"),
     "lat_pulldown": ("к груди", "верхняя тяга"),
+    "barbell_bench_press": ("горизонтальная скамья", None),
+    "dumbbell_bench_press": ("горизонтальная скамья", None),
+    "barbell_back_squat": ("на спине", None),
+}
+EXERCISE_ALTERNATIVES = {
+    "barbell_bench_press": ("dumbbell_bench_press", "chest_press"),
+    "barbell_back_squat": ("leg_press",),
 }
 
 
@@ -164,7 +173,7 @@ class CatalogStats:
 EXERCISE_DEFINITIONS = (
     ExerciseDefinition(
         "leg_press",
-        "Жим ногами в тренажёре",
+        "Жим ногами под углом в тренажёре",
         "legs",
         "machine",
         "Прижимайте спину к опоре и двигайтесь без рывков.",
@@ -172,7 +181,7 @@ EXERCISE_DEFINITIONS = (
     ),
     ExerciseDefinition(
         "seated_leg_curl",
-        "Сгибание ног сидя",
+        "Сгибание ног сидя в тренажёре",
         "legs",
         "machine",
         "Сохраняйте ровный темп и не бросайте вес.",
@@ -180,7 +189,7 @@ EXERCISE_DEFINITIONS = (
     ),
     ExerciseDefinition(
         "chest_press",
-        "Жим от груди в тренажёре",
+        "Горизонтальный жим сидя в рычажном тренажёре",
         "chest",
         "machine",
         "Держите лопатки у спинки и не выпрямляйте локти резко.",
@@ -188,7 +197,7 @@ EXERCISE_DEFINITIONS = (
     ),
     ExerciseDefinition(
         "lat_pulldown",
-        "Тяга верхнего блока",
+        "Тяга верхнего блока к груди",
         "back",
         "cable",
         "Тяните рукоять к верхней части груди без раскачивания.",
@@ -196,11 +205,32 @@ EXERCISE_DEFINITIONS = (
     ),
     ExerciseDefinition(
         "seated_row",
-        "Горизонтальная тяга блока",
+        "Горизонтальная тяга нижнего блока сидя",
         "back",
         "cable",
         "Сохраняйте нейтральную спину и ведите локти назад.",
         ("back", "shoulder"),
+    ),
+    ExerciseDefinition(
+        "barbell_bench_press",
+        "Жим штанги лёжа на горизонтальной скамье",
+        "chest",
+        "barbell",
+        "Опускайте штангу контролируемо к середине груди и сохраняйте устойчивое положение лопаток.",
+    ),
+    ExerciseDefinition(
+        "dumbbell_bench_press",
+        "Жим гантелей лёжа на горизонтальной скамье",
+        "chest",
+        "dumbbell",
+        "Двигайте гантели плавно и не теряйте контроль в нижней точке.",
+    ),
+    ExerciseDefinition(
+        "barbell_back_squat",
+        "Приседания со штангой на спине",
+        "legs",
+        "barbell",
+        "Сохраняйте нейтральную спину и контролируйте глубину в комфортной амплитуде.",
     ),
     ExerciseDefinition(
         "shoulder_press",
@@ -263,8 +293,8 @@ EXERCISE_DEFINITIONS = (
 DAY_BLUEPRINTS = {
     "muscle_gain": (
         (
-            "leg_press",
-            "chest_press",
+            "barbell_back_squat",
+            "barbell_bench_press",
             "lat_pulldown",
             "seated_leg_curl",
             "cable_curl",
@@ -279,8 +309,8 @@ DAY_BLUEPRINTS = {
             "back_extension",
         ),
         (
-            "leg_press",
-            "chest_press",
+            "barbell_back_squat",
+            "barbell_bench_press",
             "seated_row",
             "hip_abduction",
             "cable_curl",
@@ -297,7 +327,7 @@ DAY_BLUEPRINTS = {
     ),
     "fat_loss": (
         (
-            "leg_press",
+            "barbell_back_squat",
             "lat_pulldown",
             "chest_press",
             "hip_abduction",
@@ -313,8 +343,8 @@ DAY_BLUEPRINTS = {
             "back_extension",
         ),
         (
-            "leg_press",
-            "chest_press",
+            "barbell_back_squat",
+            "barbell_bench_press",
             "seated_row",
             "seated_leg_curl",
             "triceps_pushdown",
@@ -797,6 +827,11 @@ def assign_workout_plan(
             )
 
 
+def day_primary_muscle_groups(day: PlanDayView) -> tuple[str, ...]:
+    """Return ordered unique primary muscle groups from the day's exercises."""
+    return tuple(dict.fromkeys(item.primary_muscle_group for item in day.exercises))
+
+
 def format_workout_plan(
     plan: WorkoutPlanView,
     fallback_notes: tuple[str, ...] = (),
@@ -807,7 +842,8 @@ def format_workout_plan(
         lines.append(f"Важно: {escape(note)}")
     for day in plan.days:
         lines.append("")
-        lines.append(f"{day.day_number}. {escape(day.title)}")
+        groups = ", ".join(day_primary_muscle_groups(day))
+        lines.append(f"{day.day_number}. {escape(day.title)} — {escape(groups)}")
         for exercise in day.exercises:
             lines.append(
                 f"{exercise.order}) {escape(exercise.name)} — "
@@ -832,7 +868,7 @@ def format_workout_plan_preview(
     for note in fallback_notes:
         lines.append(f"Важно: {escape(note)}")
     for day in plan.days:
-        groups = list(dict.fromkeys(item.primary_muscle_group for item in day.exercises))
+        groups = day_primary_muscle_groups(day)
         lines.append(f"{day.day_number}. {escape(day.title)} — Мышцы: {escape(', '.join(groups))}")
     lines.append("")
     lines.append("Пробный период начнётся только при запуске первой тренировки.")
