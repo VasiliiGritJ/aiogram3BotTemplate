@@ -249,10 +249,61 @@ def _create_workout_planning(connection: Connection) -> None:
     )
 
 
+def _upgrade_stage_two_architecture(connection: Connection) -> None:
+    """Add structured exercise data and a not-yet-started trial state."""
+    connection.exec_driver_sql(
+        "ALTER TABLE exercises ADD COLUMN primary_muscle_group TEXT NOT NULL DEFAULT 'other'"
+    )
+    connection.exec_driver_sql("ALTER TABLE exercises ADD COLUMN variant TEXT")
+    connection.exec_driver_sql("ALTER TABLE exercises ADD COLUMN alternative_name TEXT")
+    connection.exec_driver_sql(
+        "ALTER TABLE user_workout_plan_exercises ADD COLUMN primary_muscle_group TEXT NOT NULL DEFAULT 'other'"
+    )
+    connection.exec_driver_sql(
+        """CREATE TABLE fitness_profiles_v4 (
+            user_id INTEGER NOT NULL PRIMARY KEY, age INTEGER NOT NULL,
+            sex TEXT NOT NULL, height_cm INTEGER NOT NULL, weight_kg FLOAT NOT NULL,
+            goal TEXT NOT NULL, experience_level TEXT NOT NULL,
+            workouts_per_week INTEGER NOT NULL, session_duration_minutes INTEGER NOT NULL,
+            limitations TEXT, completed_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_fitness_profiles_goal CHECK (goal IN ('muscle_gain', 'fat_loss')),
+            CONSTRAINT ck_fitness_profiles_experience_level
+                CHECK (experience_level IN ('beginner', 'some_experience', 'experienced')),
+            FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE
+        )"""
+    )
+    connection.exec_driver_sql(
+        """INSERT INTO fitness_profiles_v4
+        SELECT user_id, age, sex, height_cm, weight_kg, goal, experience_level,
+               workouts_per_week, session_duration_minutes, limitations,
+               completed_at, updated_at FROM fitness_profiles"""
+    )
+    connection.exec_driver_sql("DROP TABLE fitness_profiles")
+    connection.exec_driver_sql("ALTER TABLE fitness_profiles_v4 RENAME TO fitness_profiles")
+    connection.exec_driver_sql(
+        """CREATE TABLE user_access_v4 (
+            user_id INTEGER NOT NULL PRIMARY KEY, trial_started_at DATETIME,
+            trial_ends_at DATETIME, subscription_started_at DATETIME,
+            subscription_ends_at DATETIME,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE
+        )"""
+    )
+    connection.exec_driver_sql(
+        """INSERT INTO user_access_v4
+        SELECT user_id, trial_started_at, trial_ends_at, subscription_started_at,
+               subscription_ends_at, updated_at FROM user_access"""
+    )
+    connection.exec_driver_sql("DROP TABLE user_access")
+    connection.exec_driver_sql("ALTER TABLE user_access_v4 RENAME TO user_access")
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
     Migration(3, "workout_planning", _create_workout_planning),
+    Migration(4, "stage_two_architecture", _upgrade_stage_two_architecture),
 )
 
 

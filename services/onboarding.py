@@ -45,6 +45,7 @@ GOAL_LABELS = {
 EXPERIENCE_LABELS = {
     "beginner": "Новичок",
     "some_experience": "Есть небольшой опыт",
+    "experienced": "Опытный",
 }
 
 
@@ -210,17 +211,16 @@ def update_existing_profile(
         return profile
 
 
-def save_profile_and_trial(
+def save_profile_and_access(
     user_id: int,
     data: OnboardingData,
     confirmed_at: datetime | None = None,
     session_factory: Callable[[], Session] = dbSession,
 ) -> OnboardingResult:
-    """Create profile and three-day trial atomically after confirmation."""
-    started_at = (
+    """Create profile and trial-eligible access without starting the trial."""
+    confirmed_at = (
         as_utc_naive(confirmed_at) if confirmed_at is not None else utc_now()
     )
-    trial_ends_at = started_at + TRIAL_DURATION
 
     with session_factory() as session:
         with session.begin():
@@ -252,18 +252,21 @@ def save_profile_and_trial(
                 workouts_per_week=data.workouts_per_week,
                 session_duration_minutes=data.session_duration_minutes,
                 limitations=data.limitations,
-                completed_at=started_at,
-                updated_at=started_at,
+                completed_at=confirmed_at,
+                updated_at=confirmed_at,
             )
             access = UserAccess(
                 user_id=user_id,
-                trial_started_at=started_at,
-                trial_ends_at=trial_ends_at,
+                trial_started_at=None,
+                trial_ends_at=None,
                 subscription_started_at=None,
                 subscription_ends_at=None,
-                updated_at=started_at,
+                updated_at=confirmed_at,
             )
             session.add_all((profile, access))
             session.flush()
 
         return OnboardingResult(profile, access, created=True)
+
+
+save_profile_and_trial = save_profile_and_access

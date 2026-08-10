@@ -125,6 +125,12 @@ def onboarding_experience_mkp():
                     callback_data="onboarding:experience:some_experience",
                 )
             ],
+            [
+                types.InlineKeyboardButton(
+                    text="Опытный",
+                    callback_data="onboarding:experience:experienced",
+                )
+            ],
         ]
     )
 

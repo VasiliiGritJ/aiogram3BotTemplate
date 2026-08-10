@@ -25,6 +25,7 @@ from services.workout_plans import (
     assign_workout_plan,
     ensure_workout_catalog,
     format_workout_plan,
+    format_workout_plan_preview,
     get_assigned_workout_plan,
     normalize_profile,
 )
@@ -213,6 +214,32 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         self.assertIn("×", text)
         self.assertIn("отдых", text)
         self.assertIn("Подсказка:", text)
+        self.assertIn("Группа мышц:", text)
+
+    def test_exercise_metadata_and_preview_are_structured(self) -> None:
+        result = assign_workout_plan(self.user_id, self.database)
+        with self.database() as session:
+            exercise = session.scalar(
+                select(Exercise).where(Exercise.code == "chest_press")
+            )
+            profile = session.get(FitnessProfile, self.user_id)
+
+        preview = format_workout_plan_preview(result.plan, profile)
+        self.assertEqual("грудь", exercise.primary_muscle_group)
+        self.assertEqual("machine", exercise.equipment)
+        self.assertEqual("горизонтальный", exercise.variant)
+        self.assertIn("Мышцы:", preview)
+        self.assertNotIn("Подсказка:", preview)
+        self.assertNotIn("×", preview)
+
+    def test_experienced_profile_uses_deterministic_fallback(self) -> None:
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+            profile.experience_level = "experienced"
+            session.commit()
+
+        result = assign_workout_plan(self.user_id, self.database)
+        self.assertIn("ближайший доступный шаблон", " ".join(result.fallback_notes))
 
     def test_longest_supported_plan_fits_one_telegram_message(self) -> None:
         with self.database() as session:

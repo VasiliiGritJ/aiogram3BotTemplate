@@ -28,7 +28,7 @@ from services.onboarding import (
     parse_session_duration_minutes,
     parse_weight_kg,
     parse_workouts_per_week,
-    save_profile_and_trial,
+    save_profile_and_access,
     update_existing_profile,
     validate_choice,
 )
@@ -256,11 +256,11 @@ async def onboarding_confirm(call: types.CallbackQuery, state: FSMContext):
             update_existing_profile(user.id, data)
             text = "Профиль обновлён. Пробный период сохранён."
         else:
-            result = save_profile_and_trial(user.id, data)
+            result = save_profile_and_access(user.id, data)
             if result.created:
-                text = "Анкета сохранена. Пробный период на 3 дня начался."
+                text = "Анкета сохранена. План подготовлен, а пробный период начнётся с первой тренировки."
             else:
-                text = "Анкета уже была сохранена. Пробный период не перезапущен."
+                text = "Анкета уже была сохранена. Пробный период не изменён."
     except (TypeError, OnboardingPersistenceError):
         await call.answer("Не удалось сохранить анкету. Отправьте /start.", show_alert=True)
         return

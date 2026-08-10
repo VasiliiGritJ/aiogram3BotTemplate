@@ -1,7 +1,7 @@
 """Centralized access status calculation."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Callable
 
@@ -13,6 +13,7 @@ from db.models import UserAccess, dbSession
 class AccessStatus(StrEnum):
     ACTIVE = "active"
     TRIAL = "trial"
+    TRIAL_AVAILABLE = "trial_available"
     EXPIRED = "expired"
 
 
@@ -60,8 +61,13 @@ def evaluate_access(
             as_utc_naive(subscription_ends_at),
         )
 
+    if access.trial_started_at is None and access.trial_ends_at is None:
+        return AccessDecision(AccessStatus.TRIAL_AVAILABLE, None)
+
     if (
-        as_utc_naive(access.trial_started_at) <= current_time
+        access.trial_started_at is not None
+        and access.trial_ends_at is not None
+        and as_utc_naive(access.trial_started_at) <= current_time
         < as_utc_naive(access.trial_ends_at)
     ):
         return AccessDecision(
@@ -70,6 +76,46 @@ def evaluate_access(
         )
 
     return AccessDecision(AccessStatus.EXPIRED, None)
+
+
+@dataclass(frozen=True)
+class TrialActivationResult:
+    access: UserAccess
+    activated: bool
+
+
+class TrialActivationError(RuntimeError):
+    """Raised when the persisted access record is not safe to activate."""
+
+
+def activate_trial_once(
+    user_id: int,
+    now: datetime | None = None,
+    session_factory: Callable[[], Session] = dbSession,
+) -> TrialActivationResult:
+    """Start a three-day trial once; a started or expired trial is never reset."""
+    started_at = as_utc_naive(now) if now is not None else utc_now()
+    with session_factory() as session:
+        with session.begin():
+            access = session.get(UserAccess, user_id)
+            if access is None:
+                raise TrialActivationError("Access record does not exist.")
+            if (
+                access.subscription_started_at is not None
+                and access.subscription_ends_at is not None
+                and as_utc_naive(access.subscription_started_at) <= started_at
+                < as_utc_naive(access.subscription_ends_at)
+            ):
+                return TrialActivationResult(access, activated=False)
+            if access.trial_started_at is None and access.trial_ends_at is None:
+                access.trial_started_at = started_at
+                access.trial_ends_at = started_at + timedelta(days=3)
+                access.updated_at = started_at
+                session.flush()
+                return TrialActivationResult(access, activated=True)
+            if access.trial_started_at is None or access.trial_ends_at is None:
+                raise TrialActivationError("Trial dates are inconsistent.")
+            return TrialActivationResult(access, activated=False)
 
 
 def get_user_access(

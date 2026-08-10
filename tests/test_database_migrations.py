@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3), applied)
+        self.assertEqual((1, 2, 3, 4), applied)
         self.assertTrue(
             {
                 "users",
@@ -63,9 +63,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3), first_run)
+        self.assertEqual((1, 2, 3, 4), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(3, applied_count)
+        self.assertEqual(4, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -109,7 +109,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3,), applied)
+        self.assertEqual((3, 4), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
@@ -182,6 +182,8 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertNotIn("status", access_columns)
         self.assertTrue(access_columns["subscription_started_at"]["nullable"])
         self.assertTrue(access_columns["subscription_ends_at"]["nullable"])
+        self.assertTrue(access_columns["trial_started_at"]["nullable"])
+        self.assertTrue(access_columns["trial_ends_at"]["nullable"])
 
         user_indexes = inspector.get_indexes("users")
         unique_tg_id = [
@@ -309,7 +311,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3), applied)
+        self.assertEqual((1, 2, 3, 4), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

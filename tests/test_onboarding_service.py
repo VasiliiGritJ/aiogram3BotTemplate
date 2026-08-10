@@ -23,6 +23,7 @@ from services.onboarding import (
     update_existing_profile,
     validate_choice,
 )
+from services.access import AccessStatus, activate_trial_once, evaluate_access
 from services.workout_plans import LIMITATIONS_NOTICE, assign_workout_plan
 
 
@@ -136,7 +137,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
         values.update(overrides)
         return OnboardingData(**values)
 
-    def test_profile_and_three_day_trial_are_created_together(self) -> None:
+    def test_profile_is_created_with_trial_available_but_not_started(self) -> None:
         confirmed_at = datetime(2026, 8, 9, 15, 30, tzinfo=timezone.utc)
 
         result = save_profile_and_trial(
@@ -155,8 +156,9 @@ class OnboardingPersistenceTests(unittest.TestCase):
         self.assertIsNotNone(profile)
         self.assertIsNotNone(access)
         self.assertEqual(expected_start, profile.completed_at)
-        self.assertEqual(expected_start, access.trial_started_at)
-        self.assertEqual(expected_start + timedelta(days=3), access.trial_ends_at)
+        self.assertIsNone(access.trial_started_at)
+        self.assertIsNone(access.trial_ends_at)
+        self.assertEqual(AccessStatus.TRIAL_AVAILABLE, evaluate_access(access).status)
         self.assertIsNone(access.subscription_started_at)
         self.assertIsNone(access.subscription_ends_at)
 
@@ -177,7 +179,8 @@ class OnboardingPersistenceTests(unittest.TestCase):
 
         self.assertTrue(first.created)
         self.assertFalse(repeated.created)
-        self.assertEqual(first.access.trial_started_at, repeated.access.trial_started_at)
+        self.assertIsNone(first.access.trial_started_at)
+        self.assertIsNone(repeated.access.trial_started_at)
         self.assertEqual(80.5, repeated.profile.weight_kg)
 
     def test_failed_profile_insert_rolls_back_access(self) -> None:
@@ -203,6 +206,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
             first_confirmation,
             self.database,
         )
+        activate_trial_once(self.user_id, first_confirmation, self.database)
         plan_with_limitations = assign_workout_plan(self.user_id, self.database)
 
         with self.database() as session:
@@ -236,6 +240,17 @@ class OnboardingPersistenceTests(unittest.TestCase):
         self.assertIn(LIMITATIONS_NOTICE, plan_with_limitations.fallback_notes)
         self.assertTrue(plan.created)
         self.assertNotIn(LIMITATIONS_NOTICE, plan.fallback_notes)
+
+    def test_trial_activation_starts_exactly_once(self) -> None:
+        confirmed_at = datetime(2026, 8, 9, 12, 0)
+        save_profile_and_trial(self.user_id, self.valid_data(), confirmed_at, self.database)
+        first = activate_trial_once(self.user_id, confirmed_at, self.database)
+        repeated = activate_trial_once(self.user_id, confirmed_at + timedelta(days=1), self.database)
+
+        self.assertTrue(first.activated)
+        self.assertFalse(repeated.activated)
+        self.assertEqual(confirmed_at, repeated.access.trial_started_at)
+        self.assertEqual(confirmed_at + timedelta(days=3), repeated.access.trial_ends_at)
 
     def test_editing_profile_keeps_actual_limitation_description(self) -> None:
         confirmed_at = datetime(2026, 8, 9, 12, 0)

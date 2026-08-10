@@ -206,7 +206,7 @@ class FitnessProfile(Base):
             name="ck_fitness_profiles_goal",
         ),
         CheckConstraint(
-            "experience_level IN ('beginner', 'some_experience')",
+            "experience_level IN ('beginner', 'some_experience', 'experienced')",
             name="ck_fitness_profiles_experience_level",
         ),
     )
@@ -235,8 +235,8 @@ class UserAccess(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
-    trial_started_at: Mapped[datetime] = mapped_column(DateTime())
-    trial_ends_at: Mapped[datetime] = mapped_column(DateTime())
+    trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
     subscription_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(), nullable=True
     )
@@ -255,7 +255,10 @@ class Exercise(Base):
     code: Mapped[str] = mapped_column(Text(), unique=True)
     name: Mapped[str] = mapped_column(Text())
     muscle_group: Mapped[str] = mapped_column(Text())
+    primary_muscle_group: Mapped[str] = mapped_column(Text())
     equipment: Mapped[str] = mapped_column(Text())
+    variant: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    alternative_name: Mapped[str | None] = mapped_column(Text(), nullable=True)
     hint: Mapped[str] = mapped_column(Text())
     restriction_tags: Mapped[str] = mapped_column(Text(), server_default="")
 
@@ -423,6 +426,7 @@ class UserWorkoutPlanExercise(Base):
     )
     exercise_order: Mapped[int] = mapped_column(Integer())
     exercise_name: Mapped[str] = mapped_column(Text())
+    primary_muscle_group: Mapped[str] = mapped_column(Text())
     sets: Mapped[int] = mapped_column(Integer())
     reps_min: Mapped[int] = mapped_column(Integer())
     reps_max: Mapped[int] = mapped_column(Integer())

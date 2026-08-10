@@ -12,7 +12,10 @@ from services.workout_plans import (
     WorkoutPlanError,
     assign_workout_plan,
     format_workout_plan,
+    format_workout_plan_preview,
 )
+from services.access import AccessStatus, get_access_decision
+from services.onboarding import get_fitness_profile
 from storage.config import dp
 from storage.states import tryFinish
 
@@ -46,8 +49,15 @@ async def workout_plan_call(
         await call.answer()
         return
 
+    profile = get_fitness_profile(user.id)
+    decision = get_access_decision(user.id)
+    text = (
+        format_workout_plan_preview(result.plan, profile, result.fallback_notes)
+        if decision.status == AccessStatus.TRIAL_AVAILABLE and profile is not None
+        else format_workout_plan(result.plan, result.fallback_notes)
+    )
     await call.message.edit_text(
-        format_workout_plan(result.plan, result.fallback_notes),
+        text,
         reply_markup=workout_plan_mkp(),
     )
     await call.answer()

@@ -40,6 +40,22 @@ GOAL_NAMES = {
 EXPERIENCE_NAMES = {
     "beginner": "новичок",
     "some_experience": "с опытом",
+    "experienced": "опытный",
+}
+
+PRIMARY_MUSCLE_GROUPS = {
+    "leg_press": "квадрицепс", "seated_leg_curl": "задняя поверхность бедра",
+    "chest_press": "грудь", "lat_pulldown": "спина",
+    "seated_row": "спина", "shoulder_press": "плечи",
+    "lateral_raise": "плечи", "triceps_pushdown": "трицепс",
+    "cable_curl": "бицепс", "cable_crunch": "пресс",
+    "back_extension": "ягодичные", "calf_raise": "икры",
+    "hip_abduction": "ягодичные",
+}
+EXERCISE_METADATA = {
+    "chest_press": ("горизонтальный", "жим от груди в тренажёре"),
+    "leg_press": ("под углом", "жим платформы ногами"),
+    "lat_pulldown": ("к груди", "верхняя тяга"),
 }
 
 
@@ -108,6 +124,7 @@ class NormalizedProfile:
 class PlanExerciseView:
     order: int
     name: str
+    primary_muscle_group: str
     sets: int
     reps_min: int
     reps_max: int
@@ -431,7 +448,12 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
         )
 
     experience = profile.experience_level
-    if experience not in SUPPORTED_EXPERIENCE:
+    if experience == "experienced":
+        experience = "some_experience"
+        fallback_notes.append(
+            "Для опытного уровня пока использован ближайший доступный шаблон с опытом."
+        )
+    elif experience not in SUPPORTED_EXPERIENCE:
         experience = DEFAULT_EXPERIENCE
         fallback_notes.append(
             "Уровень опыта не распознан — использован уровень новичка."
@@ -502,7 +524,10 @@ def _ensure_catalog_in_session(session: Session) -> CatalogStats:
                 code=definition.code,
                 name=definition.name,
                 muscle_group=definition.muscle_group,
+                primary_muscle_group=PRIMARY_MUSCLE_GROUPS[definition.code],
                 equipment=definition.equipment,
+                variant=EXERCISE_METADATA.get(definition.code, (None, None))[0],
+                alternative_name=EXERCISE_METADATA.get(definition.code, (None, None))[1],
                 hint=definition.hint,
                 restriction_tags=tags,
             )
@@ -511,7 +536,10 @@ def _ensure_catalog_in_session(session: Session) -> CatalogStats:
         else:
             exercise.name = definition.name
             exercise.muscle_group = definition.muscle_group
+            exercise.primary_muscle_group = PRIMARY_MUSCLE_GROUPS[definition.code]
             exercise.equipment = definition.equipment
+            exercise.variant = EXERCISE_METADATA.get(definition.code, (None, None))[0]
+            exercise.alternative_name = EXERCISE_METADATA.get(definition.code, (None, None))[1]
             exercise.hint = definition.hint
             exercise.restriction_tags = tags
         exercises_by_code[definition.code] = exercise
@@ -600,8 +628,9 @@ def _load_plan_view(session: Session, plan: UserWorkoutPlan) -> WorkoutPlanView:
         .order_by(UserWorkoutPlanDay.day_number)
     ).all()
     for day in plan_days:
-        items = session.scalars(
-            select(UserWorkoutPlanExercise)
+        items = session.execute(
+            select(UserWorkoutPlanExercise, Exercise)
+            .join(Exercise, Exercise.id == UserWorkoutPlanExercise.exercise_id)
             .where(UserWorkoutPlanExercise.plan_day_id == day.id)
             .order_by(UserWorkoutPlanExercise.exercise_order)
         ).all()
@@ -613,13 +642,18 @@ def _load_plan_view(session: Session, plan: UserWorkoutPlan) -> WorkoutPlanView:
                     PlanExerciseView(
                         order=item.exercise_order,
                         name=item.exercise_name,
+                        primary_muscle_group=(
+                            item.primary_muscle_group
+                            if item.primary_muscle_group != "other"
+                            else exercise.primary_muscle_group
+                        ),
                         sets=item.sets,
                         reps_min=item.reps_min,
                         reps_max=item.reps_max,
                         rest_seconds=item.rest_seconds,
                         hint=item.hint,
                     )
-                    for item in items
+                    for item, exercise in items
                 ),
             )
         )
@@ -747,6 +781,7 @@ def assign_workout_plan(
                             exercise_id=exercise.id,
                             exercise_order=exercise_order,
                             exercise_name=exercise.name,
+                            primary_muscle_group=exercise.primary_muscle_group,
                             sets=item.sets,
                             reps_min=item.reps_min,
                             reps_max=item.reps_max,
@@ -779,5 +814,26 @@ def format_workout_plan(
                 f"{exercise.sets}×{exercise.reps_min}–{exercise.reps_max}, "
                 f"отдых {exercise.rest_seconds} сек."
             )
+            lines.append(f"Группа мышц: {escape(exercise.primary_muscle_group)}")
             lines.append(f"Подсказка: {escape(exercise.hint)}")
+    return "\n".join(lines)
+
+
+def format_workout_plan_preview(
+    plan: WorkoutPlanView,
+    profile: FitnessProfile,
+    fallback_notes: tuple[str, ...] = (),
+) -> str:
+    """Render a safe plan preview before the trial has started."""
+    lines = ["Ваш персональный план подготовлен."]
+    lines.append(f"Цель: {escape(GOAL_NAMES.get(profile.goal, DEFAULT_GOAL))}")
+    lines.append(f"Тренировок в неделю: {profile.workouts_per_week}")
+    lines.append(f"Примерная длительность: {profile.session_duration_minutes} мин")
+    for note in fallback_notes:
+        lines.append(f"Важно: {escape(note)}")
+    for day in plan.days:
+        groups = list(dict.fromkeys(item.primary_muscle_group for item in day.exercises))
+        lines.append(f"{day.day_number}. {escape(day.title)} — Мышцы: {escape(', '.join(groups))}")
+    lines.append("")
+    lines.append("Пробный период начнётся только при запуске первой тренировки.")
     return "\n".join(lines)
