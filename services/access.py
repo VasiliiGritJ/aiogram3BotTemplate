@@ -88,34 +88,47 @@ class TrialActivationError(RuntimeError):
     """Raised when the persisted access record is not safe to activate."""
 
 
+def activate_trial_once_in_session(
+    user_id: int,
+    session: Session,
+    now: datetime | None = None,
+) -> TrialActivationResult:
+    """Activate a trial inside an already open transaction.
+
+    This is used by workflows that must make trial activation atomic with a
+    second write, such as creating the first workout session.
+    """
+    started_at = as_utc_naive(now) if now is not None else utc_now()
+    access = session.get(UserAccess, user_id)
+    if access is None:
+        raise TrialActivationError("Access record does not exist.")
+    if (
+        access.subscription_started_at is not None
+        and access.subscription_ends_at is not None
+        and as_utc_naive(access.subscription_started_at) <= started_at
+        < as_utc_naive(access.subscription_ends_at)
+    ):
+        return TrialActivationResult(access, activated=False)
+    if access.trial_started_at is None and access.trial_ends_at is None:
+        access.trial_started_at = started_at
+        access.trial_ends_at = started_at + timedelta(days=3)
+        access.updated_at = started_at
+        session.flush()
+        return TrialActivationResult(access, activated=True)
+    if access.trial_started_at is None or access.trial_ends_at is None:
+        raise TrialActivationError("Trial dates are inconsistent.")
+    return TrialActivationResult(access, activated=False)
+
+
 def activate_trial_once(
     user_id: int,
     now: datetime | None = None,
     session_factory: Callable[[], Session] = dbSession,
 ) -> TrialActivationResult:
     """Start a three-day trial once; a started or expired trial is never reset."""
-    started_at = as_utc_naive(now) if now is not None else utc_now()
     with session_factory() as session:
         with session.begin():
-            access = session.get(UserAccess, user_id)
-            if access is None:
-                raise TrialActivationError("Access record does not exist.")
-            if (
-                access.subscription_started_at is not None
-                and access.subscription_ends_at is not None
-                and as_utc_naive(access.subscription_started_at) <= started_at
-                < as_utc_naive(access.subscription_ends_at)
-            ):
-                return TrialActivationResult(access, activated=False)
-            if access.trial_started_at is None and access.trial_ends_at is None:
-                access.trial_started_at = started_at
-                access.trial_ends_at = started_at + timedelta(days=3)
-                access.updated_at = started_at
-                session.flush()
-                return TrialActivationResult(access, activated=True)
-            if access.trial_started_at is None or access.trial_ends_at is None:
-                raise TrialActivationError("Trial dates are inconsistent.")
-            return TrialActivationResult(access, activated=False)
+            return activate_trial_once_in_session(user_id, session, now)
 
 
 def get_user_access(
