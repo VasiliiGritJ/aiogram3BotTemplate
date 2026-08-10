@@ -28,6 +28,7 @@ from services.onboarding import (
     parse_weight_kg,
     parse_workouts_per_week,
     save_profile_and_trial,
+    update_existing_profile,
     validate_choice,
 )
 from storage.config import dp
@@ -39,8 +40,10 @@ async def start_onboarding(
     state: FSMContext,
     *,
     edit: bool = False,
+    editing_profile: bool = False,
 ) -> None:
     await state.clear()
+    await state.update_data(editing_profile=editing_profile)
     await state.set_state(Onboarding.age)
     text = (
         "Давайте составим ваш фитнес-профиль.\n\n"
@@ -195,7 +198,7 @@ def _summary(data: dict) -> str:
         f"Тренировок в неделю: {data['workouts_per_week']}\n"
         f"Длительность: {data['session_duration_minutes']} мин\n"
         f"Ограничения: {escape(limitations)}\n\n"
-        "После подтверждения начнётся пробный период на 3 дня."
+        "После подтверждения данные будут сохранены."
     )
 
 
@@ -219,6 +222,7 @@ async def onboarding_limitations(message: types.Message, state: FSMContext):
 )
 async def onboarding_confirm(call: types.CallbackQuery, state: FSMContext):
     state_data = await state.get_data()
+    editing_profile = bool(state_data.pop("editing_profile", False))
     user = User.get(tg_id=call.from_user.id)
     if user is None:
         await state.clear()
@@ -228,21 +232,31 @@ async def onboarding_confirm(call: types.CallbackQuery, state: FSMContext):
 
     try:
         data = OnboardingData(**state_data)
-        result = save_profile_and_trial(user.id, data)
+        if editing_profile:
+            update_existing_profile(user.id, data)
+            text = "Профиль обновлён. Пробный период сохранён."
+        else:
+            result = save_profile_and_trial(user.id, data)
+            if result.created:
+                text = "Анкета сохранена. Пробный период на 3 дня начался."
+            else:
+                text = "Анкета уже была сохранена. Пробный период не перезапущен."
     except (TypeError, OnboardingPersistenceError):
         await call.answer("Не удалось сохранить анкету. Отправьте /start.", show_alert=True)
         return
 
     await state.clear()
-    if result.created:
-        text = "Анкета сохранена. Пробный период на 3 дня начался."
-    else:
-        text = "Анкета уже была сохранена. Пробный период не перезапущен."
     await call.message.edit_text(text, reply_markup=start_mkp())
     await call.answer()
 
 
 @dp.callback_query(F.data == "onboarding:restart")
 async def onboarding_restart(call: types.CallbackQuery, state: FSMContext):
-    await start_onboarding(call.message, state, edit=True)
+    state_data = await state.get_data()
+    await start_onboarding(
+        call.message,
+        state,
+        edit=True,
+        editing_profile=bool(state_data.get("editing_profile", False)),
+    )
     await call.answer()

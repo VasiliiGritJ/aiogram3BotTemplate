@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from db.migrations import run_migrations
@@ -19,8 +20,10 @@ from services.onboarding import (
     parse_weight_kg,
     parse_workouts_per_week,
     save_profile_and_trial,
+    update_existing_profile,
     validate_choice,
 )
+from services.workout_plans import PlanSafetyReviewRequired, assign_workout_plan
 
 
 def sqlite_url(path: Path) -> str:
@@ -89,6 +92,9 @@ class OnboardingValidationTests(unittest.TestCase):
     def test_limitations_normalization(self) -> None:
         self.assertIsNone(normalize_limitations("нет"))
         self.assertIsNone(normalize_limitations(" Нет ограничений "))
+        self.assertIsNone(normalize_limitations(" НЕТУ "))
+        self.assertIsNone(normalize_limitations(" no "))
+        self.assertIsNone(normalize_limitations("None"))
         self.assertEqual("Болит колено", normalize_limitations(" Болит колено "))
         self.assert_invalid(normalize_limitations, "", "x" * 501)
 
@@ -188,6 +194,69 @@ class OnboardingPersistenceTests(unittest.TestCase):
         with self.database() as session:
             self.assertIsNone(session.get(FitnessProfile, self.user_id))
             self.assertIsNone(session.get(UserAccess, self.user_id))
+
+    def test_editing_profile_preserves_trial_and_allows_plan_after_fix(self) -> None:
+        first_confirmation = datetime(2026, 8, 9, 12, 0)
+        save_profile_and_trial(
+            self.user_id,
+            self.valid_data(limitations="ytp"),
+            first_confirmation,
+            self.database,
+        )
+        with self.assertRaises(PlanSafetyReviewRequired):
+            assign_workout_plan(self.user_id, self.database)
+
+        with self.database() as session:
+            access_before = session.get(UserAccess, self.user_id)
+            trial_started_before = access_before.trial_started_at
+            trial_ends_before = access_before.trial_ends_at
+
+        updated = update_existing_profile(
+            self.user_id,
+            self.valid_data(limitations=normalize_limitations("нету")),
+            first_confirmation + timedelta(days=1),
+            self.database,
+        )
+        plan = assign_workout_plan(self.user_id, self.database)
+
+        with self.database() as session:
+            profile_count = session.scalar(
+                select(func.count(FitnessProfile.user_id))
+            )
+            access_count = session.scalar(select(func.count(UserAccess.user_id)))
+            access_after = session.get(UserAccess, self.user_id)
+            profile_after = session.get(FitnessProfile, self.user_id)
+
+        self.assertEqual(1, profile_count)
+        self.assertEqual(1, access_count)
+        self.assertIsNone(updated.limitations)
+        self.assertIsNone(profile_after.limitations)
+        self.assertEqual(trial_started_before, access_after.trial_started_at)
+        self.assertEqual(trial_ends_before, access_after.trial_ends_at)
+        self.assertTrue(plan.created)
+
+    def test_editing_profile_keeps_actual_limitation_description(self) -> None:
+        confirmed_at = datetime(2026, 8, 9, 12, 0)
+        save_profile_and_trial(
+            self.user_id,
+            self.valid_data(),
+            confirmed_at,
+            self.database,
+        )
+
+        update_existing_profile(
+            self.user_id,
+            self.valid_data(
+                limitations=normalize_limitations(" Болит колено ")
+            ),
+            confirmed_at + timedelta(days=1),
+            self.database,
+        )
+
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+
+        self.assertEqual("Болит колено", profile.limitations)
 
 
 if __name__ == "__main__":

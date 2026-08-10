@@ -43,6 +43,11 @@ def cancel_mpk():
 def profile_mpk():
     btns = [
         [
+            types.InlineKeyboardButton(
+                text="Изменить профиль", callback_data="profile:edit"
+            )
+        ],
+        [
             types.InlineKeyboardButton(text="Связаться с разработчиками", callback_data="contact_with_devs")
         ],
         [

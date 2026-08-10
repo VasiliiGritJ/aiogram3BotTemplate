@@ -23,6 +23,15 @@ MIN_SESSION_DURATION_MINUTES = 10
 MAX_SESSION_DURATION_MINUTES = 300
 MAX_LIMITATIONS_LENGTH = 500
 TRIAL_DURATION = timedelta(days=3)
+NO_LIMITATIONS_VALUES = {
+    "нет",
+    "нету",
+    "нет ограничений",
+    "отсутствуют",
+    "no",
+    "none",
+    "-",
+}
 
 SEX_LABELS = {
     "male": "Мужской",
@@ -135,7 +144,7 @@ def validate_choice(value: str, choices: dict[str, str], field_name: str) -> str
 
 def normalize_limitations(value: str) -> str | None:
     normalized = value.strip()
-    if normalized.casefold() in {"нет", "нет ограничений", "отсутствуют", "-"}:
+    if normalized.casefold() in NO_LIMITATIONS_VALUES:
         return None
     if not normalized:
         raise OnboardingValidationError(
@@ -162,6 +171,43 @@ def has_completed_profile(
 ) -> bool:
     profile = get_fitness_profile(user_id, session_factory)
     return profile is not None and profile.completed_at is not None
+
+
+def update_existing_profile(
+    user_id: int,
+    data: OnboardingData,
+    updated_at: datetime | None = None,
+    session_factory: Callable[[], Session] = dbSession,
+) -> FitnessProfile:
+    """Update an existing profile without changing the user's access record."""
+    changed_at = (
+        as_utc_naive(updated_at) if updated_at is not None else utc_now()
+    )
+    with session_factory() as session:
+        with session.begin():
+            user = session.get(User, user_id)
+            profile = session.get(FitnessProfile, user_id)
+            access = session.get(UserAccess, user_id)
+            if user is None:
+                raise OnboardingPersistenceError("User does not exist.")
+            if profile is None or access is None:
+                raise OnboardingPersistenceError(
+                    "Profile and access must both exist before editing."
+                )
+
+            profile.age = data.age
+            profile.sex = data.sex
+            profile.height_cm = data.height_cm
+            profile.weight_kg = data.weight_kg
+            profile.goal = data.goal
+            profile.experience_level = data.experience_level
+            profile.workouts_per_week = data.workouts_per_week
+            profile.session_duration_minutes = data.session_duration_minutes
+            profile.limitations = data.limitations
+            profile.updated_at = changed_at
+            session.flush()
+
+        return profile
 
 
 def save_profile_and_trial(

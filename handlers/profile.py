@@ -68,6 +68,24 @@ async def profileCall(call: types.CallbackQuery, state: FSMContext):
     await call.message.edit_text(text, reply_markup=profile_mpk())
     await call.answer()
 
+
+@dp.callback_query(F.data == "profile:edit")
+async def profile_edit_call(call: types.CallbackQuery, state: FSMContext):
+    user = User.get(tg_id=call.from_user.id)
+    if user is None:
+        await call.message.edit_text("Отправьте /start, чтобы создать профиль.")
+        await call.answer()
+        return
+
+    profile = get_fitness_profile(user.id)
+    await start_onboarding(
+        call.message,
+        state,
+        edit=True,
+        editing_profile=profile is not None,
+    )
+    await call.answer()
+
 @dp.callback_query(F.data == "contact_with_devs")
 async def contactWithDevsCall(call: types.CallbackQuery, state: FSMContext):
     await call.message.edit_text('Отправьте сообщение, фото, видео, стикер, все, что угодно - я передам его разработчикам', reply_markup=cancel_mpk())

@@ -1,6 +1,6 @@
 import unittest
 
-from handlers.markups import start_mkp, workout_plan_mkp
+from handlers.markups import profile_mpk, start_mkp, workout_plan_mkp
 
 
 class WorkoutPlanMarkupTests(unittest.TestCase):
@@ -17,6 +17,9 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
 
     def test_workout_plan_view_can_return_to_menu(self) -> None:
         self.assertEqual(["start"], self.callback_values(workout_plan_mkp()))
+
+    def test_profile_has_edit_action(self) -> None:
+        self.assertIn("profile:edit", self.callback_values(profile_mpk()))
 
 
 if __name__ == "__main__":
