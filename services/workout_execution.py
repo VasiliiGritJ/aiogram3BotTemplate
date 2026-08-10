@@ -115,6 +115,17 @@ class WorkoutStartResult:
 
 
 @dataclass(frozen=True)
+class WorkoutHistoryPage:
+    """One bounded page of completed workout snapshots."""
+
+    workouts: tuple[WorkoutSessionView, ...]
+    offset: int
+    page_size: int
+    has_newer: bool
+    has_older: bool
+
+
+@dataclass(frozen=True)
 class CurrentWorkoutStep:
     kind: str
     workout_id: int
@@ -605,3 +616,56 @@ def get_workout_history(
             .order_by(WorkoutSession.finished_at.desc(), WorkoutSession.id.desc())
         ).all()
         return tuple(_load_workout_view(session, workout) for workout in workouts)
+
+
+def get_workout_history_page(
+    user_id: int,
+    *,
+    offset: int = 0,
+    page_size: int = 5,
+    session_factory: Callable[[], Session] = dbSession,
+) -> WorkoutHistoryPage:
+    """Load one completed-workout page without materializing all history."""
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise WorkoutExecutionError("History offset must be a non-negative integer.")
+    if (
+        isinstance(page_size, bool)
+        or not isinstance(page_size, int)
+        or page_size < 1
+        or page_size > 50
+    ):
+        raise WorkoutExecutionError("History page size is outside the supported range.")
+
+    with session_factory() as session:
+        rows = session.scalars(
+            select(WorkoutSession)
+            .where(
+                WorkoutSession.user_id == user_id,
+                WorkoutSession.status == "completed",
+            )
+            .order_by(WorkoutSession.finished_at.desc(), WorkoutSession.id.desc())
+            .offset(offset)
+            .limit(page_size + 1)
+        ).all()
+        has_older = len(rows) > page_size
+        page_rows = rows[:page_size]
+        return WorkoutHistoryPage(
+            workouts=tuple(_load_workout_view(session, workout) for workout in page_rows),
+            offset=offset,
+            page_size=page_size,
+            has_newer=offset > 0,
+            has_older=has_older,
+        )
+
+
+def get_completed_workout_detail(
+    user_id: int,
+    workout_id: int,
+    session_factory: Callable[[], Session] = dbSession,
+) -> WorkoutSessionView:
+    """Return one owned completed snapshot, never a current-plan projection."""
+    with session_factory() as session:
+        workout = _require_owned_workout(session, user_id, workout_id)
+        if workout.status != "completed":
+            raise WorkoutStateError("Workout session is not completed.")
+        return _load_workout_view(session, workout)

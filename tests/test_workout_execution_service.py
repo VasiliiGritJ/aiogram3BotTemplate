@@ -29,9 +29,11 @@ from services.workout_execution import (
     cancel_workout,
     complete_workout,
     get_active_workout,
+    get_completed_workout_detail,
     get_current_step,
     get_or_start_workout,
     get_workout_history,
+    get_workout_history_page,
     record_set_result,
 )
 import services.workout_execution as workout_execution
@@ -527,6 +529,76 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
         self.assertEqual(2, len(history[0].exercises))
         self.assertTrue(history[0].exercises[0].set_results)
         self.assertIsNone(history[0].source_plan_id)
+
+        detail = get_completed_workout_detail(
+            self.user_id,
+            completed.id,
+            self.database,
+        )
+        self.assertEqual("completed", detail.status)
+        self.assertTrue(detail.exercises[0].set_results)
+
+    def test_history_page_is_bounded_and_excludes_cancelled_sessions(self) -> None:
+        self._set_access(
+            trial_started_at=None,
+            trial_ends_at=None,
+            subscription_started_at=BASE_TIME - timedelta(days=1),
+            subscription_ends_at=BASE_TIME + timedelta(days=30),
+        )
+        completed = [
+            self._complete_started_workout(BASE_TIME + timedelta(hours=index))
+            for index in range(6)
+        ]
+        cancelled = get_or_start_workout(
+            self.user_id,
+            BASE_TIME + timedelta(hours=7),
+            self.database,
+        )
+        cancel_workout(
+            self.user_id,
+            cancelled.workout.id,
+            BASE_TIME + timedelta(hours=7, minutes=1),
+            self.database,
+        )
+
+        first_page = get_workout_history_page(
+            self.user_id,
+            offset=0,
+            page_size=5,
+            session_factory=self.database,
+        )
+        second_page = get_workout_history_page(
+            self.user_id,
+            offset=5,
+            page_size=5,
+            session_factory=self.database,
+        )
+
+        self.assertEqual(5, len(first_page.workouts))
+        self.assertTrue(first_page.has_older)
+        self.assertFalse(first_page.has_newer)
+        self.assertNotIn(completed[0].id, [item.id for item in first_page.workouts])
+        self.assertEqual([completed[0].id], [item.id for item in second_page.workouts])
+        self.assertFalse(second_page.has_older)
+        self.assertTrue(second_page.has_newer)
+        self.assertNotIn(cancelled.workout.id, [item.id for item in first_page.workouts])
+
+    def test_completed_detail_rejects_foreign_and_cancelled_sessions(self) -> None:
+        started = get_or_start_workout(self.user_id, BASE_TIME, self.database)
+        cancel_workout(
+            self.user_id,
+            started.workout.id,
+            BASE_TIME + timedelta(minutes=1),
+            self.database,
+        )
+        with self.assertRaises(WorkoutStateError):
+            get_completed_workout_detail(
+                self.user_id,
+                started.workout.id,
+                self.database,
+            )
+        with self.assertRaises(WorkoutExecutionError):
+            get_completed_workout_detail(999999, started.workout.id, self.database)
 
     def test_cancelled_workout_is_excluded_from_history_and_profile_plan_stay_unchanged(self) -> None:
         with self.database() as session:

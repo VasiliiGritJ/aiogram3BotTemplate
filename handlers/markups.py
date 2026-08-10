@@ -126,6 +126,20 @@ def workout_current_mkp(*, ready_to_complete: bool = False):
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def workout_input_mkp():
+    """Keep only the safe cancellation action while text input is pending."""
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="❌ Отменить тренировку",
+                    callback_data="workout:cancel",
+                )
+            ]
+        ]
+    )
+
+
 def workout_cancel_confirmation_mkp():
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
@@ -141,6 +155,60 @@ def workout_cancel_confirmation_mkp():
                     callback_data="workout:cancel:resume",
                 )
             ],
+        ]
+    )
+
+
+def workout_history_mkp(
+    workout_buttons: list[tuple[str, int]],
+    *,
+    offset: int,
+    page_size: int,
+    has_newer: bool,
+    has_older: bool,
+):
+    buttons = [
+        [
+            types.InlineKeyboardButton(
+                text=text,
+                callback_data=f"workout:history:detail:{workout_id}:{offset}",
+            )
+        ]
+        for text, workout_id in workout_buttons
+    ]
+    navigation = []
+    if has_newer:
+        navigation.append(
+            types.InlineKeyboardButton(
+                text="◀️ Новее",
+                callback_data=f"workout:history:page:{max(0, offset - page_size)}",
+            )
+        )
+    if has_older:
+        navigation.append(
+            types.InlineKeyboardButton(
+                text="Старше ▶️",
+                callback_data=f"workout:history:page:{offset + page_size}",
+            )
+        )
+    if navigation:
+        buttons.append(navigation)
+    buttons.append(
+        [types.InlineKeyboardButton(text="🏠 В меню", callback_data="start")]
+    )
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def workout_history_detail_mkp(offset: int):
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text="← К истории",
+                    callback_data=f"workout:history:page:{offset}",
+                )
+            ],
+            [types.InlineKeyboardButton(text="🏠 В меню", callback_data="start")],
         ]
     )
 

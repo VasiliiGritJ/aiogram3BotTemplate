@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import importlib
 import sys
@@ -11,10 +11,13 @@ from services.access import AccessDecision, AccessStatus
 from services.workout_execution import (
     CurrentWorkoutStep,
     WorkoutAccessDeniedError,
+    WorkoutHistoryPage,
     WorkoutNotFoundError,
+    WorkoutSetResultView,
     WorkoutSessionExerciseView,
     WorkoutSessionView,
     WorkoutStartResult,
+    WorkoutStateError,
 )
 
 
@@ -78,9 +81,15 @@ class _Message:
 
 
 class _Call:
-    def __init__(self, message: _Message | None = None, user_id: int = 101) -> None:
+    def __init__(
+        self,
+        message: _Message | None = None,
+        user_id: int = 101,
+        data: str = "",
+    ) -> None:
         self.message = message or _Message(user_id=user_id)
         self.from_user = _FromUser(user_id)
+        self.data = data
         self.answers: list[tuple[tuple, dict]] = []
 
     async def answer(self, *args, **kwargs) -> None:
@@ -108,12 +117,19 @@ class _State:
         return dict(self.data)
 
 
-def _exercise(*, sets: int = 2) -> WorkoutSessionExerciseView:
+def _exercise(
+    *,
+    sets: int = 2,
+    exercise_id: int = 31,
+    order: int = 1,
+    name: str = "Жим",
+    results: tuple[WorkoutSetResultView, ...] = (),
+) -> WorkoutSessionExerciseView:
     return WorkoutSessionExerciseView(
-        id=31,
-        exercise_order=1,
+        id=exercise_id,
+        exercise_order=order,
         planned_exercise_id=1,
-        planned_exercise_name="Жим",
+        planned_exercise_name=name,
         planned_primary_muscle_group="Грудь",
         planned_target_sets=sets,
         planned_target_reps_min=8,
@@ -121,31 +137,38 @@ def _exercise(*, sets: int = 2) -> WorkoutSessionExerciseView:
         planned_rest_seconds=90,
         planned_hint="Контролируйте движение",
         selected_exercise_id=1,
-        selected_exercise_name="Жим",
+        selected_exercise_name=name,
         selected_primary_muscle_group="Грудь",
         selected_target_sets=sets,
         selected_target_reps_min=8,
         selected_target_reps_max=12,
         selected_rest_seconds=90,
         selected_hint="Контролируйте движение",
-        set_results=(),
+        set_results=results,
     )
 
 
-def _workout(*, status: str = "in_progress") -> WorkoutSessionView:
+def _workout(
+    *,
+    status: str = "in_progress",
+    workout_id: int = 21,
+    day_number: int = 1,
+    finished_at: datetime | None = None,
+    exercises: tuple[WorkoutSessionExerciseView, ...] | None = None,
+) -> WorkoutSessionView:
     started = datetime(2026, 8, 10, 12, 0)
     return WorkoutSessionView(
-        id=21,
+        id=workout_id,
         user_id=7,
         source_plan_id=1,
         source_plan_day_id=1,
-        day_number=1,
+        day_number=day_number,
         day_title="Верх тела",
         status=status,
         started_at=started,
-        finished_at=None,
+        finished_at=finished_at,
         updated_at=started,
-        exercises=(_exercise(),),
+        exercises=exercises or (_exercise(),),
     )
 
 
@@ -320,11 +343,19 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         self.assertEqual(21, state.data["workout_session_id"])
         self.assertNotIn("exercise_id", state.data)
         self.assertNotIn("set_number", state.data)
+        self.assertEqual(
+            ["workout:cancel"],
+            self.callback_values(call.message.edits[-1][1]),
+        )
 
         weight_message = _Message("12,5")
         self.run_async(workout_ui.workout_weight_input(weight_message, state))
         self.assertEqual(12.5, state.data["pending_weight"])
         self.assertEqual(workout_ui.WorkoutExecution.awaiting_reps, state.current_state)
+        self.assertEqual(
+            ["workout:cancel"],
+            self.callback_values(weight_message.answers[-1][1]),
+        )
 
         reps_message = _Message("10")
         with (
@@ -404,24 +435,125 @@ class WorkoutExecutionUiTests(unittest.TestCase):
     def test_history_renders_completed_snapshot_summaries_and_empty_state(self) -> None:
         call = _Call()
         state = _State()
+        empty_page = WorkoutHistoryPage((), 0, 5, False, False)
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
-            patch.object(workout_ui, "get_workout_history", return_value=()),
+            patch.object(workout_ui, "get_workout_history_page", return_value=empty_page),
         ):
             self.run_async(workout_ui.workout_history(call, state))
-        self.assertIn("пока пуста", call.message.edits[-1][0])
+        self.assertIn("Завершённых тренировок пока нет", call.message.edits[-1][0])
 
-        completed = _workout(status="completed")
-        completed = completed.__class__(
-            **{**completed.__dict__, "finished_at": datetime(2026, 8, 10, 13, 0)}
+        completed = _workout(
+            status="completed",
+            finished_at=datetime(2026, 8, 10, 13, 0),
         )
+        page = WorkoutHistoryPage((completed,), 0, 5, False, False)
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
-            patch.object(workout_ui, "get_workout_history", return_value=(completed,)),
+            patch.object(
+                workout_ui,
+                "get_workout_history_page",
+                return_value=page,
+            ) as history_page,
         ):
             self.run_async(workout_ui.workout_history(call, state))
         self.assertIn("День 1", call.message.edits[-1][0])
-        self.assertIn("Упражнений: 1", call.message.edits[-1][0])
+        self.assertIn("1 упражнений", call.message.edits[-1][0])
+        history_page.assert_called_once_with(7, offset=0, page_size=5)
+
+    def test_history_pagination_uses_only_requested_page_and_back_offset(self) -> None:
+        first_page = WorkoutHistoryPage(
+            tuple(
+                _workout(
+                    status="completed",
+                    workout_id=index,
+                    day_number=index,
+                    finished_at=datetime(2026, 8, 10, 13, index),
+                )
+                for index in range(1, 6)
+            ),
+            0,
+            5,
+            False,
+            True,
+        )
+        call = _Call()
+        state = _State()
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_workout_history_page", return_value=first_page) as page_service,
+        ):
+            self.run_async(workout_ui.workout_history(call, state))
+        page_service.assert_called_once_with(7, offset=0, page_size=5)
+        callbacks = self.callback_values(call.message.edits[-1][1])
+        self.assertIn("workout:history:page:5", callbacks)
+        self.assertNotIn("workout:history:page:0", callbacks)
+        self.assertEqual(5, sum(value.startswith("workout:history:detail:") for value in callbacks))
+
+        older_page = WorkoutHistoryPage(
+            (_workout(status="completed", workout_id=6, finished_at=datetime(2026, 8, 9, 13, 0)),),
+            5,
+            5,
+            True,
+            False,
+        )
+        older_call = _Call(data="workout:history:page:5")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_workout_history_page", return_value=older_page) as page_service,
+        ):
+            self.run_async(workout_ui.workout_history_page(older_call, _State()))
+        page_service.assert_called_once_with(7, offset=5, page_size=5)
+        callbacks = self.callback_values(older_call.message.edits[-1][1])
+        self.assertIn("workout:history:page:0", callbacks)
+        self.assertNotIn("workout:history:page:10", callbacks)
+
+    def test_history_detail_is_compact_snapshot_based_and_safe(self) -> None:
+        results = (
+            WorkoutSetResultView(1, 1, 12.5, 10, datetime(2026, 8, 10, 12, 1)),
+            WorkoutSetResultView(2, 2, 12.5, 10, datetime(2026, 8, 10, 12, 2)),
+            WorkoutSetResultView(3, 3, 0, 12, datetime(2026, 8, 10, 12, 3)),
+        )
+        workout = _workout(
+            status="completed",
+            finished_at=datetime(2026, 8, 10, 13, 0),
+            exercises=(
+                _exercise(name="Снимок жима", results=results),
+                _exercise(exercise_id=32, order=2, name="Тяга", results=()),
+            ),
+        )
+        call = _Call(data="workout:history:detail:21:5")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_completed_workout_detail", return_value=workout),
+        ):
+            self.run_async(workout_ui.workout_history_detail(call, _State()))
+        text = call.message.edits[-1][0]
+        self.assertIn("Снимок жима — 12,5×10 · 12,5×10 · собств. вес×12", text)
+        self.assertIn("Тяга — нет сохранённых подходов", text)
+        self.assertIn("workout:history:page:5", self.callback_values(call.message.edits[-1][1]))
+
+        stale_call = _Call(data="workout:history:detail:999:0")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_completed_workout_detail", side_effect=WorkoutStateError("cancelled")),
+        ):
+            self.run_async(workout_ui.workout_history_detail(stale_call, _State()))
+        self.assertTrue(stale_call.answers[-1][1]["show_alert"])
+
+    def test_detail_messages_split_between_exercises(self) -> None:
+        workout = _workout(
+            status="completed",
+            finished_at=datetime(2026, 8, 10, 13, 0),
+            exercises=(
+                _exercise(name="Первое упражнение"),
+                _exercise(exercise_id=32, order=2, name="Второе упражнение"),
+            ),
+        )
+        messages = workout_ui.format_workout_detail_messages(workout, message_limit=90)
+        self.assertGreater(len(messages), 1)
+        self.assertTrue(any("Первое упражнение" in message for message in messages))
+        self.assertTrue(any("Второе упражнение" in message for message in messages))
 
     def test_complete_uses_active_session_and_stale_completion_does_not_start_new_one(self) -> None:
         call = _Call()
