@@ -4,8 +4,8 @@ from aiogram.utils.chat_action import ChatActionSender
 from aiogram import F, types
 
 from db import User
-from handlers.markups import start_mkp
 from handlers.onboarding import start_onboarding
+from handlers.workout_execution import workout_menu_markup
 from services.onboarding import has_completed_profile
 from storage.config import bot, dp
 from storage.states import tryFinish
@@ -32,7 +32,7 @@ async def startcmd(
         )
     if has_completed_profile(user.id):
         await tryFinish(state)
-        await message.answer("Меню", reply_markup=start_mkp())
+        await message.answer("Меню", reply_markup=workout_menu_markup(user.id))
     else:
         await start_onboarding(message, state)
 
@@ -45,7 +45,7 @@ async def startCall(call: types.CallbackQuery, state: FSMContext):
         await call.message.edit_text("Отправьте /start, чтобы начать.")
     elif has_completed_profile(user.id):
         await tryFinish(state)
-        await call.message.edit_text("Меню", reply_markup=start_mkp())
+        await call.message.edit_text("Меню", reply_markup=workout_menu_markup(user.id))
     else:
         await start_onboarding(call.message, state, edit=True)
     await call.answer()

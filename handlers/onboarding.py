@@ -13,8 +13,8 @@ from handlers.markups import (
     onboarding_goal_mkp,
     onboarding_limitations_mkp,
     onboarding_sex_mkp,
-    start_mkp,
 )
+from handlers.workout_execution import workout_menu_markup
 from services.onboarding import (
     EXPERIENCE_LABELS,
     GOAL_LABELS,
@@ -266,7 +266,7 @@ async def onboarding_confirm(call: types.CallbackQuery, state: FSMContext):
         return
 
     await state.clear()
-    await call.message.edit_text(text, reply_markup=start_mkp())
+    await call.message.edit_text(text, reply_markup=workout_menu_markup(user.id))
     await call.answer()
 
 

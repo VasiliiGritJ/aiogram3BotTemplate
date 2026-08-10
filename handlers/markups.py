@@ -13,17 +13,35 @@ from aiogram import types
 #     ]
 #     return types.InlineKeyboardMarkup(inline_keyboard=btns)
 
-def start_mkp():
+def start_mkp(
+    workout_action: tuple[str, str] | None = None,
+    *,
+    show_history: bool = False,
+):
     btns = [
         [
             types.InlineKeyboardButton(
                 text="Мой план", callback_data="workout_plan"
             )
         ],
-        [
-            types.InlineKeyboardButton(text="Профиль", callback_data="profile")
-        ],
     ]
+    if workout_action is not None:
+        text, callback_data = workout_action
+        btns.append(
+            [types.InlineKeyboardButton(text=text, callback_data=callback_data)]
+        )
+    if show_history:
+        btns.append(
+            [
+                types.InlineKeyboardButton(
+                    text="📊 История тренировок",
+                    callback_data="workout:history",
+                )
+            ]
+        )
+    btns.append(
+        [types.InlineKeyboardButton(text="Профиль", callback_data="profile")]
+    )
     return types.InlineKeyboardMarkup(inline_keyboard=btns)
 
 def to_menu_mpk():
@@ -57,15 +75,72 @@ def profile_mpk():
     return types.InlineKeyboardMarkup(inline_keyboard=btns)
 
 
-def workout_plan_mkp():
+def workout_plan_mkp(
+    workout_action: tuple[str, str] | None = None,
+) -> types.InlineKeyboardMarkup:
+    buttons = []
+    if workout_action is not None:
+        text, callback_data = workout_action
+        buttons.append(
+            [types.InlineKeyboardButton(text=text, callback_data=callback_data)]
+        )
+    buttons.append(
+        [
+            types.InlineKeyboardButton(
+                text="Вернуться в меню",
+                callback_data="start",
+            )
+        ]
+    )
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def workout_current_mkp(*, ready_to_complete: bool = False):
+    buttons = []
+    if ready_to_complete:
+        buttons.append(
+            [
+                types.InlineKeyboardButton(
+                    text="🏁 Завершить тренировку",
+                    callback_data="workout:complete",
+                )
+            ]
+        )
+    else:
+        buttons.append(
+            [
+                types.InlineKeyboardButton(
+                    text="✅ Выполнить подход",
+                    callback_data="workout:record_set",
+                )
+            ]
+        )
+    buttons.append(
+        [
+            types.InlineKeyboardButton(
+                text="❌ Отменить тренировку",
+                callback_data="workout:cancel",
+            )
+        ]
+    )
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def workout_cancel_confirmation_mkp():
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 types.InlineKeyboardButton(
-                    text="Вернуться в меню",
-                    callback_data="start",
+                    text="Да, отменить",
+                    callback_data="workout:cancel:confirm",
                 )
-            ]
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="Продолжить тренировку",
+                    callback_data="workout:cancel:resume",
+                )
+            ],
         ]
     )
 

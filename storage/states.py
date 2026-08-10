@@ -24,3 +24,10 @@ class Onboarding(StatesGroup):
     session_duration_minutes = FSMState()
     limitations = FSMState()
     confirmation = FSMState()
+
+
+class WorkoutExecution(StatesGroup):
+    """Short-lived input state for a durable workout session."""
+
+    awaiting_weight = FSMState()
+    awaiting_reps = FSMState()

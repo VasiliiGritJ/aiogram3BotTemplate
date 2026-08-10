@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from db import User
 from handlers.markups import to_menu_mpk, workout_plan_mkp
 from handlers.onboarding import start_onboarding
+from handlers.workout_execution import workout_entry_action
 from services.workout_plans import (
     FitnessProfileRequiredError,
     WorkoutPlanError,
@@ -58,6 +59,6 @@ async def workout_plan_call(
     )
     await call.message.edit_text(
         text,
-        reply_markup=workout_plan_mkp(),
+        reply_markup=workout_plan_mkp(workout_entry_action(user.id)),
     )
     await call.answer()
