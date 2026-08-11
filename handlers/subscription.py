@@ -33,6 +33,8 @@ def _format_date(value: datetime | None) -> str:
 
 def _format_price(amount_minor: int, currency: str) -> str:
     amount = Decimal(amount_minor) / Decimal("100")
+    if currency == "RUB":
+        return f"{amount:.2f}".rstrip("0").rstrip(".") + " ₽"
     return f"{amount:.2f} {currency}"
 
 
@@ -53,12 +55,11 @@ def format_subscription_screen(
     lines.extend(
         (
             "",
-            f"Продукт: {runtime.product.product_code}",
-            f"Период: {runtime.product.period_days} дней",
+            f"Подписка: {runtime.product.period_days} дней",
             f"Стоимость: {_format_price(runtime.product.amount_minor, runtime.product.currency)}",
         )
     )
-    if payment is not None:
+    if payment is not None and not _is_paid_active(decision):
         lines.extend(("", _payment_status_text(payment)))
     return "\n".join(lines)
 
@@ -90,9 +91,17 @@ def _safe_payment_id(data: str | None) -> int | None:
     return payment_id if payment_id > 0 else None
 
 
-def _payment_markup(payment: PaymentServiceResult | None):
+def _is_paid_active(decision: AccessDecision) -> bool:
+    return decision.status is AccessStatus.ACTIVE
+
+
+def _payment_markup(
+    payment: PaymentServiceResult | None,
+    decision: AccessDecision,
+):
+    paid_active = _is_paid_active(decision)
     if payment is None:
-        return subscription_mkp()
+        return subscription_mkp(show_pay=not paid_active)
     is_active_payment = payment.status in {
         PaymentStatus.CREATING,
         PaymentStatus.PENDING,
@@ -101,6 +110,7 @@ def _payment_markup(payment: PaymentServiceResult | None):
     return subscription_mkp(
         payment_id=payment.payment_id if is_active_payment else None,
         confirmation_url=payment.confirmation_url if is_active_payment else None,
+        show_pay=not paid_active,
     )
 
 
@@ -128,7 +138,7 @@ async def subscription_screen(call: types.CallbackQuery, state: FSMContext) -> N
             decision = get_access_decision(user.id)
             await call.message.edit_text(
                 format_subscription_screen(runtime, decision, payment),
-                reply_markup=_payment_markup(payment),
+                reply_markup=_payment_markup(payment, decision),
             )
     await call.answer()
 
@@ -145,6 +155,15 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
     if runtime is None:
         await call.answer()
         return
+    decision = get_access_decision(user.id)
+    if _is_paid_active(decision):
+        payment = runtime.payment_service.get_latest_payment(user.id)
+        await call.message.edit_text(
+            format_subscription_screen(runtime, decision, payment),
+            reply_markup=_payment_markup(payment, decision),
+        )
+        await call.answer()
+        return
     try:
         payment = runtime.payment_service.get_or_create_payment(user.id)
     except (PaymentProviderError, SQLAlchemyError, RuntimeError, ValueError):
@@ -159,7 +178,10 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
         message = "Не удалось подготовить оплату. Попробуйте позже."
     else:
         message = format_subscription_screen(runtime, decision, payment)
-    await call.message.edit_text(message, reply_markup=_payment_markup(payment))
+    await call.message.edit_text(
+        message,
+        reply_markup=_payment_markup(payment, decision),
+    )
     await call.answer()
 
 
@@ -192,5 +214,8 @@ async def subscription_check(call: types.CallbackQuery, state: FSMContext) -> No
         message = "Сейчас не удалось проверить оплату. Попробуйте позже."
     else:
         message = format_subscription_screen(runtime, decision, payment)
-    await call.message.edit_text(message, reply_markup=_payment_markup(payment))
+    await call.message.edit_text(
+        message,
+        reply_markup=_payment_markup(payment, decision),
+    )
     await call.answer()

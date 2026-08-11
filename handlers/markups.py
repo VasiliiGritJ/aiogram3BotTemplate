@@ -56,15 +56,17 @@ def subscription_mkp(
     *,
     payment_id: int | None = None,
     confirmation_url: str | None = None,
+    show_pay: bool = True,
 ) -> types.InlineKeyboardMarkup:
     buttons = []
     if isinstance(confirmation_url, str) and confirmation_url.startswith("https://"):
         buttons.append(
             [types.InlineKeyboardButton(text="Оплатить в YooKassa", url=confirmation_url)]
         )
-    buttons.append(
-        [types.InlineKeyboardButton(text="Оплатить", callback_data="subscription:pay")]
-    )
+    if show_pay:
+        buttons.append(
+            [types.InlineKeyboardButton(text="Оплатить", callback_data="subscription:pay")]
+        )
     if isinstance(payment_id, int) and payment_id > 0:
         buttons.append(
             [

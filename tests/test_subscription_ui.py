@@ -137,7 +137,9 @@ class SubscriptionUiTests(unittest.TestCase):
             None,
         )
         self.assertIn("пробный период до 14.08.2026 12:00", text)
-        self.assertIn("990.00 RUB", text)
+        self.assertIn("Подписка: 30 дней", text)
+        self.assertIn("990 ₽", text)
+        self.assertNotIn(PRODUCT.product_code, text)
         for invalid_amount in ("not-a-price", "0"):
             with self.subTest(invalid_amount=invalid_amount):
                 with self.assertRaises(PaymentRuntimeConfigurationError):
@@ -156,6 +158,30 @@ class SubscriptionUiTests(unittest.TestCase):
         self.assertIn("подписка активна до 01.09.2026 09:00", paid)
         self.assertIn("активной подписки нет", expired)
 
+    def test_paid_active_hides_pay_and_check_buttons(self):
+        paid = result(
+            PaymentStatus.SUCCEEDED,
+            end=datetime(2026, 9, 1, 9, 0),
+        )
+        decision = AccessDecision(AccessStatus.ACTIVE, datetime(2026, 9, 1, 9, 0))
+        markup = subscription_ui._payment_markup(paid, decision)
+        callbacks = self.callbacks(markup)
+        self.assertNotIn("subscription:pay", callbacks)
+        self.assertNotIn("subscription:check:11", callbacks)
+        self.assertIn("Доступ: подписка активна до 01.09.2026 09:00", subscription_ui.format_subscription_screen(self.runtime(_PaymentService()), decision, paid))
+
+    def test_paid_active_stale_pay_callback_does_not_create_payment(self):
+        service = _PaymentService(latest=result(PaymentStatus.SUCCEEDED))
+        call = _Call("subscription:pay")
+        with (
+            patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(subscription_ui, "get_payment_runtime", return_value=self.runtime(service)),
+            patch.object(subscription_ui, "get_access_decision", return_value=AccessDecision(AccessStatus.ACTIVE, datetime(2026, 9, 1, 9, 0))),
+        ):
+            self.run_async(subscription_ui.subscription_pay(call, _State()))
+        self.assertEqual([], service.create_calls)
+        self.assertNotIn("subscription:pay", self.callbacks(call.message.edits[-1][1]))
+
     def test_subscription_screen_reads_latest_durable_payment(self):
         pending = result()
         service = _PaymentService(latest=pending)
@@ -169,6 +195,7 @@ class SubscriptionUiTests(unittest.TestCase):
         text, markup = call.message.edits[-1]
         self.assertIn("Оплата ожидает подтверждения", text)
         self.assertIn("subscription:check:11", self.callbacks(markup))
+        self.assertIn("subscription:pay", self.callbacks(markup))
 
     def test_restart_style_recreation_reads_the_same_durable_payment(self):
         pending = result()
@@ -205,11 +232,31 @@ class SubscriptionUiTests(unittest.TestCase):
         self.assertIn("subscription:check:11", self.callbacks(markup))
         self.assertEqual("https://example.invalid/pay", markup.inline_keyboard[0][0].url)
 
+    def test_pending_payment_keeps_link_and_check_button(self):
+        pending = result()
+        markup = subscription_ui._payment_markup(
+            pending,
+            AccessDecision(AccessStatus.TRIAL_AVAILABLE, None),
+        )
+        self.assertEqual("https://example.invalid/pay", markup.inline_keyboard[0][0].url)
+        self.assertIn("subscription:check:11", self.callbacks(markup))
+        self.assertIn("subscription:pay", self.callbacks(markup))
+
+    def test_check_callback_rejects_product_or_price_fields(self):
+        self.assertEqual(11, subscription_ui._safe_payment_id("subscription:check:11"))
+        for callback_data in (
+            "subscription:check:11:10000",
+            "subscription:check:11:RUB",
+            "subscription:check:11:monthly_30d_v1",
+        ):
+            with self.subTest(callback_data=callback_data):
+                self.assertIsNone(subscription_ui._safe_payment_id(callback_data))
+
     def test_check_pending_waiting_succeeded_and_terminal_statuses(self):
         cases = (
             (PaymentStatus.PENDING, "Оплата ожидает подтверждения"),
             (PaymentStatus.WAITING_FOR_CAPTURE, "Платёж обрабатывается"),
-            (PaymentStatus.SUCCEEDED, "Подписка активирована до 15.09.2026 12:00"),
+            (PaymentStatus.SUCCEEDED, "Доступ: подписка активна до 15.09.2026 12:00"),
             (PaymentStatus.CANCELED, "Платёж отменён"),
             (PaymentStatus.EXPIRED, "Срок оплаты истёк"),
         )
