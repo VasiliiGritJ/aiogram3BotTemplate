@@ -20,6 +20,22 @@ class PaymentProviderUnavailable(PaymentProviderError):
     """The provider outcome is unknown and requires a later reconciliation."""
 
 
+class PaymentProviderTransientError(PaymentProviderUnavailable):
+    """A transient provider failure; the local state must remain recoverable."""
+
+
+class PaymentProviderUnknownCreateOutcome(PaymentProviderUnavailable):
+    """Create may have reached the provider, so it is never a confirmed failure."""
+
+
+class PaymentProviderPermanentError(PaymentProviderError):
+    """A request was rejected without exposing raw provider details."""
+
+
+class PaymentProviderProtocolError(PaymentProviderError):
+    """The provider response cannot be safely normalized."""
+
+
 @dataclass(frozen=True)
 class PaymentCreateRequest:
     """The server-owned data sent to a payment provider."""
