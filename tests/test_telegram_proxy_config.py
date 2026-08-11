@@ -111,6 +111,7 @@ class TelegramProxyConfigTests(unittest.TestCase):
             "handlers.profile": python_types.ModuleType("handlers.profile"),
             "handlers.workout_plan": python_types.ModuleType("handlers.workout_plan"),
             "handlers.workout_execution": python_types.ModuleType("handlers.workout_execution"),
+            "handlers.subscription": python_types.ModuleType("handlers.subscription"),
             "handlers.chat_join": python_types.ModuleType("handlers.chat_join"),
         }
         with patch.dict(sys.modules, module_names):

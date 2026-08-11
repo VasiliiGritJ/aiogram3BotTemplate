@@ -163,6 +163,21 @@ class PaymentService:
             return self._result_for_id(payment_id, PaymentServiceReason.PROVIDER_UNAVAILABLE)
         return self._reconcile_provider_payment(payment_id, provider_payment)
 
+    def get_latest_payment(self, user_id: int) -> PaymentServiceResult | None:
+        """Read the latest local payment for the configured product only."""
+        with self._session_factory() as session:
+            payment = session.scalar(
+                select(SubscriptionPayment)
+                .where(
+                    SubscriptionPayment.user_id == user_id,
+                    SubscriptionPayment.product_code == self._product.product_code,
+                )
+                .order_by(SubscriptionPayment.id.desc())
+            )
+            if payment is None:
+                return None
+            return self._result_from_payment(payment, PaymentServiceReason.NOT_SUCCEEDED)
+
     def _get_or_create_local_payment(self, user_id: int) -> tuple[int, bool]:
         try:
             with self._session_factory() as session:

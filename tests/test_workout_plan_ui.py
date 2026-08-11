@@ -4,6 +4,7 @@ from handlers.markups import (
     onboarding_limitations_mkp,
     profile_mpk,
     start_mkp,
+    subscription_mkp,
     workout_cancel_confirmation_mkp,
     workout_current_mkp,
     workout_plan_mkp,
@@ -21,6 +22,22 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
 
     def test_main_menu_has_workout_plan_action(self) -> None:
         self.assertIn("workout_plan", self.callback_values(start_mkp()))
+        self.assertIn("subscription", self.callback_values(start_mkp()))
+
+    def test_subscription_markup_uses_only_local_payment_actions(self) -> None:
+        markup = subscription_mkp(
+            payment_id=12,
+            confirmation_url="https://example.invalid/pay",
+        )
+        self.assertIn("subscription:pay", self.callback_values(markup))
+        self.assertIn("subscription:check:12", self.callback_values(markup))
+        urls = [
+            button.url
+            for row in markup.inline_keyboard
+            for button in row
+            if button.url is not None
+        ]
+        self.assertEqual(["https://example.invalid/pay"], urls)
 
     def test_workout_plan_view_can_return_to_menu(self) -> None:
         self.assertEqual(["start"], self.callback_values(workout_plan_mkp()))

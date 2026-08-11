@@ -12,6 +12,7 @@ import handlers.start
 import handlers.profile
 import handlers.workout_plan
 import handlers.workout_execution
+import handlers.subscription
 import handlers.chat_join
 
 async def bot_stopped():

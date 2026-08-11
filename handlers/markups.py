@@ -40,9 +40,44 @@ def start_mkp(
             ]
         )
     btns.append(
+        [
+            types.InlineKeyboardButton(
+                text="💳 Подписка", callback_data="subscription"
+            )
+        ]
+    )
+    btns.append(
         [types.InlineKeyboardButton(text="Профиль", callback_data="profile")]
     )
     return types.InlineKeyboardMarkup(inline_keyboard=btns)
+
+
+def subscription_mkp(
+    *,
+    payment_id: int | None = None,
+    confirmation_url: str | None = None,
+) -> types.InlineKeyboardMarkup:
+    buttons = []
+    if isinstance(confirmation_url, str) and confirmation_url.startswith("https://"):
+        buttons.append(
+            [types.InlineKeyboardButton(text="Оплатить в YooKassa", url=confirmation_url)]
+        )
+    buttons.append(
+        [types.InlineKeyboardButton(text="Оплатить", callback_data="subscription:pay")]
+    )
+    if isinstance(payment_id, int) and payment_id > 0:
+        buttons.append(
+            [
+                types.InlineKeyboardButton(
+                    text="Проверить оплату",
+                    callback_data=f"subscription:check:{payment_id}",
+                )
+            ]
+        )
+    buttons.append(
+        [types.InlineKeyboardButton(text="🏠 В меню", callback_data="start")]
+    )
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def to_menu_mpk():
     btns = [
