@@ -2,6 +2,7 @@
 
 from html import escape
 import math
+from decimal import Decimal
 
 from aiogram import F, types
 from aiogram.filters import StateFilter
@@ -33,6 +34,14 @@ from services.workout_execution import (
     get_or_start_workout,
     get_workout_history_page,
     record_set_result,
+)
+from services.workout_progression import (
+    ProgressionReason,
+    ProgressionRecommendation,
+)
+from services.workout_progression_history import (
+    ProgressionHistoryError,
+    get_progression_recommendation,
 )
 from storage.config import dp
 from storage.states import WorkoutExecution
@@ -96,7 +105,11 @@ def parse_workout_reps(text: str) -> int:
     return repetitions
 
 
-def _format_step(workout: WorkoutSessionView, step: CurrentWorkoutStep) -> str:
+def _format_step(
+    workout: WorkoutSessionView,
+    step: CurrentWorkoutStep,
+    recommendation: ProgressionRecommendation | None = None,
+) -> str:
     if step.ready_to_complete:
         return (
             f"🏋️ День {workout.day_number} — {escape(workout.day_title)}\n\n"
@@ -110,6 +123,11 @@ def _format_step(workout: WorkoutSessionView, step: CurrentWorkoutStep) -> str:
         if exercise.selected_hint
         else ""
     )
+    progression_hint = (
+        f"\n\n📈 {format_progression_recommendation(exercise, recommendation)}"
+        if recommendation is not None
+        else ""
+    )
     return (
         f"🏋️ День {workout.day_number} — {escape(workout.day_title)}\n\n"
         f"Упражнение {exercise.exercise_order} из {len(workout.exercises)}\n"
@@ -119,7 +137,73 @@ def _format_step(workout: WorkoutSessionView, step: CurrentWorkoutStep) -> str:
         f"Цель: {exercise.selected_target_reps_min}–{exercise.selected_target_reps_max} повторений\n"
         f"Отдых: {exercise.selected_rest_seconds} сек"
         f"{hint}"
+        f"{progression_hint}"
     )
+
+
+def _format_progression_weight(weight: Decimal) -> str:
+    if weight == 0:
+        return "собств. вес"
+    value = format(weight.normalize(), "f")
+    if "." in value:
+        value = value.rstrip("0").rstrip(".")
+    return f"{value.replace('.', ',')} кг"
+
+
+def _format_previous_weights(weights: tuple[Decimal, ...]) -> str:
+    if len(set(weights)) == 1:
+        return _format_progression_weight(weights[0])
+    return "/".join(_format_progression_weight(weight) for weight in weights)
+
+
+def _format_progression_reps(reps: tuple[int, ...]) -> str:
+    return "/".join(str(value) for value in reps)
+
+
+def format_progression_recommendation(
+    exercise,
+    recommendation: ProgressionRecommendation,
+) -> str:
+    """Render one compact, advisory progression hint from the pure service."""
+    target_text = (
+        f"{exercise.selected_target_reps_min}–{exercise.selected_target_reps_max}"
+    )
+    if recommendation.reason == ProgressionReason.NO_HISTORY:
+        return f"Цель: {target_text} повторений. Выберите комфортный рабочий вес."
+    if recommendation.reason == ProgressionReason.INSUFFICIENT_DATA:
+        return f"Данных для подсказки пока недостаточно. Цель: {target_text}."
+    if recommendation.reason == ProgressionReason.MIXED_WEIGHTS_HOLD:
+        previous = _format_previous_weights(recommendation.previous_weights_kg)
+        reps = _format_progression_reps(recommendation.previous_reps)
+        return (
+            f"Прошлый раз: {previous} — {reps}\n"
+            f"Сегодня: не меняйте веса автоматически. Цель: {target_text}."
+        )
+
+    previous = _format_previous_weights(recommendation.previous_weights_kg)
+    previous_reps = _format_progression_reps(recommendation.previous_reps)
+    suggested_weight = recommendation.suggested_weight_kg
+    suggested_reps = recommendation.suggested_reps
+    assert suggested_weight is not None and suggested_reps is not None
+    today_reps = _format_progression_reps(suggested_reps)
+    today_weight = _format_progression_weight(suggested_weight)
+
+    if recommendation.reason == ProgressionReason.INCREASE_WEIGHT:
+        today = f"Сегодня: попробуй {today_weight}, цель {today_reps}."
+    elif recommendation.reason == ProgressionReason.HOLD_ADD_REPS:
+        today = f"Сегодня: оставь {today_weight} и попробуй {today_reps}."
+    elif recommendation.reason in {
+        ProgressionReason.HOLD_RECOVER_RANGE,
+        ProgressionReason.HOLD_NO_SAFE_WEIGHT_STEP,
+    }:
+        today = f"Сегодня: оставь {today_weight}, цель {today_reps}."
+    elif recommendation.reason == ProgressionReason.DECREASE_WEIGHT:
+        today = f"Сегодня: попробуй {today_weight}, цель {today_reps}."
+    elif recommendation.reason == ProgressionReason.BODYWEIGHT_ADD_REPS:
+        today = f"Сегодня: собственный вес, попробуй {today_reps}."
+    else:
+        today = f"Сегодня: собственный вес, цель {today_reps}."
+    return f"Прошлый раз: {previous} — {previous_reps}\n{today}"
 
 
 async def show_current_workout(
@@ -138,7 +222,16 @@ async def show_current_workout(
         text = "Нет активной тренировки. Выберите нужное действие в меню."
         markup = to_menu_mpk()
     else:
-        text = _format_step(workout, step)
+        recommendation = None
+        if not step.ready_to_complete and step.exercise is not None:
+            try:
+                recommendation = get_progression_recommendation(
+                    user_id,
+                    step.exercise.id,
+                )
+            except (ProgressionHistoryError, SQLAlchemyError, ValueError):
+                recommendation = None
+        text = _format_step(workout, step, recommendation)
         markup = workout_current_mkp(ready_to_complete=step.ready_to_complete)
 
     if edit:

@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass, replace
 from datetime import datetime
+from decimal import Decimal
 import importlib
 import sys
 import types as python_types
@@ -19,6 +20,7 @@ from services.workout_execution import (
     WorkoutStartResult,
     WorkoutStateError,
 )
+from services.workout_progression import ProgressionReason, ProgressionRecommendation
 
 
 class _Dispatcher:
@@ -181,6 +183,25 @@ def _step(*, ready: bool = False, set_number: int = 1) -> CurrentWorkoutStep:
     )
 
 
+def _recommendation(
+    reason: ProgressionReason,
+    *,
+    suggested_weight: str | None = None,
+    suggested_reps: tuple[int, ...] | None = None,
+    previous_weights: tuple[str, ...] = (),
+    previous_reps: tuple[int, ...] = (),
+) -> ProgressionRecommendation:
+    return ProgressionRecommendation(
+        reason=reason,
+        suggested_weight_kg=(
+            None if suggested_weight is None else Decimal(suggested_weight)
+        ),
+        suggested_reps=suggested_reps,
+        previous_weights_kg=tuple(Decimal(weight) for weight in previous_weights),
+        previous_reps=previous_reps,
+    )
+
+
 class WorkoutExecutionUiTests(unittest.TestCase):
     def run_async(self, coroutine) -> None:
         asyncio.run(coroutine)
@@ -325,6 +346,11 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             patch.object(workout_ui, "get_or_start_workout", return_value=start) as service_start,
             patch.object(workout_ui, "get_active_workout", return_value=_workout()),
             patch.object(workout_ui, "get_current_step", return_value=_step()),
+            patch.object(
+                workout_ui,
+                "get_progression_recommendation",
+                return_value=_recommendation(ProgressionReason.NO_HISTORY),
+            ),
         ):
             self.run_async(workout_ui.workout_start_or_resume(call, state))
 
@@ -391,10 +417,128 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         with (
             patch.object(workout_ui, "get_active_workout", return_value=_workout()),
             patch.object(workout_ui, "get_current_step", return_value=_step(set_number=2)) as current,
+            patch.object(
+                workout_ui,
+                "get_progression_recommendation",
+                return_value=_recommendation(ProgressionReason.NO_HISTORY),
+            ),
         ):
             self.run_async(workout_ui.show_current_workout(message, 7, edit=False))
         current.assert_called_once_with(7, 21)
         self.assertIn("Подход: 2 из 2", message.answers[0][0])
+
+    def test_progression_hint_formats_main_recommendation_actions(self) -> None:
+        exercise = _exercise()
+        cases = (
+            (
+                _recommendation(
+                    ProgressionReason.INCREASE_WEIGHT,
+                    suggested_weight="21",
+                    suggested_reps=(8, 8, 8),
+                    previous_weights=("20", "20", "20"),
+                    previous_reps=(12, 12, 12),
+                ),
+                "Сегодня: попробуй 21 кг, цель 8/8/8.",
+            ),
+            (
+                _recommendation(
+                    ProgressionReason.HOLD_ADD_REPS,
+                    suggested_weight="20",
+                    suggested_reps=(12, 11, 9),
+                    previous_weights=("20", "20", "20"),
+                    previous_reps=(12, 10, 8),
+                ),
+                "Сегодня: оставь 20 кг и попробуй 12/11/9.",
+            ),
+            (
+                _recommendation(
+                    ProgressionReason.HOLD_RECOVER_RANGE,
+                    suggested_weight="20",
+                    suggested_reps=(10, 8, 8),
+                    previous_weights=("20", "20", "20"),
+                    previous_reps=(10, 8, 7),
+                ),
+                "Сегодня: оставь 20 кг, цель 10/8/8.",
+            ),
+            (
+                _recommendation(
+                    ProgressionReason.DECREASE_WEIGHT,
+                    suggested_weight="19",
+                    suggested_reps=(8, 8, 8),
+                    previous_weights=("20", "20", "20"),
+                    previous_reps=(7, 7, 6),
+                ),
+                "Сегодня: попробуй 19 кг, цель 8/8/8.",
+            ),
+        )
+        for recommendation, expected_today in cases:
+            with self.subTest(reason=recommendation.reason):
+                text = workout_ui.format_progression_recommendation(exercise, recommendation)
+                self.assertIn("Прошлый раз: 20 кг", text)
+                self.assertIn(expected_today, text)
+
+    def test_progression_hint_formats_neutral_mixed_and_bodyweight_states(self) -> None:
+        exercise = _exercise()
+        no_history = workout_ui.format_progression_recommendation(
+            exercise,
+            _recommendation(ProgressionReason.NO_HISTORY),
+        )
+        insufficient = workout_ui.format_progression_recommendation(
+            exercise,
+            _recommendation(ProgressionReason.INSUFFICIENT_DATA),
+        )
+        mixed = workout_ui.format_progression_recommendation(
+            exercise,
+            _recommendation(
+                ProgressionReason.MIXED_WEIGHTS_HOLD,
+                previous_weights=("20", "22.5", "20"),
+                previous_reps=(12, 12, 12),
+            ),
+        )
+        bodyweight = workout_ui.format_progression_recommendation(
+            exercise,
+            _recommendation(
+                ProgressionReason.BODYWEIGHT_ADD_REPS,
+                suggested_weight="0",
+                suggested_reps=(12, 11, 9),
+                previous_weights=("0", "0", "0"),
+                previous_reps=(12, 10, 8),
+            ),
+        )
+
+        self.assertIn("Выберите комфортный рабочий вес", no_history)
+        self.assertIn("Данных для подсказки", insufficient)
+        self.assertIn("20 кг/22,5 кг/20 кг", mixed)
+        self.assertIn("не меняйте веса автоматически", mixed)
+        self.assertIn("собств. вес", bodyweight)
+        self.assertIn("попробуй 12/11/9", bodyweight)
+
+    def test_progression_hint_is_read_only_and_stable_after_resume(self) -> None:
+        message = _Message()
+        recommendation = _recommendation(
+            ProgressionReason.HOLD_ADD_REPS,
+            suggested_weight="20",
+            suggested_reps=(12, 11, 9),
+            previous_weights=("20", "20", "20"),
+            previous_reps=(12, 10, 8),
+        )
+        with (
+            patch.object(workout_ui, "get_active_workout", return_value=_workout()),
+            patch.object(workout_ui, "get_current_step", return_value=_step(set_number=2)),
+            patch.object(
+                workout_ui,
+                "get_progression_recommendation",
+                return_value=recommendation,
+            ) as progression_service,
+            patch.object(workout_ui, "record_set_result") as record_set,
+        ):
+            self.run_async(workout_ui.show_current_workout(message, 7, edit=False))
+            self.run_async(workout_ui.show_current_workout(message, 7, edit=False))
+
+        self.assertEqual(message.answers[0][0], message.answers[1][0])
+        self.assertEqual(2, progression_service.call_count)
+        progression_service.assert_called_with(7, 31)
+        record_set.assert_not_called()
 
     def test_cancel_requires_confirmation_and_preserves_service_owned_results(self) -> None:
         call = _Call()
