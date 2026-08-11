@@ -79,6 +79,18 @@ class AccessServiceTests(unittest.TestCase):
         self.assertEqual(AccessStatus.EXPIRED, decision.status)
         self.assertFalse(decision.has_access)
 
+    def test_expired_paid_history_does_not_restore_trial_available(self) -> None:
+        access = make_access(
+            trial_started_at=None,
+            trial_ends_at=None,
+            subscription_started_at=BASE_TIME - timedelta(days=31),
+            subscription_ends_at=BASE_TIME - timedelta(days=1),
+        )
+
+        decision = evaluate_access(access, BASE_TIME)
+
+        self.assertEqual(AccessStatus.EXPIRED, decision.status)
+
     def test_missing_access_is_expired(self) -> None:
         decision = evaluate_access(None, BASE_TIME)
 

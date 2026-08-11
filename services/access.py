@@ -62,6 +62,14 @@ def evaluate_access(
         )
 
     if access.trial_started_at is None and access.trial_ends_at is None:
+        # A paid period may be expired, but its persisted dates prove that this
+        # user already consumed the first-access lifecycle.  Do not resurrect
+        # a trial after paid history.
+        if (
+            access.subscription_started_at is not None
+            or access.subscription_ends_at is not None
+        ):
+            return AccessDecision(AccessStatus.EXPIRED, None)
         return AccessDecision(AccessStatus.TRIAL_AVAILABLE, None)
 
     if (
@@ -107,6 +115,11 @@ def activate_trial_once_in_session(
         and access.subscription_ends_at is not None
         and as_utc_naive(access.subscription_started_at) <= started_at
         < as_utc_naive(access.subscription_ends_at)
+    ):
+        return TrialActivationResult(access, activated=False)
+    if (
+        access.subscription_started_at is not None
+        or access.subscription_ends_at is not None
     ):
         return TrialActivationResult(access, activated=False)
     if access.trial_started_at is None and access.trial_ends_at is None:
