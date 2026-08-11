@@ -423,12 +423,87 @@ def _create_workout_execution(connection: Connection) -> None:
     )
 
 
+def _create_subscription_payments(connection: Connection) -> None:
+    """Add isolated, auditable payment records without changing legacy payments."""
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS subscription_payments (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            provider TEXT NOT NULL DEFAULT 'yookassa',
+            provider_payment_id TEXT,
+            idempotency_key TEXT NOT NULL,
+            product_code TEXT NOT NULL,
+            amount_minor INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            period_days INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'creating',
+            confirmation_url TEXT,
+            provider_expires_at DATETIME,
+            cancellation_code TEXT,
+            failure_code TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            confirmed_at DATETIME,
+            last_checked_at DATETIME,
+            access_applied_at DATETIME,
+            grant_started_at DATETIME,
+            grant_ends_at DATETIME,
+            CONSTRAINT ck_subscription_payments_provider
+                CHECK (provider = 'yookassa'),
+            CONSTRAINT ck_subscription_payments_amount_minor
+                CHECK (amount_minor > 0),
+            CONSTRAINT ck_subscription_payments_currency
+                CHECK (length(currency) = 3 AND currency = upper(currency)),
+            CONSTRAINT ck_subscription_payments_period_days
+                CHECK (period_days > 0),
+            CONSTRAINT ck_subscription_payments_status
+                CHECK (status IN (
+                    'creating', 'pending', 'waiting_for_capture', 'succeeded',
+                    'canceled', 'expired', 'failed'
+                )),
+            CONSTRAINT ck_subscription_payments_grant_order
+                CHECK (
+                    grant_ends_at IS NULL OR grant_started_at IS NULL
+                    OR grant_ends_at >= grant_started_at
+                ),
+            CONSTRAINT uq_subscription_payments_idempotency_key
+                UNIQUE (idempotency_key),
+            FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE RESTRICT
+        )
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS
+            uq_subscription_payments_provider_payment_id
+        ON subscription_payments (provider, provider_payment_id)
+        WHERE provider_payment_id IS NOT NULL
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS
+            uq_subscription_payments_active_user_product
+        ON subscription_payments (user_id, product_code)
+        WHERE status IN ('creating', 'pending', 'waiting_for_capture')
+        """
+    )
+    connection.exec_driver_sql(
+        """
+        CREATE INDEX IF NOT EXISTS ix_subscription_payments_user_created_at
+        ON subscription_payments (user_id, created_at)
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
     Migration(3, "workout_planning", _create_workout_planning),
     Migration(4, "stage_two_architecture", _upgrade_stage_two_architecture),
     Migration(5, "workout_execution", _create_workout_execution),
+    Migration(6, "subscription_payments", _create_subscription_payments),
 )
 
 

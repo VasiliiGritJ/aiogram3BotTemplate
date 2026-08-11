@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3, 4, 5), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6), applied)
         self.assertTrue(
             {
                 "users",
@@ -52,6 +52,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "workout_sessions",
                 "workout_session_exercises",
                 "workout_set_results",
+                "subscription_payments",
                 "schema_migrations",
             }.issubset(table_names)
         )
@@ -66,9 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3, 4, 5), first_run)
+        self.assertEqual((1, 2, 3, 4, 5, 6), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(5, applied_count)
+        self.assertEqual(6, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -112,7 +113,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3, 4, 5), applied)
+        self.assertEqual((3, 4, 5, 6), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
@@ -264,7 +265,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 for table in tables
             }
 
-        self.assertEqual((5,), run_migrations(session.engine))
+        self.assertEqual((5, 6), run_migrations(session.engine))
 
         with session.engine.connect() as connection:
             after = {
@@ -441,7 +442,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3, 4, 5), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

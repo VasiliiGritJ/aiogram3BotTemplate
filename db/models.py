@@ -250,6 +250,103 @@ class UserAccess(Base):
     )
 
 
+class SubscriptionPayment(Base):
+    __tablename__ = "subscription_payments"
+    __table_args__ = (
+        CheckConstraint(
+            "provider = 'yookassa'",
+            name="ck_subscription_payments_provider",
+        ),
+        CheckConstraint(
+            "amount_minor > 0",
+            name="ck_subscription_payments_amount_minor",
+        ),
+        CheckConstraint(
+            "length(currency) = 3 AND currency = upper(currency)",
+            name="ck_subscription_payments_currency",
+        ),
+        CheckConstraint(
+            "period_days > 0",
+            name="ck_subscription_payments_period_days",
+        ),
+        CheckConstraint(
+            "status IN ('creating', 'pending', 'waiting_for_capture', "
+            "'succeeded', 'canceled', 'expired', 'failed')",
+            name="ck_subscription_payments_status",
+        ),
+        CheckConstraint(
+            "grant_ends_at IS NULL OR grant_started_at IS NULL "
+            "OR grant_ends_at >= grant_started_at",
+            name="ck_subscription_payments_grant_order",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_subscription_payments_idempotency_key",
+        ),
+        Index(
+            "uq_subscription_payments_provider_payment_id",
+            "provider",
+            "provider_payment_id",
+            unique=True,
+            sqlite_where=text("provider_payment_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_subscription_payments_active_user_product",
+            "user_id",
+            "product_code",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('creating', 'pending', 'waiting_for_capture')"
+            ),
+        ),
+        Index(
+            "ix_subscription_payments_user_created_at",
+            "user_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    provider: Mapped[str] = mapped_column(
+        Text(), server_default="yookassa"
+    )
+    provider_payment_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(Text())
+    product_code: Mapped[str] = mapped_column(Text())
+    amount_minor: Mapped[int] = mapped_column(Integer())
+    currency: Mapped[str] = mapped_column(Text())
+    period_days: Mapped[int] = mapped_column(Integer())
+    status: Mapped[str] = mapped_column(Text(), server_default="creating")
+    confirmation_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    provider_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    cancellation_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    access_applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    grant_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    grant_ends_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+
+
 class Exercise(Base):
     __tablename__ = "exercises"
 
