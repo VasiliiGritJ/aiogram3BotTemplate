@@ -14,6 +14,7 @@ from typing import Any, Mapping, Protocol
 from services.payment_domain import PaymentStatus
 from services.payment_provider import (
     PaymentCreateRequest,
+    ProviderAccountInfo,
     PaymentProviderPermanentError,
     PaymentProviderProtocolError,
     PaymentProviderTransientError,
@@ -56,6 +57,9 @@ class YooKassaApi(Protocol):
     def get_payment(self, provider_payment_id: str) -> object:
         """Load a payment through the provider SDK."""
 
+    def get_account_info(self) -> object:
+        """Load the authenticated shop information without creating a payment."""
+
 
 class SdkYooKassaApi:
     """Lazy wrapper around YooKassa's class-level SDK API.
@@ -66,10 +70,11 @@ class SdkYooKassaApi:
     """
 
     def __init__(self, credentials: YooKassaCredentials) -> None:
-        from yookassa import Configuration, Payment
+        from yookassa import Configuration, Payment, Settings
 
         Configuration.configure(credentials.shop_id, credentials.secret_key)
         self._payment = Payment
+        self._settings = Settings
 
     def create_payment(
         self, payload: Mapping[str, object], idempotency_key: str
@@ -78,6 +83,9 @@ class SdkYooKassaApi:
 
     def get_payment(self, provider_payment_id: str) -> object:
         return self._payment.find_one(provider_payment_id)
+
+    def get_account_info(self) -> object:
+        return self._settings.get_account_settings()
 
 
 def minor_to_yookassa_amount(amount_minor: int) -> str:
@@ -116,12 +124,44 @@ class YooKassaProvider:
         return_url: str,
         *,
         api: YooKassaApi | None = None,
+        require_test_mode: bool = False,
     ) -> None:
         if not isinstance(return_url, str) or not return_url.strip():
             raise ValueError("YooKassa return URL is required.")
         self._credentials = credentials
         self._return_url = return_url
         self._api = api if api is not None else SdkYooKassaApi(credentials)
+        self._require_test_mode = require_test_mode
+        self._verified_test_shop = False
+
+    def ensure_payment_creation_allowed(self) -> None:
+        """Fail closed unless the authenticated shop is explicitly test-only."""
+        if not self._require_test_mode or self._verified_test_shop:
+            return
+        account = self.get_account_info()
+        if not account.is_test:
+            raise PaymentProviderPermanentError(
+                "YooKassa shop is not approved for test payments."
+            )
+        self._verified_test_shop = True
+
+    def get_account_info(self) -> ProviderAccountInfo:
+        """Return only the provider's authoritative test-shop flag."""
+        try:
+            response = self._api.get_account_info()
+        except (TimeoutError, OSError) as error:
+            raise PaymentProviderTransientError(
+                "YooKassa shop verification is temporarily unavailable."
+            ) from error
+        except Exception as error:
+            raise self._normalize_sdk_error(error, creating=False) from error
+        data = self._response_mapping(response)
+        is_test = data.get("test")
+        if type(is_test) is not bool:
+            raise PaymentProviderProtocolError(
+                "Malformed YooKassa shop verification response."
+            )
+        return ProviderAccountInfo(is_test=is_test)
 
     def create_payment(
         self,
@@ -130,6 +170,7 @@ class YooKassaProvider:
     ) -> ProviderPayment:
         if not isinstance(idempotency_key, str) or not idempotency_key:
             raise PaymentProviderPermanentError("Payment idempotency key is required.")
+        self.ensure_payment_creation_allowed()
         payload = self._create_payload(request)
         try:
             response = self._api.create_payment(payload, idempotency_key)
@@ -139,7 +180,7 @@ class YooKassaProvider:
             ) from error
         except Exception as error:
             raise self._normalize_sdk_error(error, creating=True) from error
-        return self._to_provider_payment(response)
+        return self._require_test_payment(self._to_provider_payment(response))
 
     def get_payment(self, provider_payment_id: str) -> ProviderPayment:
         if not isinstance(provider_payment_id, str) or not provider_payment_id:
@@ -152,7 +193,14 @@ class YooKassaProvider:
             ) from error
         except Exception as error:
             raise self._normalize_sdk_error(error, creating=False) from error
-        return self._to_provider_payment(response)
+        return self._require_test_payment(self._to_provider_payment(response))
+
+    def _require_test_payment(self, payment: ProviderPayment) -> ProviderPayment:
+        if self._require_test_mode and payment.is_test is not True:
+            raise PaymentProviderProtocolError(
+                "YooKassa payment is not confirmed as a test payment."
+            )
+        return payment
 
     def _create_payload(self, request: PaymentCreateRequest) -> dict[str, object]:
         spec = request.spec
@@ -252,6 +300,7 @@ class YooKassaProvider:
             expires_at=expires_at,
             cancellation_code=cancellation_code,
             metadata=dict(metadata),
+            is_test=cls._parse_optional_test_flag(data.get("test")),
         )
 
     @staticmethod
@@ -282,3 +331,11 @@ class YooKassaProvider:
         if parsed.tzinfo is not None:
             return parsed.astimezone(timezone.utc).replace(tzinfo=None)
         return parsed
+
+    @staticmethod
+    def _parse_optional_test_flag(value: object) -> bool | None:
+        if value is None:
+            return None
+        if type(value) is not bool:
+            raise PaymentProviderProtocolError("Malformed YooKassa test flag.")
+        return value

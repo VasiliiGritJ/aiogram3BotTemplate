@@ -7,6 +7,7 @@ value explicitly, so a price is never silently invented.
 
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urlparse
 
 from services.payment_service import PaymentService, SubscriptionProduct
 from services.yookassa_provider import YooKassaCredentials, YooKassaProvider
@@ -28,14 +29,21 @@ class PaymentRuntime:
 
 def build_payment_runtime(read_required: Callable[[str], str]) -> PaymentRuntime:
     """Build the live composition only from injected server-side settings."""
+    test_mode = _read_test_mode(read_required)
+    amount_value = _read_required(read_required, "SUBSCRIPTION_AMOUNT_MINOR")
     try:
-        amount_minor = int(read_required("SUBSCRIPTION_AMOUNT_MINOR"))
-    except (TypeError, ValueError):
+        amount_minor = int(amount_value)
+    except ValueError:
         raise PaymentRuntimeConfigurationError(
             "Subscription amount is not configured."
         ) from None
-    currency = read_required("SUBSCRIPTION_CURRENCY").strip()
-    return_url = read_required("YOOKASSA_RETURN_URL").strip()
+    currency = _read_required(read_required, "SUBSCRIPTION_CURRENCY")
+    return_url = _read_required(read_required, "YOOKASSA_RETURN_URL")
+    parsed_return_url = urlparse(return_url)
+    if parsed_return_url.scheme not in {"http", "https"} or not parsed_return_url.netloc:
+        raise PaymentRuntimeConfigurationError(
+            "Subscription configuration is invalid."
+        )
     try:
         product = SubscriptionProduct(
             product_code=PRODUCT_CODE,
@@ -44,16 +52,47 @@ def build_payment_runtime(read_required: Callable[[str], str]) -> PaymentRuntime
             period_days=PERIOD_DAYS,
         )
         credentials = YooKassaCredentials(
-            shop_id=read_required("YOOKASSA_SHOP_ID").strip(),
-            secret_key=read_required("YOOKASSA_SECRET_TOKEN"),
+            shop_id=_read_required(read_required, "YOOKASSA_SHOP_ID"),
+            secret_key=_read_required(read_required, "YOOKASSA_SECRET_TOKEN"),
         )
-        provider = YooKassaProvider(credentials, return_url)
-        payment_service = PaymentService(provider, product)
+        provider = YooKassaProvider(
+            credentials,
+            return_url,
+            require_test_mode=test_mode,
+        )
+        payment_service = PaymentService(
+            provider,
+            product,
+            require_test_mode=test_mode,
+        )
     except ValueError as error:
         raise PaymentRuntimeConfigurationError(
             "Subscription configuration is invalid."
         ) from error
     return PaymentRuntime(product, payment_service)
+
+
+def _read_required(read_required: Callable[[str], str], name: str) -> str:
+    try:
+        value = read_required(name)
+    except Exception:
+        raise PaymentRuntimeConfigurationError(
+            "Subscription configuration is incomplete."
+        ) from None
+    if not isinstance(value, str) or not value.strip():
+        raise PaymentRuntimeConfigurationError(
+            "Subscription configuration is incomplete."
+        )
+    return value.strip()
+
+
+def _read_test_mode(read_required: Callable[[str], str]) -> bool:
+    value = _read_required(read_required, "PAYMENTS_TEST_MODE")
+    if value != "true":
+        raise PaymentRuntimeConfigurationError(
+            "Subscription configuration is invalid."
+        )
+    return True
 
 
 def get_payment_runtime() -> PaymentRuntime:

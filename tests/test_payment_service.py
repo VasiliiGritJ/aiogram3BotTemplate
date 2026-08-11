@@ -9,7 +9,11 @@ from db.migrations import run_migrations
 from db.models import SqliteSession, SubscriptionPayment, UserAccess
 from services.access import AccessStatus, activate_trial_once, evaluate_access
 from services.payment_domain import PaymentStatus
-from services.payment_provider import PaymentProviderUnavailable, ProviderPayment
+from services.payment_provider import (
+    PaymentProviderPermanentError,
+    PaymentProviderUnavailable,
+    ProviderPayment,
+)
 from services.payment_service import (
     PaymentService,
     PaymentServiceReason,
@@ -91,6 +95,7 @@ class PaymentServiceTests(unittest.TestCase):
         *,
         now: datetime = BASE_TIME,
         before_access_apply=None,
+        require_test_mode: bool = False,
     ) -> PaymentService:
         return PaymentService(
             provider,
@@ -99,6 +104,7 @@ class PaymentServiceTests(unittest.TestCase):
             now_factory=lambda: now,
             idempotency_key_factory=self.next_idempotency_key,
             before_access_apply=before_access_apply,
+            require_test_mode=require_test_mode,
         )
 
     def next_idempotency_key(self) -> str:
@@ -305,6 +311,76 @@ class PaymentServiceTests(unittest.TestCase):
                     assert access is not None
                 self.assertFalse(result.access_applied)
                 self.assertIsNone(access.subscription_ends_at)
+
+    def test_test_mode_rejects_missing_or_false_provider_flag_without_access(self) -> None:
+        for index, test_flag in enumerate((None, False), start=1):
+            with self.subTest(test_flag=test_flag):
+                user_id = 50 + index
+                self.add_user(user_id)
+                provider = FakePaymentProvider(
+                    [
+                        ProviderPayment(
+                            provider_payment_id=f"test-mode-{index}",
+                            status=PaymentStatus.SUCCEEDED,
+                            amount_minor=PRODUCT.amount_minor,
+                            currency=PRODUCT.currency,
+                            metadata={
+                                "local_payment_id": str(index),
+                                "product_code": PRODUCT.product_code,
+                            },
+                            is_test=test_flag,
+                        )
+                    ]
+                )
+                result = self.service(
+                    provider, require_test_mode=True
+                ).get_or_create_payment(user_id)
+                with self.database() as session:
+                    access = session.get(UserAccess, user_id)
+                    assert access is not None
+                self.assertEqual(PaymentServiceReason.TEST_MODE_REJECTED, result.reason)
+                self.assertFalse(result.access_applied)
+                self.assertIsNone(access.subscription_ends_at)
+
+    def test_test_mode_accepts_true_flag_and_preserves_duplicate_idempotency(self) -> None:
+        provider = FakePaymentProvider(
+            [
+                ProviderPayment(
+                    provider_payment_id="test-mode-true",
+                    status=PaymentStatus.SUCCEEDED,
+                    amount_minor=PRODUCT.amount_minor,
+                    currency=PRODUCT.currency,
+                    metadata={
+                        "local_payment_id": "1",
+                        "product_code": PRODUCT.product_code,
+                    },
+                    is_test=True,
+                )
+            ]
+        )
+        service = self.service(provider, require_test_mode=True)
+
+        first = service.get_or_create_payment(1)
+        repeated = service.reconcile_payment(first.payment_id, user_id=1)
+        _, access = self.payment_and_access()
+
+        self.assertTrue(first.access_applied)
+        self.assertFalse(repeated.access_applied)
+        self.assertIsNotNone(access.subscription_ends_at)
+
+    def test_creation_guard_blocks_before_a_local_payment_is_created(self) -> None:
+        class BlockedTestProvider(FakePaymentProvider):
+            def ensure_payment_creation_allowed(self) -> None:
+                raise PaymentProviderPermanentError("test shop verification failed")
+
+        provider = BlockedTestProvider()
+        with self.assertRaises(PaymentProviderPermanentError):
+            self.service(provider).get_or_create_payment(1)
+
+        with self.database() as session:
+            payment_count = session.scalar(select(func.count(SubscriptionPayment.id)))
+        self.assertEqual(0, payment_count)
+        self.assertEqual([], provider.create_calls)
 
     def test_reused_provider_id_for_another_local_payment_is_rejected(self) -> None:
         first = self.service(

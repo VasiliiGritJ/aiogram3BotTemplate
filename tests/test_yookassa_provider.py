@@ -23,11 +23,19 @@ RETURN_URL = "https://example.invalid/return"
 
 
 class RecordingApi:
-    def __init__(self, *, create_result=None, get_result=None) -> None:
+    def __init__(
+        self,
+        *,
+        create_result=None,
+        get_result=None,
+        account_result=None,
+    ) -> None:
         self.create_result = create_result
         self.get_result = get_result
+        self.account_result = account_result
         self.create_calls: list[tuple[object, str]] = []
         self.get_calls: list[str] = []
+        self.account_calls = 0
 
     def create_payment(self, payload, idempotency_key):
         self.create_calls.append((payload, idempotency_key))
@@ -40,6 +48,12 @@ class RecordingApi:
         if isinstance(self.get_result, Exception):
             raise self.get_result
         return self.get_result
+
+    def get_account_info(self):
+        self.account_calls += 1
+        if isinstance(self.account_result, Exception):
+            raise self.account_result
+        return self.account_result
 
 
 def response(status="pending", **overrides):
@@ -62,8 +76,15 @@ class YooKassaProviderTests(unittest.TestCase):
             metadata={"local_payment_id": "42", "product_code": "monthly_30d_v1"},
         )
 
-    def provider(self, api: RecordingApi) -> YooKassaProvider:
-        return YooKassaProvider(CREDENTIALS, RETURN_URL, api=api)
+    def provider(
+        self, api: RecordingApi, *, require_test_mode: bool = False
+    ) -> YooKassaProvider:
+        return YooKassaProvider(
+            CREDENTIALS,
+            RETURN_URL,
+            api=api,
+            require_test_mode=require_test_mode,
+        )
 
     def test_create_pending_maps_server_owned_payload_and_key(self) -> None:
         api = RecordingApi(create_result=response("pending"))
@@ -175,6 +196,79 @@ class YooKassaProviderTests(unittest.TestCase):
         with self.assertRaises(ValueError) as error:
             YooKassaCredentials("", "secret-for-tests")
         self.assertNotIn("secret-for-tests", str(error.exception))
+
+    def test_test_shop_verification_allows_only_authoritative_true_and_caches_success(self) -> None:
+        api = RecordingApi(
+            account_result={"test": True},
+            create_result=response(test=True),
+        )
+        provider = self.provider(api, require_test_mode=True)
+
+        provider.create_payment(self.request(), "first-key")
+        provider.create_payment(self.request(), "second-key")
+
+        self.assertEqual(1, api.account_calls)
+        self.assertEqual(2, len(api.create_calls))
+
+    def test_test_shop_verification_blocks_before_create_on_unknown_or_non_test_account(self) -> None:
+        cases = (
+            {"test": False},
+            {},
+            {"test": "true"},
+            TimeoutError("secret-like detail"),
+            RuntimeError("secret-like detail"),
+        )
+        for account_result in cases:
+            with self.subTest(account_result=account_result):
+                api = RecordingApi(
+                    account_result=account_result,
+                    create_result=response(test=True),
+                )
+                with self.assertRaises((
+                    PaymentProviderPermanentError,
+                    PaymentProviderProtocolError,
+                    PaymentProviderTransientError,
+                )) as error:
+                    self.provider(api, require_test_mode=True).create_payment(
+                        self.request(), "key"
+                    )
+                self.assertEqual([], api.create_calls)
+                self.assertNotIn("secret-like detail", str(error.exception))
+
+    def test_test_mode_requires_test_flag_on_create_and_get(self) -> None:
+        for test_flag in (False, None):
+            with self.subTest(create_test_flag=test_flag):
+                api = RecordingApi(
+                    account_result={"test": True},
+                    create_result=response(test=test_flag)
+                    if test_flag is not None
+                    else response(),
+                )
+                with self.assertRaises(PaymentProviderProtocolError):
+                    self.provider(api, require_test_mode=True).create_payment(
+                        self.request(), "key"
+                    )
+
+            with self.subTest(get_test_flag=test_flag):
+                api = RecordingApi(
+                    account_result={"test": True},
+                    get_result=response(test=test_flag)
+                    if test_flag is not None
+                    else response(),
+                )
+                with self.assertRaises(PaymentProviderProtocolError):
+                    self.provider(api, require_test_mode=True).get_payment(
+                        "provider-payment-1"
+                    )
+
+        api = RecordingApi(
+            account_result={"test": True},
+            create_result=response(test=True),
+            get_result=response(test=True),
+        )
+        provider = self.provider(api, require_test_mode=True)
+        self.assertTrue(provider.create_payment(self.request(), "key").is_test)
+        self.assertTrue(provider.get_payment("provider-payment-1").is_test)
 
 
 if __name__ == "__main__":

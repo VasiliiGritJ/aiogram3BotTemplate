@@ -25,6 +25,7 @@ from services.payment_domain import (
 )
 from services.payment_provider import (
     PaymentCreateRequest,
+    PaymentCreationGuard,
     PaymentProvider,
     PaymentProviderError,
     ProviderPayment,
@@ -42,6 +43,7 @@ class PaymentServiceReason(StrEnum):
     AMOUNT_MISMATCH = "amount_mismatch"
     CURRENCY_MISMATCH = "currency_mismatch"
     METADATA_MISMATCH = "metadata_mismatch"
+    TEST_MODE_REJECTED = "test_mode_rejected"
     STATUS_REJECTED = "status_rejected"
     ACCESS_APPLIED = "access_applied"
     ACCESS_ALREADY_APPLIED = "access_already_applied"
@@ -99,6 +101,7 @@ class PaymentService:
         idempotency_key_factory: Callable[[], str] | None = None,
         provider_idempotency_window: timedelta = timedelta(hours=24),
         before_access_apply: Callable[[], None] | None = None,
+        require_test_mode: bool = False,
     ) -> None:
         validation = validate_payment_spec(product.spec)
         if not validation.is_valid:
@@ -112,9 +115,15 @@ class PaymentService:
         )
         self._provider_idempotency_window = provider_idempotency_window
         self._before_access_apply = before_access_apply
+        if not isinstance(require_test_mode, bool):
+            raise ValueError("require_test_mode must be a boolean")
+        self._require_test_mode = require_test_mode
 
     def get_or_create_payment(self, user_id: int) -> PaymentServiceResult:
         """Return the one active payment or create one local request safely."""
+        existing_payment_id = self._get_active_payment_id(user_id)
+        if existing_payment_id is None:
+            self._ensure_payment_creation_allowed()
         payment_id, created = self._get_or_create_local_payment(user_id)
         with self._session_factory() as session:
             payment = session.get(SubscriptionPayment, payment_id)
@@ -135,7 +144,18 @@ class PaymentService:
                 PaymentServiceReason.RECOVERY_REQUIRED,
                 created=created,
             )
+        if existing_payment_id is not None:
+            self._ensure_payment_creation_allowed()
         return self._create_with_provider(payment_id, user_id, created)
+
+    def _ensure_payment_creation_allowed(self) -> None:
+        if isinstance(self._provider, PaymentCreationGuard):
+            self._provider.ensure_payment_creation_allowed()
+
+    def _get_active_payment_id(self, user_id: int) -> int | None:
+        with self._session_factory() as session:
+            active = self._find_active_payment(session, user_id)
+            return active.id if active is not None else None
 
     def reconcile_payment(
         self,
@@ -285,6 +305,8 @@ class PaymentService:
             payment = session.get(SubscriptionPayment, payment_id)
             if payment is None:
                 raise LookupError(PaymentServiceReason.PAYMENT_NOT_FOUND.value)
+            if self._require_test_mode and provider_payment.is_test is not True:
+                return PaymentServiceReason.TEST_MODE_REJECTED
             if (
                 payment.provider_payment_id is not None
                 and payment.provider_payment_id != provider_payment.provider_payment_id

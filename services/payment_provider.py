@@ -37,6 +37,13 @@ class PaymentProviderProtocolError(PaymentProviderError):
 
 
 @dataclass(frozen=True)
+class ProviderAccountInfo:
+    """Minimal, safe account information needed by a payment guard."""
+
+    is_test: bool
+
+
+@dataclass(frozen=True)
 class PaymentCreateRequest:
     """The server-owned data sent to a payment provider."""
 
@@ -57,6 +64,15 @@ class ProviderPayment:
     expires_at: datetime | None = None
     cancellation_code: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
+    is_test: bool | None = None
+
+
+@runtime_checkable
+class PaymentCreationGuard(Protocol):
+    """Optional provider capability checked before a new local payment exists."""
+
+    def ensure_payment_creation_allowed(self) -> None:
+        """Raise a controlled error when payment creation must be blocked."""
 
 
 @runtime_checkable
