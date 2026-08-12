@@ -106,6 +106,7 @@ def result(
     reason=PaymentServiceReason.NOT_SUCCEEDED,
     payment_id=11,
     url="https://example.invalid/pay",
+    start=None,
     end=None,
 ):
     return PaymentServiceResult(
@@ -113,6 +114,7 @@ def result(
         status=status,
         confirmation_url=url,
         reason=reason,
+        grant_started_at=start,
         grant_ends_at=end,
     )
 
@@ -140,6 +142,18 @@ class SubscriptionUiTests(unittest.TestCase):
         self.assertIn("Подписка: 30 дней", text)
         self.assertIn("990 ₽", text)
         self.assertNotIn(PRODUCT.product_code, text)
+        self.assertIn(
+            "subscription:pay",
+            self.callbacks(
+                subscription_ui._payment_markup(
+                    None,
+                    AccessDecision(
+                        AccessStatus.TRIAL,
+                        datetime(2026, 8, 14, 12, 0),
+                    ),
+                )
+            ),
+        )
         for invalid_amount in ("not-a-price", "0"):
             with self.subTest(invalid_amount=invalid_amount):
                 with self.assertRaises(PaymentRuntimeConfigurationError):
@@ -169,6 +183,64 @@ class SubscriptionUiTests(unittest.TestCase):
         self.assertNotIn("subscription:pay", callbacks)
         self.assertNotIn("subscription:check:11", callbacks)
         self.assertIn("Доступ: подписка активна до 01.09.2026 09:00", subscription_ui.format_subscription_screen(self.runtime(_PaymentService()), decision, paid))
+
+    def test_trial_with_paid_reserved_hides_payment_actions_and_explains_dates(self):
+        payment = result(
+            PaymentStatus.SUCCEEDED,
+            start=datetime(2026, 8, 14, 12, 0),
+            end=datetime(2026, 9, 13, 12, 0),
+        )
+        decision = AccessDecision(AccessStatus.TRIAL, datetime(2026, 8, 14, 12, 0))
+        with patch.object(
+            subscription_ui,
+            "utc_now",
+            return_value=datetime(2026, 8, 12, 12, 0),
+        ):
+            text = subscription_ui.format_subscription_screen(
+                self.runtime(_PaymentService()), decision, payment
+            )
+            callbacks = self.callbacks(subscription_ui._payment_markup(payment, decision))
+        self.assertIn("Доступ: пробный период до 14.08.2026 12:00", text)
+        self.assertIn("Подписка оплачена", text)
+        self.assertIn("Платный период: 14.08.2026 12:00 — 13.09.2026 12:00", text)
+        self.assertNotIn("Подписка активирована", text)
+        self.assertNotIn("subscription:pay", callbacks)
+        self.assertNotIn("subscription:check:11", callbacks)
+
+    def test_paid_reserved_stale_pay_callback_does_not_create_payment(self):
+        payment = result(
+            PaymentStatus.SUCCEEDED,
+            start=datetime(2026, 8, 14, 12, 0),
+            end=datetime(2026, 9, 13, 12, 0),
+        )
+        service = _PaymentService(latest=payment)
+        call = _Call("subscription:pay")
+        with (
+            patch.object(
+                subscription_ui,
+                "utc_now",
+                return_value=datetime(2026, 8, 12, 12, 0),
+            ),
+            patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(
+                subscription_ui,
+                "get_payment_runtime",
+                return_value=self.runtime(service),
+            ),
+            patch.object(
+                subscription_ui,
+                "get_access_decision",
+                return_value=AccessDecision(
+                    AccessStatus.TRIAL,
+                    datetime(2026, 8, 14, 12, 0),
+                ),
+            ),
+        ):
+            self.run_async(subscription_ui.subscription_pay(call, _State()))
+        self.assertEqual([], service.create_calls)
+        text, markup = call.message.edits[-1]
+        self.assertIn("Подписка оплачена", text)
+        self.assertNotIn("subscription:pay", self.callbacks(markup))
 
     def test_paid_active_stale_pay_callback_does_not_create_payment(self):
         service = _PaymentService(latest=result(PaymentStatus.SUCCEEDED))

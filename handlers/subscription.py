@@ -9,7 +9,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from db import User
 from handlers.markups import subscription_mkp, to_menu_mpk
-from services.access import AccessDecision, AccessStatus, get_access_decision
+from services.access import (
+    AccessDecision,
+    AccessStatus,
+    as_utc_naive,
+    get_access_decision,
+    utc_now,
+)
 from services.payment_domain import PaymentStatus
 from services.payment_provider import PaymentProviderError
 from services.payment_service import PaymentServiceReason, PaymentServiceResult
@@ -59,7 +65,17 @@ def format_subscription_screen(
             f"Стоимость: {_format_price(runtime.product.amount_minor, runtime.product.currency)}",
         )
     )
-    if payment is not None and not _is_paid_active(decision):
+    if _is_paid_reserved(payment):
+        lines.extend(
+            (
+                "",
+                "Подписка оплачена.",
+                "Платный период: "
+                f"{_format_date(payment.grant_started_at)} — "
+                f"{_format_date(payment.grant_ends_at)}.",
+            )
+        )
+    elif payment is not None and not _is_paid_active(decision):
         lines.extend(("", _payment_status_text(payment)))
     return "\n".join(lines)
 
@@ -95,13 +111,30 @@ def _is_paid_active(decision: AccessDecision) -> bool:
     return decision.status is AccessStatus.ACTIVE
 
 
+def _is_paid_reserved(payment: PaymentServiceResult | None) -> bool:
+    """Return whether a confirmed paid period is queued after the current trial."""
+    if (
+        payment is None
+        or payment.status is not PaymentStatus.SUCCEEDED
+        or payment.grant_started_at is None
+        or payment.grant_ends_at is None
+    ):
+        return False
+    now = utc_now()
+    return (
+        now < as_utc_naive(payment.grant_started_at)
+        and now < as_utc_naive(payment.grant_ends_at)
+    )
+
+
 def _payment_markup(
     payment: PaymentServiceResult | None,
     decision: AccessDecision,
 ):
     paid_active = _is_paid_active(decision)
+    payment_already_committed = paid_active or _is_paid_reserved(payment)
     if payment is None:
-        return subscription_mkp(show_pay=not paid_active)
+        return subscription_mkp(show_pay=not payment_already_committed)
     is_active_payment = payment.status in {
         PaymentStatus.CREATING,
         PaymentStatus.PENDING,
@@ -110,7 +143,7 @@ def _payment_markup(
     return subscription_mkp(
         payment_id=payment.payment_id if is_active_payment else None,
         confirmation_url=payment.confirmation_url if is_active_payment else None,
-        show_pay=not paid_active,
+        show_pay=not payment_already_committed,
     )
 
 
@@ -155,9 +188,9 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
     if runtime is None:
         await call.answer()
         return
+    payment = runtime.payment_service.get_latest_payment(user.id)
     decision = get_access_decision(user.id)
-    if _is_paid_active(decision):
-        payment = runtime.payment_service.get_latest_payment(user.id)
+    if _is_paid_active(decision) or _is_paid_reserved(payment):
         await call.message.edit_text(
             format_subscription_screen(runtime, decision, payment),
             reply_markup=_payment_markup(payment, decision),
