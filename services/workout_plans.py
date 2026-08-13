@@ -21,6 +21,12 @@ from db.models import (
     WorkoutTemplateExercise,
     dbSession,
 )
+from services.exercise_catalog import (
+    EXERCISE_ALTERNATIVES,
+    EXERCISE_DEFINITIONS,
+    ExerciseDefinition,
+    validate_exercise_definition,
+)
 
 
 CATALOG_VERSION = 2
@@ -43,31 +49,6 @@ EXPERIENCE_NAMES = {
     "experienced": "опытный",
 }
 
-PRIMARY_MUSCLE_GROUPS = {
-    "leg_press": "квадрицепс", "seated_leg_curl": "задняя поверхность бедра",
-    "chest_press": "грудь", "lat_pulldown": "спина",
-    "seated_row": "спина", "shoulder_press": "плечи",
-    "lateral_raise": "плечи", "triceps_pushdown": "трицепс",
-    "cable_curl": "бицепс", "cable_crunch": "пресс",
-    "back_extension": "ягодичные", "calf_raise": "икры",
-    "hip_abduction": "ягодичные",
-    "barbell_bench_press": "грудь", "dumbbell_bench_press": "грудь",
-    "barbell_back_squat": "квадрицепс",
-}
-EXERCISE_METADATA = {
-    "chest_press": ("горизонтальный", "жим от груди в тренажёре"),
-    "leg_press": ("под углом", "жим платформы ногами"),
-    "lat_pulldown": ("к груди", "верхняя тяга"),
-    "barbell_bench_press": ("горизонтальная скамья", None),
-    "dumbbell_bench_press": ("горизонтальная скамья", None),
-    "barbell_back_squat": ("на спине", None),
-}
-EXERCISE_ALTERNATIVES = {
-    "barbell_bench_press": ("dumbbell_bench_press", "chest_press"),
-    "barbell_back_squat": ("leg_press",),
-}
-
-
 class WorkoutPlanError(RuntimeError):
     """Base error for deterministic workout planning."""
 
@@ -78,16 +59,6 @@ class FitnessProfileRequiredError(WorkoutPlanError):
 
 class WorkoutCatalogError(WorkoutPlanError):
     """Raised when the controlled catalog is incomplete or inconsistent."""
-
-
-@dataclass(frozen=True)
-class ExerciseDefinition:
-    code: str
-    name: str
-    muscle_group: str
-    equipment: str
-    hint: str
-    restriction_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -168,126 +139,6 @@ class CatalogStats:
     templates: int
     template_days: int
     template_exercises: int
-
-
-EXERCISE_DEFINITIONS = (
-    ExerciseDefinition(
-        "leg_press",
-        "Жим ногами под углом в тренажёре",
-        "legs",
-        "machine",
-        "Прижимайте спину к опоре и двигайтесь без рывков.",
-        ("knee",),
-    ),
-    ExerciseDefinition(
-        "seated_leg_curl",
-        "Сгибание ног сидя в тренажёре",
-        "legs",
-        "machine",
-        "Сохраняйте ровный темп и не бросайте вес.",
-        ("knee",),
-    ),
-    ExerciseDefinition(
-        "chest_press",
-        "Горизонтальный жим сидя в рычажном тренажёре",
-        "chest",
-        "machine",
-        "Держите лопатки у спинки и не выпрямляйте локти резко.",
-        ("shoulder",),
-    ),
-    ExerciseDefinition(
-        "lat_pulldown",
-        "Тяга верхнего блока к груди",
-        "back",
-        "cable",
-        "Тяните рукоять к верхней части груди без раскачивания.",
-        ("shoulder",),
-    ),
-    ExerciseDefinition(
-        "seated_row",
-        "Горизонтальная тяга нижнего блока сидя",
-        "back",
-        "cable",
-        "Сохраняйте нейтральную спину и ведите локти назад.",
-        ("back", "shoulder"),
-    ),
-    ExerciseDefinition(
-        "barbell_bench_press",
-        "Жим штанги лёжа на горизонтальной скамье",
-        "chest",
-        "barbell",
-        "Опускайте штангу контролируемо к середине груди и сохраняйте устойчивое положение лопаток.",
-    ),
-    ExerciseDefinition(
-        "dumbbell_bench_press",
-        "Жим гантелей лёжа на горизонтальной скамье",
-        "chest",
-        "dumbbell",
-        "Двигайте гантели плавно и не теряйте контроль в нижней точке.",
-    ),
-    ExerciseDefinition(
-        "barbell_back_squat",
-        "Приседания со штангой на спине",
-        "legs",
-        "barbell",
-        "Сохраняйте нейтральную спину и контролируйте глубину в комфортной амплитуде.",
-    ),
-    ExerciseDefinition(
-        "shoulder_press",
-        "Жим вверх в тренажёре",
-        "shoulders",
-        "machine",
-        "Не прогибайтесь и работайте в комфортной амплитуде.",
-        ("shoulder",),
-    ),
-    ExerciseDefinition(
-        "cable_curl",
-        "Сгибание рук на нижнем блоке",
-        "arms",
-        "cable",
-        "Держите локти рядом с корпусом.",
-    ),
-    ExerciseDefinition(
-        "triceps_pushdown",
-        "Разгибание рук на верхнем блоке",
-        "arms",
-        "cable",
-        "Не разводите локти и не раскачивайте корпус.",
-        ("shoulder",),
-    ),
-    ExerciseDefinition(
-        "hip_abduction",
-        "Разведение ног в тренажёре",
-        "glutes",
-        "machine",
-        "Двигайтесь плавно и сохраняйте устойчивое положение корпуса.",
-        ("knee",),
-    ),
-    ExerciseDefinition(
-        "calf_raise",
-        "Подъём на носки в тренажёре",
-        "calves",
-        "machine",
-        "Поднимайтесь и опускайтесь подконтрольно.",
-        ("knee",),
-    ),
-    ExerciseDefinition(
-        "back_extension",
-        "Разгибание корпуса в тренажёре",
-        "back",
-        "machine",
-        "Не переразгибайте спину и двигайтесь медленно.",
-        ("back",),
-    ),
-    ExerciseDefinition(
-        "cable_crunch",
-        "Скручивание на верхнем блоке",
-        "core",
-        "cable",
-        "Скручивайте корпус без рывка и не тяните руками.",
-        ("back",),
-    ),
-)
 
 
 DAY_BLUEPRINTS = {
@@ -545,33 +396,52 @@ def _profile_signature(profile: NormalizedProfile) -> str:
 def _ensure_catalog_in_session(session: Session) -> CatalogStats:
     exercises_by_code: dict[str, Exercise] = {}
     for definition in EXERCISE_DEFINITIONS:
+        try:
+            validate_exercise_definition(definition)
+        except ValueError as error:
+            raise WorkoutCatalogError(str(error)) from error
         exercise = session.scalar(
             select(Exercise).where(Exercise.code == definition.code)
         )
         tags = ",".join(definition.restriction_tags)
+        secondary_groups = ",".join(definition.secondary_muscle_groups)
+        environments = ",".join(definition.environments)
+        experience_levels = ",".join(definition.experience_levels)
         if exercise is None:
             exercise = Exercise(
                 code=definition.code,
                 name=definition.name,
                 muscle_group=definition.muscle_group,
-                primary_muscle_group=PRIMARY_MUSCLE_GROUPS[definition.code],
+                primary_muscle_group=definition.primary_muscle_label,
                 equipment=definition.equipment,
-                variant=EXERCISE_METADATA.get(definition.code, (None, None))[0],
-                alternative_name=EXERCISE_METADATA.get(definition.code, (None, None))[1],
+                variant=definition.variant,
+                alternative_name=definition.alternative_name,
                 hint=definition.hint,
                 restriction_tags=tags,
+                secondary_muscle_groups=secondary_groups,
+                training_environments=environments,
+                experience_levels=experience_levels,
+                movement_pattern=definition.movement_pattern,
+                progression_type=definition.progression_type,
+                equivalence_group=definition.equivalence_group,
             )
             session.add(exercise)
             session.flush()
         else:
             exercise.name = definition.name
             exercise.muscle_group = definition.muscle_group
-            exercise.primary_muscle_group = PRIMARY_MUSCLE_GROUPS[definition.code]
+            exercise.primary_muscle_group = definition.primary_muscle_label
             exercise.equipment = definition.equipment
-            exercise.variant = EXERCISE_METADATA.get(definition.code, (None, None))[0]
-            exercise.alternative_name = EXERCISE_METADATA.get(definition.code, (None, None))[1]
+            exercise.variant = definition.variant
+            exercise.alternative_name = definition.alternative_name
             exercise.hint = definition.hint
             exercise.restriction_tags = tags
+            exercise.secondary_muscle_groups = secondary_groups
+            exercise.training_environments = environments
+            exercise.experience_levels = experience_levels
+            exercise.movement_pattern = definition.movement_pattern
+            exercise.progression_type = definition.progression_type
+            exercise.equivalence_group = definition.equivalence_group
         exercises_by_code[definition.code] = exercise
 
     for definition in TEMPLATE_DEFINITIONS:

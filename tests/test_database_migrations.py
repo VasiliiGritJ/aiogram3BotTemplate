@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3, 4, 5, 6), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7), applied)
         self.assertTrue(
             {
                 "users",
@@ -67,9 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6), first_run)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(6, applied_count)
+        self.assertEqual(7, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -113,7 +113,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3, 4, 5, 6), applied)
+        self.assertEqual((3, 4, 5, 6, 7), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
@@ -265,7 +265,10 @@ class DatabaseMigrationTests(unittest.TestCase):
                 for table in tables
             }
 
-        self.assertEqual((5, 6), run_migrations(session.engine))
+        self.assertEqual(
+            (5, 6),
+            run_migrations(session.engine, target_version=6),
+        )
 
         with session.engine.connect() as connection:
             after = {
@@ -275,6 +278,116 @@ class DatabaseMigrationTests(unittest.TestCase):
                 for table in tables
             }
         self.assertEqual(before, after)
+
+    def test_migration_seven_preserves_exercise_and_history_references(self) -> None:
+        session = self.make_session("stage-seven.db")
+        self.assertEqual(
+            (1, 2, 3, 4, 5, 6),
+            run_migrations(session.engine, target_version=6),
+        )
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                """INSERT INTO users
+                (id, tg_id, fullname, username, inviter_id)
+                VALUES (1, 7001, 'Catalog User', 'catalog_user', 0)"""
+            )
+            connection.exec_driver_sql(
+                """INSERT INTO exercises (
+                    id, code, name, muscle_group, primary_muscle_group,
+                    equipment, hint, restriction_tags
+                ) VALUES (
+                    13, 'barbell_bench_press', 'Legacy bench', 'chest',
+                    'грудь', 'barbell', 'Legacy hint', ''
+                )"""
+            )
+            connection.exec_driver_sql(
+                """INSERT INTO workout_sessions (
+                    id, user_id, day_number, day_title, status,
+                    started_at, finished_at
+                ) VALUES (
+                    1, 1, 1, 'Legacy day', 'completed',
+                    '2026-08-01 10:00:00', '2026-08-01 11:00:00'
+                )"""
+            )
+            connection.exec_driver_sql(
+                """INSERT INTO workout_session_exercises (
+                    id, session_id, exercise_order,
+                    planned_exercise_id, planned_exercise_name,
+                    planned_primary_muscle_group, planned_target_sets,
+                    planned_target_reps_min, planned_target_reps_max,
+                    planned_rest_seconds, planned_hint,
+                    selected_exercise_id, selected_exercise_name,
+                    selected_primary_muscle_group, selected_target_sets,
+                    selected_target_reps_min, selected_target_reps_max,
+                    selected_rest_seconds, selected_hint
+                ) VALUES (
+                    1, 1, 1, 13, 'Legacy bench', 'грудь', 1, 8, 12, 90,
+                    'Legacy hint', 13, 'Legacy bench', 'грудь', 1, 8, 12,
+                    90, 'Legacy hint'
+                )"""
+            )
+            connection.exec_driver_sql(
+                """INSERT INTO workout_set_results (
+                    id, session_exercise_id, set_number,
+                    actual_weight_kg, actual_reps
+                ) VALUES (1, 1, 1, 60, 10)"""
+            )
+
+        with session.engine.connect() as connection:
+            references_before = connection.exec_driver_sql(
+                """SELECT e.id, wse.planned_exercise_id,
+                    wse.selected_exercise_id, wsr.session_exercise_id,
+                    wsr.actual_weight_kg, wsr.actual_reps
+                FROM exercises e
+                JOIN workout_session_exercises wse
+                    ON wse.selected_exercise_id = e.id
+                JOIN workout_set_results wsr
+                    ON wsr.session_exercise_id = wse.id
+                WHERE e.code = 'barbell_bench_press'"""
+            ).one()
+
+        self.assertEqual((7,), run_migrations(session.engine))
+        self.assertEqual((), run_migrations(session.engine))
+
+        inspector = inspect(session.engine)
+        taxonomy_columns = {
+            column["name"] for column in inspector.get_columns("exercises")
+        }
+        with session.engine.connect() as connection:
+            references_after = connection.exec_driver_sql(
+                """SELECT e.id, wse.planned_exercise_id,
+                    wse.selected_exercise_id, wsr.session_exercise_id,
+                    wsr.actual_weight_kg, wsr.actual_reps
+                FROM exercises e
+                JOIN workout_session_exercises wse
+                    ON wse.selected_exercise_id = e.id
+                JOIN workout_set_results wsr
+                    ON wsr.session_exercise_id = wse.id
+                WHERE e.code = 'barbell_bench_press'"""
+            ).one()
+            taxonomy = connection.exec_driver_sql(
+                """SELECT muscle_group, secondary_muscle_groups,
+                    training_environments, experience_levels,
+                    movement_pattern, progression_type, equivalence_group
+                FROM exercises WHERE id = 13"""
+            ).one()
+
+        self.assertTrue(
+            {
+                "secondary_muscle_groups", "training_environments",
+                "experience_levels", "movement_pattern", "progression_type",
+                "equivalence_group",
+            }.issubset(taxonomy_columns)
+        )
+        self.assertEqual(references_before, references_after)
+        self.assertEqual(
+            (
+                "chest", "triceps,shoulders", "gym,functional_gym",
+                "intermediate,advanced", "horizontal_push",
+                "external_load_reps", "horizontal_chest_press",
+            ),
+            taxonomy,
+        )
 
     def test_fitness_profile_and_access_schema(self) -> None:
         session = self.make_session()
@@ -442,7 +555,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

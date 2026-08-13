@@ -497,6 +497,116 @@ def _create_subscription_payments(connection: Connection) -> None:
     )
 
 
+def _add_exercise_taxonomy(connection: Connection) -> None:
+    """Add replacement-ready taxonomy while preserving stable exercise rows."""
+    connection.exec_driver_sql(
+        "ALTER TABLE exercises ADD COLUMN "
+        "secondary_muscle_groups TEXT NOT NULL DEFAULT ''"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE exercises ADD COLUMN "
+        "training_environments TEXT NOT NULL DEFAULT 'gym'"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE exercises ADD COLUMN experience_levels TEXT NOT NULL "
+        "DEFAULT 'beginner,intermediate,advanced'"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE exercises ADD COLUMN "
+        "movement_pattern TEXT NOT NULL DEFAULT 'isolation'"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE exercises ADD COLUMN progression_type TEXT NOT NULL "
+        "DEFAULT 'external_load_reps'"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE exercises ADD COLUMN equivalence_group TEXT"
+    )
+
+    legacy_taxonomy = {
+        "leg_press": (
+            "quads", "glutes", "gym", "beginner,intermediate,advanced",
+            "squat", "external_load_reps", "knee_dominant_press",
+        ),
+        "seated_leg_curl": (
+            "hamstrings", "", "gym", "beginner,intermediate,advanced",
+            "isolation", "external_load_reps", "leg_curl",
+        ),
+        "chest_press": (
+            "chest", "triceps,shoulders", "gym",
+            "beginner,intermediate,advanced", "horizontal_push",
+            "external_load_reps", "horizontal_chest_press",
+        ),
+        "lat_pulldown": (
+            "back", "biceps", "gym,functional_gym",
+            "beginner,intermediate,advanced", "vertical_pull",
+            "external_load_reps", "vertical_pull",
+        ),
+        "seated_row": (
+            "back", "biceps", "gym,functional_gym",
+            "beginner,intermediate,advanced", "horizontal_pull",
+            "external_load_reps", "horizontal_row",
+        ),
+        "shoulder_press": (
+            "shoulders", "triceps", "gym",
+            "beginner,intermediate,advanced", "vertical_push",
+            "external_load_reps", "vertical_press",
+        ),
+        "cable_curl": (
+            "biceps", "", "gym,functional_gym",
+            "beginner,intermediate,advanced", "isolation",
+            "external_load_reps", "elbow_flexion",
+        ),
+        "triceps_pushdown": (
+            "triceps", "", "gym,functional_gym",
+            "beginner,intermediate,advanced", "isolation",
+            "external_load_reps", "elbow_extension",
+        ),
+        "hip_abduction": (
+            "glutes", "", "gym", "beginner,intermediate,advanced",
+            "isolation", "external_load_reps", "hip_abduction",
+        ),
+        "calf_raise": (
+            "calves", "", "gym", "beginner,intermediate,advanced",
+            "isolation", "external_load_reps", "calf_raise",
+        ),
+        "back_extension": (
+            "glutes", "hamstrings,back", "gym,functional_gym",
+            "beginner,intermediate,advanced", "hinge",
+            "bodyweight_reps", "hip_hinge_extension",
+        ),
+        "cable_crunch": (
+            "core", "", "gym,functional_gym",
+            "beginner,intermediate,advanced", "core",
+            "external_load_reps", "trunk_flexion",
+        ),
+        "barbell_bench_press": (
+            "chest", "triceps,shoulders", "gym,functional_gym",
+            "intermediate,advanced", "horizontal_push",
+            "external_load_reps", "horizontal_chest_press",
+        ),
+        "dumbbell_bench_press": (
+            "chest", "triceps,shoulders", "gym,functional_gym",
+            "beginner,intermediate,advanced", "horizontal_push",
+            "external_load_reps", "horizontal_chest_press",
+        ),
+        "barbell_back_squat": (
+            "quads", "glutes,hamstrings,core", "gym,functional_gym",
+            "intermediate,advanced", "squat", "external_load_reps",
+            "barbell_squat",
+        ),
+    }
+    for code, values in legacy_taxonomy.items():
+        connection.exec_driver_sql(
+            """UPDATE exercises SET
+                muscle_group = ?, secondary_muscle_groups = ?,
+                training_environments = ?, experience_levels = ?,
+                movement_pattern = ?, progression_type = ?,
+                equivalence_group = ? WHERE code = ?""",
+            (*values, code),
+        )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -504,6 +614,7 @@ MIGRATIONS = (
     Migration(4, "stage_two_architecture", _upgrade_stage_two_architecture),
     Migration(5, "workout_execution", _create_workout_execution),
     Migration(6, "subscription_payments", _create_subscription_payments),
+    Migration(7, "exercise_taxonomy", _add_exercise_taxonomy),
 )
 
 

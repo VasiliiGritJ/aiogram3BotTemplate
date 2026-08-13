@@ -360,6 +360,24 @@ class Exercise(Base):
     alternative_name: Mapped[str | None] = mapped_column(Text(), nullable=True)
     hint: Mapped[str] = mapped_column(Text())
     restriction_tags: Mapped[str] = mapped_column(Text(), server_default="")
+    secondary_muscle_groups: Mapped[str] = mapped_column(
+        Text(), server_default=""
+    )
+    training_environments: Mapped[str] = mapped_column(
+        Text(), server_default="gym"
+    )
+    experience_levels: Mapped[str] = mapped_column(
+        Text(), server_default="beginner,intermediate,advanced"
+    )
+    movement_pattern: Mapped[str] = mapped_column(
+        Text(), server_default="isolation"
+    )
+    progression_type: Mapped[str] = mapped_column(
+        Text(), server_default="external_load_reps"
+    )
+    equivalence_group: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
 
 
 class WorkoutTemplate(Base):

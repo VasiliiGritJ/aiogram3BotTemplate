@@ -37,7 +37,10 @@ class PaymentServiceTests(unittest.TestCase):
             sqlite_url(Path(self.temp_directory.name) / "payments.db")
         )
         self._key_number = 0
-        self.assertEqual((1, 2, 3, 4, 5, 6), run_migrations(self.database.engine))
+        self.assertEqual(
+            (1, 2, 3, 4, 5, 6, 7),
+            run_migrations(self.database.engine),
+        )
         with self.database.engine.begin() as connection:
             connection.exec_driver_sql(
                 """
