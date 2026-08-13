@@ -257,7 +257,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
         self.assertEqual(trial_ends_before, access_after.trial_ends_at)
         self.assertTrue(plan_with_limitations.created)
         self.assertIn(LIMITATIONS_NOTICE, plan_with_limitations.fallback_notes)
-        self.assertTrue(plan.created)
+        self.assertFalse(plan.created)
         self.assertNotIn(LIMITATIONS_NOTICE, plan.fallback_notes)
 
     def test_trial_activation_starts_exactly_once(self) -> None:

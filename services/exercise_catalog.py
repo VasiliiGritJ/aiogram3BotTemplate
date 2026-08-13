@@ -77,6 +77,58 @@ class ExerciseDefinition:
     def primary_muscle_label(self) -> str:
         return MUSCLE_GROUP_LABELS[self.primary_muscle_group]
 
+    @property
+    def technique(self) -> "ExerciseTechnique":
+        """Return compact controlled guidance without persisting UI-only copy."""
+        override = _TECHNIQUE_OVERRIDES.get(self.code)
+        if override is not None:
+            return override
+        return ExerciseTechnique(
+            start_position=_START_POSITION_BY_EQUIPMENT[self.equipment],
+            action=_ACTION_BY_MOVEMENT[self.movement_pattern],
+            control=self.hint,
+        )
+
+
+@dataclass(frozen=True)
+class ExerciseTechnique:
+    start_position: str
+    action: str
+    control: str
+
+
+_START_POSITION_BY_EQUIPMENT = {
+    "machine": "Настройте тренажёр под свой рост и займите устойчивое положение у опоры.",
+    "cable": "Выберите небольшой стартовый вес, встаньте устойчиво и возьмитесь за рукоять.",
+    "dumbbell": "Возьмите гантели комфортного веса и примите устойчивое исходное положение.",
+    "barbell": "Подготовьте штангу с комфортным весом и примите устойчивое исходное положение.",
+    "smith": "Настройте высоту грифа и ограничители, затем займите устойчивое положение.",
+    "bodyweight": "Примите устойчивое исходное положение и соберите корпус.",
+    "pullup_dip_station": "Надёжно возьмитесь за опору и стабилизируйте корпус.",
+    "functional_equipment": "Проверьте устойчивость оборудования и займите свободное исходное положение.",
+}
+
+_ACTION_BY_MOVEMENT = {
+    "horizontal_push": "Плавно выжмите сопротивление от корпуса и подконтрольно вернитесь.",
+    "vertical_push": "Плавно выжмите сопротивление вверх и подконтрольно вернитесь.",
+    "horizontal_pull": "Потяните сопротивление к корпусу и плавно верните руки.",
+    "vertical_pull": "Потяните сопротивление сверху к корпусу и плавно вернитесь.",
+    "squat": "Согните ноги в комфортной амплитуде и поднимитесь через устойчивые стопы.",
+    "hinge": "Отведите таз назад, затем выпрямитесь за счёт ног и таза.",
+    "isolation": "Выполните движение в суставе плавно, сохраняя остальной корпус неподвижным.",
+    "carry": "Двигайтесь ровными короткими шагами, сохраняя устойчивый корпус.",
+    "core": "Выполняйте заданное движение медленно, удерживая корпус собранным.",
+    "locomotion_conditioning": "Двигайтесь в ровном контролируемом темпе и сохраняйте пространство вокруг.",
+}
+
+_TECHNIQUE_OVERRIDES = {
+    "bird_dog": ExerciseTechnique(
+        start_position="Встаньте на четвереньки: ладони под плечами, колени под тазом.",
+        action="Одновременно вытяните вперёд одну руку и назад противоположную ногу, затем вернитесь.",
+        control="Не разворачивайте таз и не прогибайте поясницу.",
+    ),
+}
+
 
 def _e(
     code: str,
@@ -225,7 +277,7 @@ EXERCISE_DEFINITIONS = (
     _e("plank", "Планка на предплечьях", "core", "bodyweight", ("gym", "functional_gym", "street", "home"), "core", "timed_conditioning", "anti_extension_core", "Держите корпус прямым и не задерживайте дыхание."),
     _e("side_plank", "Боковая планка", "core", "bodyweight", ("gym", "functional_gym", "street", "home"), "core", "timed_conditioning", "lateral_core", "Удерживайте таз на одной линии с корпусом."),
     _e("dead_bug", "Поочерёдное опускание руки и ноги лёжа", "core", "bodyweight", ("gym", "functional_gym", "home"), "core", "bodyweight_reps", "anti_extension_core", "Прижимайте поясницу к полу и двигайтесь медленно."),
-    _e("bird_dog", "Разноимённое вытяжение руки и ноги", "core", "bodyweight", ("gym", "functional_gym", "street", "home"), "core", "bodyweight_reps", "spinal_stability", "Не разворачивайте таз и удерживайте равновесие."),
+    _e("bird_dog", "Вытягивание противоположных руки и ноги на четвереньках", "core", "bodyweight", ("gym", "functional_gym", "street", "home"), "core", "bodyweight_reps", "spinal_stability", "Не разворачивайте таз и удерживайте равновесие."),
     _e("hanging_knee_raise", "Подъём коленей в висе", "core", "pullup_dip_station", ("gym", "functional_gym", "street"), "core", "bodyweight_reps", "trunk_flexion", "Не раскачивайтесь и подкручивайте таз в верхней точке.", levels=INTERMEDIATE_PLUS),
     _e("captains_chair_knee_raise", "Подъём коленей в упоре на локтях", "core", "pullup_dip_station", ("gym", "street"), "core", "bodyweight_reps", "trunk_flexion", "Прижимайте спину к опоре и не раскачивайтесь."),
     _e("pallof_press", "Удержание корпуса с выжиманием блока перед собой", "core", "cable", ("gym", "functional_gym"), "core", "external_load_reps", "anti_rotation_core", "Не позволяйте блоку разворачивать корпус."),

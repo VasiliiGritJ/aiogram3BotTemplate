@@ -69,7 +69,7 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
 
     def test_workout_markups_offer_controlled_actions(self) -> None:
         self.assertEqual(
-            ["workout:record_set", "workout:cancel"],
+            ["workout:technique", "workout:record_set", "workout:cancel"],
             self.callback_values(workout_current_mkp()),
         )
         self.assertEqual(

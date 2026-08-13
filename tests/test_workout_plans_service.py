@@ -32,6 +32,7 @@ from services.workout_plans import (
     normalize_profile,
     generate_program,
 )
+from services.exercise_catalog import exercise_definition_by_code
 from services.workout_progression import ProgressionStrategy
 
 
@@ -187,6 +188,55 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         self.assertNotEqual(first.plan.id, changed.plan.id)
         self.assertEqual(2, len(changed.plan.days))
         self.assertEqual(1, plan_count)
+
+    def test_beginner_gym_matrix_has_machine_cable_majority_and_no_barbell(self) -> None:
+        for days in range(2, 7):
+            for duration in (30, 60, 90):
+                with self.subTest(days=days, duration=duration):
+                    profile = normalize_profile(self.make_profile(
+                        self.user_id,
+                        training_environment="gym",
+                        workouts_per_week=days,
+                        session_duration_minutes=duration,
+                    ))
+                    first = generate_program(profile)
+                    second = generate_program(profile)
+                    self.assertEqual(first, second)
+                    for day in first.days:
+                        definitions = [
+                            exercise_definition_by_code(item.exercise_code)
+                            for item in day.exercises
+                        ]
+                        machine_cable = sum(
+                            item.equipment in {"machine", "cable"}
+                            for item in definitions
+                        )
+                        self.assertGreaterEqual(
+                            machine_cable * 5,
+                            len(definitions) * 3,
+                        )
+                        self.assertFalse(any(
+                            item.equipment == "barbell" for item in definitions
+                        ))
+
+    def test_advanced_gym_still_selects_free_weight_compounds(self) -> None:
+        profile = normalize_profile(self.make_profile(
+            self.user_id,
+            experience_level="advanced",
+            training_environment="gym",
+        ))
+        generated = generate_program(profile)
+        definitions = [
+            exercise_definition_by_code(item.exercise_code)
+            for day in generated.days for item in day.exercises
+        ]
+        self.assertTrue(any(
+            item.equipment in {"barbell", "dumbbell"}
+            and item.movement_pattern in {
+                "horizontal_push", "horizontal_pull", "squat", "hinge",
+            }
+            for item in definitions
+        ))
 
     def test_saved_plan_contains_required_ordered_fields(self) -> None:
         result = assign_workout_plan(self.user_id, self.database)

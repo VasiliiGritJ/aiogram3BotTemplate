@@ -994,6 +994,28 @@ def get_assigned_workout_plan(
         return None if plan is None else _load_plan_view(session, plan)
 
 
+def activate_generated_plan_for_profile(
+    user_id: int,
+    session_factory: Callable[[], Session] = dbSession,
+    *,
+    create_if_missing: bool = True,
+) -> PlanAssignmentResult | None:
+    """Make the generated plan match the profile while preserving user programs."""
+    with session_factory() as session:
+        existing = session.scalar(
+            select(UserWorkoutPlan).where(UserWorkoutPlan.user_id == user_id)
+        )
+        if existing is not None and existing.plan_source == "user_defined":
+            return PlanAssignmentResult(
+                plan=_load_plan_view(session, existing),
+                created=False,
+                fallback_notes=(),
+            )
+        if existing is None and not create_if_missing:
+            return None
+    return assign_workout_plan(user_id, session_factory)
+
+
 def assign_workout_plan(
     user_id: int,
     session_factory: Callable[[], Session] = dbSession,

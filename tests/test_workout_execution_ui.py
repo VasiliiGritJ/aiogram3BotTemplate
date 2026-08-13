@@ -33,6 +33,7 @@ from services.workout_replacements import (
     ReplacementReason,
     ReplacementResult,
 )
+from services.exercise_catalog import ExerciseTechnique
 
 
 class _Dispatcher:
@@ -231,6 +232,38 @@ def _recommendation(
 
 
 class WorkoutExecutionUiTests(unittest.TestCase):
+    def test_technique_callback_shows_short_catalog_guidance_without_ids(self) -> None:
+        call = _Call(data="workout:technique")
+        state = _State()
+        guidance = ExerciseTechnique(
+            "Встаньте на четвереньки.",
+            "Вытяните противоположные руку и ногу.",
+            "Не разворачивайте таз.",
+        )
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_current_step", return_value=_step()),
+            patch.object(
+                workout_ui,
+                "get_workout_exercise_technique",
+                return_value=guidance,
+            ) as technique,
+        ):
+            self.run_async(workout_ui.workout_technique(call, state))
+
+        technique.assert_called_once_with(7, 31)
+        text, markup = call.message.edits[-1]
+        self.assertIn("Исходное положение", text)
+        self.assertIn("Движение", text)
+        self.assertIn("Контроль", text)
+        self.assertNotIn("bird_dog", text)
+        self.assertNotIn("31", text)
+        self.assertLess(len(text), 500)
+        self.assertIn(
+            "workout:technique:back",
+            self.callback_values(markup),
+        )
+
     def test_format_step_and_markup_show_guided_amrap_actions(self) -> None:
         block = _format_block("amrap")
         workout = replace(_workout(), blocks=(block,))

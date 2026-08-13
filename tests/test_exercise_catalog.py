@@ -60,6 +60,21 @@ class ExerciseCatalogQualityTests(unittest.TestCase):
                 validate_exercise_definition(definition)
                 self.assertTrue(definition.name.strip())
                 self.assertTrue(definition.hint.strip())
+                self.assertTrue(definition.technique.start_position.strip())
+                self.assertTrue(definition.technique.action.strip())
+                self.assertTrue(definition.technique.control.strip())
+
+    def test_bird_dog_keeps_stable_code_with_clear_russian_name(self) -> None:
+        definition = next(
+            item for item in EXERCISE_DEFINITIONS if item.code == "bird_dog"
+        )
+
+        self.assertEqual("bird_dog", definition.code)
+        self.assertEqual(
+            "Вытягивание противоположных руки и ноги на четвереньках",
+            definition.name,
+        )
+        self.assertIn("четвереньки", definition.technique.start_position)
 
     def test_required_taxonomy_dimensions_are_covered(self) -> None:
         muscles = {item.primary_muscle_group for item in EXERCISE_DEFINITIONS}

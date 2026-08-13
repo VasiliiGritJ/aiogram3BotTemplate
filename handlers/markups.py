@@ -188,6 +188,12 @@ def workout_current_mkp(
         )
     else:
         buttons.append(
+            [types.InlineKeyboardButton(
+                text="ℹ️ Техника",
+                callback_data="workout:technique",
+            )]
+        )
+        buttons.append(
             [
                 types.InlineKeyboardButton(
                     text="✅ Выполнить подход",
@@ -213,6 +219,19 @@ def workout_current_mkp(
         ]
     )
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def workout_technique_mkp():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="⬅️ Вернуться к упражнению",
+            callback_data="workout:technique:back",
+        )],
+        [types.InlineKeyboardButton(
+            text="❌ Отменить тренировку",
+            callback_data="workout:cancel",
+        )],
+    ])
 
 
 def workout_format_mkp(state, *, show_replacements: bool = False):

@@ -260,7 +260,19 @@ def update_existing_profile(
             profile.updated_at = changed_at
             session.flush()
 
-        return profile
+        result = profile
+
+    # Profile confirmation and generated-plan activation are one product action.
+    # A user-defined program remains authoritative; a missing plan is still
+    # chosen explicitly from the plan-source screen.
+    from services.workout_plans import activate_generated_plan_for_profile
+
+    activate_generated_plan_for_profile(
+        user_id,
+        session_factory,
+        create_if_missing=False,
+    )
+    return result
 
 
 def save_profile_and_access(

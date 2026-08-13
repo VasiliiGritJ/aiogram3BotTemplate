@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.models import (
+    Exercise,
     UserAccess,
     UserWorkoutPlan,
     UserWorkoutPlanDay,
@@ -28,6 +29,7 @@ from services.access import (
     evaluate_access,
     utc_now,
 )
+from services.exercise_catalog import ExerciseTechnique, exercise_definition_by_code
 
 
 class WorkoutExecutionError(RuntimeError):
@@ -588,6 +590,28 @@ def get_current_step(
         if workout is None:
             raise WorkoutNotFoundError("No active workout session exists.")
         return _current_step_in_session(session, workout)
+
+
+def get_workout_exercise_technique(
+    user_id: int,
+    session_exercise_id: int,
+    session_factory: Callable[[], Session] = dbSession,
+) -> ExerciseTechnique:
+    """Load catalog-owned technique after checking snapshot ownership."""
+    with session_factory() as session:
+        snapshot = session.get(WorkoutSessionExercise, session_exercise_id)
+        if snapshot is None:
+            raise WorkoutNotFoundError("Workout exercise does not exist.")
+        _require_owned_workout(session, user_id, snapshot.session_id)
+        if snapshot.selected_exercise_id is None:
+            raise WorkoutExecutionError("Exercise has no controlled catalog source.")
+        code = session.scalar(
+            select(Exercise.code).where(Exercise.id == snapshot.selected_exercise_id)
+        )
+        definition = exercise_definition_by_code(code or "")
+        if definition is None:
+            raise WorkoutExecutionError("Exercise technique is unavailable.")
+        return definition.technique
 
 
 def _validate_result_values(actual_weight_kg: float, actual_reps: int) -> None:

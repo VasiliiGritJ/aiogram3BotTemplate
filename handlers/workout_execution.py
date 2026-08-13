@@ -20,6 +20,7 @@ from handlers.markups import (
     workout_input_mkp,
     workout_format_mkp,
     workout_replacement_mkp,
+    workout_technique_mkp,
 )
 from services.access import AccessStatus, get_access_decision
 from services.workout_execution import (
@@ -34,6 +35,7 @@ from services.workout_execution import (
     get_completed_workout_detail,
     get_current_step,
     get_or_start_workout,
+    get_workout_exercise_technique,
     get_workout_history_page,
     record_set_result,
 )
@@ -77,6 +79,8 @@ WORKOUT_HISTORY_PAGE_PREFIX = "workout:history:page:"
 WORKOUT_HISTORY_DETAIL_PREFIX = "workout:history:detail:"
 WORKOUT_FORMAT_PREFIX = "workout:format:"
 WORKOUT_REPLACEMENT_PREFIX = "workout:replace:"
+WORKOUT_TECHNIQUE_CALLBACK = "workout:technique"
+WORKOUT_TECHNIQUE_BACK_CALLBACK = "workout:technique:back"
 
 MAX_WEIGHT_INPUT_LENGTH = 32
 MAX_REPS_INPUT_LENGTH = 9
@@ -425,6 +429,45 @@ async def workout_record_set(call: types.CallbackQuery, state: FSMContext) -> No
     except (WorkoutExecutionError, SQLAlchemyError):
         await state.clear()
         await show_current_workout(call.message, user.id, edit=True)
+    await call.answer()
+
+
+@dp.callback_query(F.data == WORKOUT_TECHNIQUE_CALLBACK)
+async def workout_technique(call: types.CallbackQuery, state: FSMContext) -> None:
+    user = User.get(tg_id=call.from_user.id)
+    if user is None:
+        await call.answer("Отправьте /start, чтобы продолжить.", show_alert=True)
+        return
+    try:
+        step = get_current_step(user.id)
+        if step.ready_to_complete or step.exercise is None:
+            raise WorkoutExecutionError("No current standard exercise.")
+        technique = get_workout_exercise_technique(user.id, step.exercise.id)
+    except (WorkoutExecutionError, SQLAlchemyError):
+        await state.clear()
+        await show_current_workout(call.message, user.id, edit=True)
+    else:
+        await call.message.edit_text(
+            f"ℹ️ <b>{escape(step.exercise.selected_exercise_name)}</b>\n\n"
+            f"Исходное положение: {escape(technique.start_position)}\n\n"
+            f"Движение: {escape(technique.action)}\n\n"
+            f"Контроль: {escape(technique.control)}",
+            reply_markup=workout_technique_mkp(),
+        )
+    await call.answer()
+
+
+@dp.callback_query(F.data == WORKOUT_TECHNIQUE_BACK_CALLBACK)
+async def workout_technique_back(
+    call: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    user = User.get(tg_id=call.from_user.id)
+    if user is None:
+        await call.answer("Отправьте /start, чтобы продолжить.", show_alert=True)
+        return
+    await state.clear()
+    await show_current_workout(call.message, user.id, edit=True)
     await call.answer()
 
 

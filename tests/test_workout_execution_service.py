@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from db.migrations import run_migrations
 from db.models import (
@@ -34,9 +34,11 @@ from services.workout_execution import (
     get_or_start_workout,
     get_workout_history,
     get_workout_history_page,
+    get_workout_exercise_technique,
     record_set_result,
 )
 import services.workout_execution as workout_execution
+from services.workout_plans import activate_generated_plan_for_profile
 
 
 BASE_TIME = datetime(2026, 8, 10, 12, 0, 0)
@@ -236,6 +238,62 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             (BASE_TIME, BASE_TIME + timedelta(days=3)),
             self._access_dates(),
         )
+
+    def test_profile_change_refreshes_generated_plan_before_new_workout(self) -> None:
+        completed = self._complete_started_workout(BASE_TIME)
+        old_plan_id = completed.source_plan_id
+        old_names = tuple(item.selected_exercise_name for item in completed.exercises)
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+            profile.training_environment = "gym"
+            profile.experience_level = "beginner"
+            profile.limitations = None
+            profile.updated_at = BASE_TIME + timedelta(days=1)
+            session.commit()
+
+        activated = activate_generated_plan_for_profile(
+            self.user_id,
+            self.database,
+            create_if_missing=False,
+        )
+        started = get_or_start_workout(
+            self.user_id,
+            BASE_TIME + timedelta(days=1),
+            self.database,
+        )
+        current = workout_execution.get_active_workout(self.user_id, self.database)
+        history = get_workout_history(self.user_id, self.database)
+
+        self.assertNotEqual(old_plan_id, started.workout.source_plan_id)
+        self.assertEqual(activated.plan.id, started.workout.source_plan_id)
+        self.assertEqual(started.workout.source_plan_id, current.source_plan_id)
+        self.assertEqual(old_names, tuple(
+            item.selected_exercise_name for item in history[0].exercises
+        ))
+        with self.database() as session:
+            self.assertIsNone(session.get(UserWorkoutPlan, old_plan_id))
+            self.assertEqual(
+                1,
+                session.scalar(select(func.count(UserWorkoutPlan.id))),
+            )
+
+    def test_technique_requires_owned_controlled_snapshot(self) -> None:
+        with self.database() as session:
+            exercise = session.scalar(select(Exercise).limit(1))
+            exercise.code = "bird_dog"
+            session.commit()
+        started = get_or_start_workout(self.user_id, BASE_TIME, self.database)
+        snapshot = started.workout.exercises[0]
+
+        technique = get_workout_exercise_technique(
+            self.user_id,
+            snapshot.id,
+            self.database,
+        )
+
+        self.assertTrue(technique.start_position)
+        self.assertTrue(technique.action)
+        self.assertTrue(technique.control)
 
     def test_resume_keeps_trial_dates_even_after_expiration(self) -> None:
         first = get_or_start_workout(self.user_id, BASE_TIME, self.database)
