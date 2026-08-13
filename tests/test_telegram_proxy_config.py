@@ -93,6 +93,18 @@ class TelegramProxyConfigTests(unittest.TestCase):
         async def reminds_manager() -> None:
             calls.append("reminds")
 
+        class _PollingGuard:
+            def __enter__(self):
+                calls.append("guard entered")
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback) -> None:
+                calls.append("guard released")
+
+        guard = python_types.ModuleType("utils.polling_guard")
+        guard.PollingInstanceGuard = _PollingGuard
+        guard.PollingInstanceAlreadyRunning = RuntimeError
+
         config = python_types.ModuleType("storage.config")
         config.dp = _Dispatcher()
         config.bot = object()
@@ -104,6 +116,7 @@ class TelegramProxyConfigTests(unittest.TestCase):
             "storage.config": config,
             "managers.reminds": reminds,
             "utils.custom_logger": logger,
+            "utils.polling_guard": guard,
             "admin_panel.admin.admin": python_types.ModuleType("admin_panel.admin.admin"),
             "admin_panel.mailing.mailing": python_types.ModuleType("admin_panel.mailing.mailing"),
             "handlers.onboarding": python_types.ModuleType("handlers.onboarding"),
@@ -122,6 +135,10 @@ class TelegramProxyConfigTests(unittest.TestCase):
 
         self.assertIn(config.bot, calls)
         self.assertIn("reminds", calls)
+        self.assertEqual("guard entered", calls[0])
+        self.assertEqual("guard released", calls[-1])
+        self.assertLess(calls.index(config.bot), calls.index("guard released"))
+        self.assertLess(calls.index("reminds"), calls.index("guard released"))
 
 
 if __name__ == "__main__":
