@@ -183,6 +183,34 @@ class PaymentService:
             return self._result_for_id(payment_id, PaymentServiceReason.PROVIDER_UNAVAILABLE)
         return self._reconcile_provider_payment(payment_id, provider_payment)
 
+    def reconcile_provider_payment(
+        self,
+        provider: str,
+        provider_payment_id: str,
+    ) -> PaymentServiceResult:
+        """Reconcile an existing local payment addressed by its provider ID.
+
+        This is the narrow application boundary for provider notifications.  It
+        never creates a local payment and delegates the authoritative lookup,
+        validation and exactly-once access grant to ``reconcile_payment``.
+        """
+        if not isinstance(provider, str) or not provider:
+            raise LookupError(PaymentServiceReason.PAYMENT_NOT_FOUND.value)
+        if not isinstance(provider_payment_id, str) or not provider_payment_id:
+            raise LookupError(PaymentServiceReason.PAYMENT_NOT_FOUND.value)
+        with self._session_factory() as session:
+            payment = session.scalar(
+                select(SubscriptionPayment).where(
+                    SubscriptionPayment.provider == provider,
+                    SubscriptionPayment.provider_payment_id == provider_payment_id,
+                    SubscriptionPayment.product_code == self._product.product_code,
+                )
+            )
+            if payment is None:
+                raise LookupError(PaymentServiceReason.PAYMENT_NOT_FOUND.value)
+            payment_id = payment.id
+        return self.reconcile_payment(payment_id)
+
     def get_latest_payment(self, user_id: int) -> PaymentServiceResult | None:
         """Read the latest local payment for the configured product only."""
         with self._session_factory() as session:
