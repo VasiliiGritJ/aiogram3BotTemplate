@@ -95,7 +95,7 @@ class PaymentServiceTests(unittest.TestCase):
         *,
         now: datetime = BASE_TIME,
         before_access_apply=None,
-        require_test_mode: bool = False,
+        expected_test_mode: bool | None = None,
     ) -> PaymentService:
         return PaymentService(
             provider,
@@ -104,7 +104,7 @@ class PaymentServiceTests(unittest.TestCase):
             now_factory=lambda: now,
             idempotency_key_factory=self.next_idempotency_key,
             before_access_apply=before_access_apply,
-            require_test_mode=require_test_mode,
+            expected_test_mode=expected_test_mode,
         )
 
     def next_idempotency_key(self) -> str:
@@ -312,9 +312,13 @@ class PaymentServiceTests(unittest.TestCase):
                 self.assertFalse(result.access_applied)
                 self.assertIsNone(access.subscription_ends_at)
 
-    def test_test_mode_rejects_missing_or_false_provider_flag_without_access(self) -> None:
-        for index, test_flag in enumerate((None, False), start=1):
-            with self.subTest(test_flag=test_flag):
+    def test_expected_payment_mode_rejects_missing_or_mismatched_flag(self) -> None:
+        cases = ((True, None), (True, False), (False, None), (False, True))
+        for index, (expected_test_mode, test_flag) in enumerate(cases, start=1):
+            with self.subTest(
+                expected_test_mode=expected_test_mode,
+                test_flag=test_flag,
+            ):
                 user_id = 50 + index
                 self.add_user(user_id)
                 provider = FakePaymentProvider(
@@ -333,12 +337,14 @@ class PaymentServiceTests(unittest.TestCase):
                     ]
                 )
                 result = self.service(
-                    provider, require_test_mode=True
+                    provider, expected_test_mode=expected_test_mode
                 ).get_or_create_payment(user_id)
                 with self.database() as session:
                     access = session.get(UserAccess, user_id)
                     assert access is not None
-                self.assertEqual(PaymentServiceReason.TEST_MODE_REJECTED, result.reason)
+                self.assertEqual(
+                    PaymentServiceReason.PAYMENT_MODE_REJECTED, result.reason
+                )
                 self.assertFalse(result.access_applied)
                 self.assertIsNone(access.subscription_ends_at)
 
@@ -358,7 +364,7 @@ class PaymentServiceTests(unittest.TestCase):
                 )
             ]
         )
-        service = self.service(provider, require_test_mode=True)
+        service = self.service(provider, expected_test_mode=True)
 
         first = service.get_or_create_payment(1)
         repeated = service.reconcile_payment(first.payment_id, user_id=1)

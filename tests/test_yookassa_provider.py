@@ -60,6 +60,7 @@ def response(status="pending", **overrides):
     value = {
         "id": "provider-payment-1",
         "status": status,
+        "test": True,
         "amount": {"value": "990.00", "currency": "RUB"},
         "confirmation": {"confirmation_url": "https://example.invalid/pay"},
         "metadata": {"local_payment_id": "42", "product_code": "monthly_30d_v1"},
@@ -77,13 +78,15 @@ class YooKassaProviderTests(unittest.TestCase):
         )
 
     def provider(
-        self, api: RecordingApi, *, require_test_mode: bool = False
+        self, api: RecordingApi, *, expected_test_mode: bool = True
     ) -> YooKassaProvider:
+        if api.account_result is None:
+            api.account_result = {"test": expected_test_mode}
         return YooKassaProvider(
             CREDENTIALS,
             RETURN_URL,
             api=api,
-            require_test_mode=require_test_mode,
+            expected_test_mode=expected_test_mode,
         )
 
     def test_create_pending_maps_server_owned_payload_and_key(self) -> None:
@@ -202,7 +205,7 @@ class YooKassaProviderTests(unittest.TestCase):
             account_result={"test": True},
             create_result=response(test=True),
         )
-        provider = self.provider(api, require_test_mode=True)
+        provider = self.provider(api, expected_test_mode=True)
 
         provider.create_payment(self.request(), "first-key")
         provider.create_payment(self.request(), "second-key")
@@ -229,7 +232,7 @@ class YooKassaProviderTests(unittest.TestCase):
                     PaymentProviderProtocolError,
                     PaymentProviderTransientError,
                 )) as error:
-                    self.provider(api, require_test_mode=True).create_payment(
+                    self.provider(api, expected_test_mode=True).create_payment(
                         self.request(), "key"
                     )
                 self.assertEqual([], api.create_calls)
@@ -242,10 +245,14 @@ class YooKassaProviderTests(unittest.TestCase):
                     account_result={"test": True},
                     create_result=response(test=test_flag)
                     if test_flag is not None
-                    else response(),
+                    else {
+                        key: value
+                        for key, value in response().items()
+                        if key != "test"
+                    },
                 )
                 with self.assertRaises(PaymentProviderProtocolError):
-                    self.provider(api, require_test_mode=True).create_payment(
+                    self.provider(api, expected_test_mode=True).create_payment(
                         self.request(), "key"
                     )
 
@@ -254,10 +261,14 @@ class YooKassaProviderTests(unittest.TestCase):
                     account_result={"test": True},
                     get_result=response(test=test_flag)
                     if test_flag is not None
-                    else response(),
+                    else {
+                        key: value
+                        for key, value in response().items()
+                        if key != "test"
+                    },
                 )
                 with self.assertRaises(PaymentProviderProtocolError):
-                    self.provider(api, require_test_mode=True).get_payment(
+                    self.provider(api, expected_test_mode=True).get_payment(
                         "provider-payment-1"
                     )
 
@@ -266,9 +277,58 @@ class YooKassaProviderTests(unittest.TestCase):
             create_result=response(test=True),
             get_result=response(test=True),
         )
-        provider = self.provider(api, require_test_mode=True)
+        provider = self.provider(api, expected_test_mode=True)
         self.assertTrue(provider.create_payment(self.request(), "key").is_test)
         self.assertTrue(provider.get_payment("provider-payment-1").is_test)
+
+    def test_shop_type_mismatch_is_blocked_before_provider_create(self) -> None:
+        cases = (
+            (True, True, True),
+            (True, False, False),
+            (False, False, True),
+            (False, True, False),
+        )
+        for expected_test_mode, account_is_test, allowed in cases:
+            with self.subTest(
+                expected_test_mode=expected_test_mode,
+                account_is_test=account_is_test,
+            ):
+                api = RecordingApi(
+                    account_result={"test": account_is_test},
+                    create_result=response(test=expected_test_mode),
+                )
+                provider = self.provider(
+                    api, expected_test_mode=expected_test_mode
+                )
+                if allowed:
+                    provider.create_payment(self.request(), "key")
+                    self.assertEqual(1, len(api.create_calls))
+                else:
+                    with self.assertRaises(PaymentProviderPermanentError) as error:
+                        provider.create_payment(self.request(), "key")
+                    self.assertEqual([], api.create_calls)
+                    self.assertNotIn("secret-for-tests", str(error.exception))
+
+    def test_production_mode_requires_false_payment_flag(self) -> None:
+        api = RecordingApi(
+            account_result={"test": False},
+            create_result=response(test=False),
+            get_result=response(test=False),
+        )
+        provider = self.provider(api, expected_test_mode=False)
+
+        self.assertFalse(provider.create_payment(self.request(), "key").is_test)
+        self.assertFalse(provider.get_payment("provider-payment-1").is_test)
+
+        for test_flag in (True, None):
+            with self.subTest(test_flag=test_flag):
+                api.create_result = (
+                    response(test=test_flag) if test_flag is not None else {
+                        key: value for key, value in response().items() if key != "test"
+                    }
+                )
+                with self.assertRaises(PaymentProviderProtocolError):
+                    provider.create_payment(self.request(), "other-key")
 
 
 if __name__ == "__main__":

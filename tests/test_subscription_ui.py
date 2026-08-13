@@ -16,6 +16,7 @@ from services.payment_service import (
     SubscriptionProduct,
 )
 from storage.payment_runtime import (
+    PaymentMode,
     PaymentRuntime,
     PaymentRuntimeConfigurationError,
     build_payment_runtime,
@@ -124,7 +125,7 @@ class SubscriptionUiTests(unittest.TestCase):
         return asyncio.run(coroutine)
 
     def runtime(self, service):
-        return PaymentRuntime(PRODUCT, service)
+        return PaymentRuntime(PRODUCT, service, PaymentMode.TEST)
 
     @staticmethod
     def callbacks(markup):

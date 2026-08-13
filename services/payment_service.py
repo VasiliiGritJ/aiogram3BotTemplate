@@ -43,7 +43,7 @@ class PaymentServiceReason(StrEnum):
     AMOUNT_MISMATCH = "amount_mismatch"
     CURRENCY_MISMATCH = "currency_mismatch"
     METADATA_MISMATCH = "metadata_mismatch"
-    TEST_MODE_REJECTED = "test_mode_rejected"
+    PAYMENT_MODE_REJECTED = "payment_mode_rejected"
     STATUS_REJECTED = "status_rejected"
     ACCESS_APPLIED = "access_applied"
     ACCESS_ALREADY_APPLIED = "access_already_applied"
@@ -101,7 +101,7 @@ class PaymentService:
         idempotency_key_factory: Callable[[], str] | None = None,
         provider_idempotency_window: timedelta = timedelta(hours=24),
         before_access_apply: Callable[[], None] | None = None,
-        require_test_mode: bool = False,
+        expected_test_mode: bool | None = None,
     ) -> None:
         validation = validate_payment_spec(product.spec)
         if not validation.is_valid:
@@ -115,9 +115,9 @@ class PaymentService:
         )
         self._provider_idempotency_window = provider_idempotency_window
         self._before_access_apply = before_access_apply
-        if not isinstance(require_test_mode, bool):
-            raise ValueError("require_test_mode must be a boolean")
-        self._require_test_mode = require_test_mode
+        if expected_test_mode is not None and type(expected_test_mode) is not bool:
+            raise ValueError("expected_test_mode must be a boolean or None")
+        self._expected_test_mode = expected_test_mode
 
     def get_or_create_payment(self, user_id: int) -> PaymentServiceResult:
         """Return the one active payment or create one local request safely."""
@@ -305,8 +305,11 @@ class PaymentService:
             payment = session.get(SubscriptionPayment, payment_id)
             if payment is None:
                 raise LookupError(PaymentServiceReason.PAYMENT_NOT_FOUND.value)
-            if self._require_test_mode and provider_payment.is_test is not True:
-                return PaymentServiceReason.TEST_MODE_REJECTED
+            if (
+                self._expected_test_mode is not None
+                and provider_payment.is_test is not self._expected_test_mode
+            ):
+                return PaymentServiceReason.PAYMENT_MODE_REJECTED
             if (
                 payment.provider_payment_id is not None
                 and payment.provider_payment_id != provider_payment.provider_payment_id

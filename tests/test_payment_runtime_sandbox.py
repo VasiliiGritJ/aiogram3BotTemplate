@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from storage.payment_runtime import (
+    PaymentMode,
     PaymentRuntimeConfigurationError,
     build_payment_runtime,
 )
@@ -34,9 +35,10 @@ class PaymentRuntimeSandboxTests(unittest.TestCase):
         self.assertEqual(250, runtime.product.amount_minor)
         self.assertEqual("RUB", runtime.product.currency)
         self.assertEqual(30, runtime.product.period_days)
-        self.assertTrue(provider_class.call_args.kwargs["require_test_mode"])
+        self.assertIs(PaymentMode.TEST, runtime.mode)
+        self.assertTrue(provider_class.call_args.kwargs["expected_test_mode"])
 
-    def test_missing_or_non_strict_test_mode_is_rejected(self) -> None:
+    def test_missing_or_non_strict_legacy_test_mode_is_rejected(self) -> None:
         for value in (None, "", "false", "TRUE", "yes", "1"):
             with self.subTest(value=value):
                 settings = dict(VALID_SETTINGS)
@@ -46,6 +48,54 @@ class PaymentRuntimeSandboxTests(unittest.TestCase):
                     settings["PAYMENTS_TEST_MODE"] = value
                 with self.assertRaises(PaymentRuntimeConfigurationError):
                     build_payment_runtime(self.reader(settings))
+
+    def test_explicit_test_and_production_modes_are_wired_symmetrically(self) -> None:
+        cases = (
+            ("test", "true", PaymentMode.TEST, True),
+            ("production", "false", PaymentMode.PRODUCTION, False),
+        )
+        for mode_value, legacy_value, expected_mode, expected_test in cases:
+            with self.subTest(mode=mode_value):
+                settings = {
+                    **VALID_SETTINGS,
+                    "PAYMENTS_MODE": mode_value,
+                    "PAYMENTS_TEST_MODE": legacy_value,
+                }
+                with (
+                    patch("storage.payment_runtime.YooKassaProvider") as provider_class,
+                    patch("storage.payment_runtime.PaymentService") as service_class,
+                ):
+                    runtime = build_payment_runtime(self.reader(settings))
+                self.assertIs(expected_mode, runtime.mode)
+                self.assertIs(
+                    expected_test,
+                    provider_class.call_args.kwargs["expected_test_mode"],
+                )
+                self.assertIs(
+                    expected_test,
+                    service_class.call_args.kwargs["expected_test_mode"],
+                )
+
+    def test_invalid_or_conflicting_explicit_mode_fails_closed(self) -> None:
+        cases = (
+            {"PAYMENTS_MODE": "", "PAYMENTS_TEST_MODE": "true"},
+            {"PAYMENTS_MODE": "   ", "PAYMENTS_TEST_MODE": "true"},
+            {"PAYMENTS_MODE": "PRODUCTION", "PAYMENTS_TEST_MODE": "false"},
+            {"PAYMENTS_MODE": "live", "PAYMENTS_TEST_MODE": "false"},
+            {"PAYMENTS_MODE": "production", "PAYMENTS_TEST_MODE": "true"},
+            {"PAYMENTS_MODE": "test", "PAYMENTS_TEST_MODE": "false"},
+        )
+        for override in cases:
+            with self.subTest(override=override):
+                settings = {**VALID_SETTINGS, **override}
+                with self.assertRaises(PaymentRuntimeConfigurationError):
+                    build_payment_runtime(self.reader(settings))
+
+    def test_production_mode_cannot_be_enabled_by_credentials_or_legacy_false(self) -> None:
+        settings = dict(VALID_SETTINGS)
+        settings["PAYMENTS_TEST_MODE"] = "false"
+        with self.assertRaises(PaymentRuntimeConfigurationError):
+            build_payment_runtime(self.reader(settings))
 
     def test_all_required_payment_values_fail_closed_without_secret_leakage(self) -> None:
         required_names = (

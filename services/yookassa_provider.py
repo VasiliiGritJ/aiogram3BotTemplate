@@ -124,26 +124,28 @@ class YooKassaProvider:
         return_url: str,
         *,
         api: YooKassaApi | None = None,
-        require_test_mode: bool = False,
+        expected_test_mode: bool,
     ) -> None:
         if not isinstance(return_url, str) or not return_url.strip():
             raise ValueError("YooKassa return URL is required.")
         self._credentials = credentials
         self._return_url = return_url
         self._api = api if api is not None else SdkYooKassaApi(credentials)
-        self._require_test_mode = require_test_mode
-        self._verified_test_shop = False
+        if type(expected_test_mode) is not bool:
+            raise ValueError("Expected YooKassa shop mode must be explicit.")
+        self._expected_test_mode = expected_test_mode
+        self._verified_shop_mode = False
 
     def ensure_payment_creation_allowed(self) -> None:
-        """Fail closed unless the authenticated shop is explicitly test-only."""
-        if not self._require_test_mode or self._verified_test_shop:
+        """Verify that the authenticated shop matches the configured mode."""
+        if self._verified_shop_mode:
             return
         account = self.get_account_info()
-        if not account.is_test:
+        if account.is_test is not self._expected_test_mode:
             raise PaymentProviderPermanentError(
-                "YooKassa shop is not approved for test payments."
+                "YooKassa shop does not match the configured payment mode."
             )
-        self._verified_test_shop = True
+        self._verified_shop_mode = True
 
     def get_account_info(self) -> ProviderAccountInfo:
         """Return only the provider's authoritative test-shop flag."""
@@ -180,7 +182,7 @@ class YooKassaProvider:
             ) from error
         except Exception as error:
             raise self._normalize_sdk_error(error, creating=True) from error
-        return self._require_test_payment(self._to_provider_payment(response))
+        return self._require_expected_payment_mode(self._to_provider_payment(response))
 
     def get_payment(self, provider_payment_id: str) -> ProviderPayment:
         if not isinstance(provider_payment_id, str) or not provider_payment_id:
@@ -193,12 +195,14 @@ class YooKassaProvider:
             ) from error
         except Exception as error:
             raise self._normalize_sdk_error(error, creating=False) from error
-        return self._require_test_payment(self._to_provider_payment(response))
+        return self._require_expected_payment_mode(self._to_provider_payment(response))
 
-    def _require_test_payment(self, payment: ProviderPayment) -> ProviderPayment:
-        if self._require_test_mode and payment.is_test is not True:
+    def _require_expected_payment_mode(
+        self, payment: ProviderPayment
+    ) -> ProviderPayment:
+        if payment.is_test is not self._expected_test_mode:
             raise PaymentProviderProtocolError(
-                "YooKassa payment is not confirmed as a test payment."
+                "YooKassa payment does not match the configured payment mode."
             )
         return payment
 
