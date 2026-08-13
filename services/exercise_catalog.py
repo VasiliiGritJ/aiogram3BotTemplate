@@ -244,6 +244,8 @@ EXERCISE_DEFINITIONS = (
     _e("box_step_over", "Перешагивания через тумбу", "quads", "functional_equipment", ("gym", "functional_gym", "street", "home"), "locomotion_conditioning", "timed_conditioning", "box_step", "Используйте устойчивую тумбу и полностью ставьте стопу на поверхность.", secondary=("glutes", "calves")),
     _e("bear_crawl", "Медвежья ходьба", "core", "bodyweight", ("gym", "functional_gym", "street", "home"), "locomotion_conditioning", "distance_other", "ground_locomotion", "Двигайтесь небольшими шагами, удерживая таз на одном уровне.", secondary=("shoulders", "quads")),
     _e("mountain_climber", "Бег в упоре с подтягиванием коленей", "core", "bodyweight", ("gym", "functional_gym", "street", "home"), "locomotion_conditioning", "timed_conditioning", "ground_conditioning", "Сохраняйте плечи над ладонями и не поднимайте таз."),
+    _e("prone_y_raise", "Подъёмы рук лёжа в форме буквы Y", "back", "bodyweight", ("gym", "functional_gym", "street", "home"), "horizontal_pull", "bodyweight_reps", "prone_upper_back", "Лягте на живот и плавно сводите лопатки, не поднимая плечи к ушам.", secondary=("shoulders",)),
+    _e("prone_reverse_snow_angel", "Обратные снежные ангелы лёжа", "back", "bodyweight", ("gym", "functional_gym", "street", "home"), "vertical_pull", "bodyweight_reps", "prone_upper_back_vertical", "Лягте на живот и плавно проведите прямыми руками вдоль корпуса, сводя лопатки.", secondary=("shoulders",)),
 )
 
 

@@ -18,18 +18,19 @@ from db.models import (
     WorkoutTemplateExercise,
 )
 from services.workout_plans import (
+    DURATION_EXERCISE_BUDGETS,
     EXERCISE_DEFINITIONS,
     EXERCISE_ALTERNATIVES,
     TEMPLATE_DEFINITIONS,
     FitnessProfileRequiredError,
     LIMITATIONS_NOTICE,
-    WorkoutPlanNotReadyError,
     assign_workout_plan,
     ensure_workout_catalog,
     format_workout_plan,
     format_workout_plan_preview,
     get_assigned_workout_plan,
     normalize_profile,
+    generate_program,
 )
 
 
@@ -86,7 +87,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(len(EXERCISE_DEFINITIONS), first.exercises)
-        self.assertEqual(len(TEMPLATE_DEFINITIONS), first.templates)
+        self.assertEqual(len(TEMPLATE_DEFINITIONS) + 1, first.templates)
         self.assertEqual(80, first.template_days)
         self.assertEqual(400, first.template_exercises)
 
@@ -117,10 +118,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
             plan = session.get(UserWorkoutPlan, result.plan.id)
             template = session.get(WorkoutTemplate, plan.template_id)
 
-        self.assertEqual(
-            "v2_fat_loss_some_experience_2_short_gym",
-            template.code,
-        )
+        self.assertEqual("v3_adaptive_rule_based", template.code)
         self.assertEqual(2, len(result.plan.days))
         self.assertTrue(
             all(len(day.exercises) == 4 for day in result.plan.days)
@@ -139,10 +137,10 @@ class WorkoutPlanServiceTests(unittest.TestCase):
 
         self.assertEqual("muscle_gain", normalized.goal)
         self.assertEqual("beginner", normalized.experience_level)
-        self.assertEqual(4, normalized.workouts_per_week)
-        self.assertEqual("short", normalized.duration_bucket)
+        self.assertEqual(6, normalized.workouts_per_week)
+        self.assertEqual(45, normalized.session_duration_minutes)
         self.assertEqual("gym", normalized.equipment)
-        self.assertEqual(4, len(normalized.fallback_notes))
+        self.assertEqual(5, len(normalized.fallback_notes))
 
     def test_limitations_do_not_filter_controlled_exercises(self) -> None:
         with self.database() as session:
@@ -260,37 +258,33 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         self.assertNotIn("Подсказка:", preview)
         self.assertNotIn("×", preview)
 
-    def test_experienced_profile_uses_deterministic_fallback(self) -> None:
+    def test_advanced_profile_uses_canonical_generation(self) -> None:
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             profile.experience_level = "advanced"
             session.commit()
 
         result = assign_workout_plan(self.user_id, self.database)
-        self.assertIn("ближайший доступный шаблон", " ".join(result.fallback_notes))
+        self.assertTrue(result.plan.days)
 
-    def test_strength_waits_for_stage_seven_c_instead_of_wrong_plan(self) -> None:
+    def test_strength_generates_instead_of_wrong_legacy_plan(self) -> None:
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             profile.goal = "strength"
             profile.training_environment = "gym"
             session.commit()
 
-        with self.assertRaises(WorkoutPlanNotReadyError):
-            assign_workout_plan(self.user_id, self.database)
+        result = assign_workout_plan(self.user_id, self.database)
+        self.assertTrue(result.plan.days)
 
-        with self.database() as session:
-            count = session.scalar(select(func.count(UserWorkoutPlan.id)))
-        self.assertEqual(0, count)
-
-    def test_new_non_gym_profile_waits_for_stage_seven_c(self) -> None:
+    def test_new_non_gym_profile_generates(self) -> None:
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             profile.training_environment = "home"
             session.commit()
 
-        with self.assertRaises(WorkoutPlanNotReadyError):
-            assign_workout_plan(self.user_id, self.database)
+        result = assign_workout_plan(self.user_id, self.database)
+        self.assertTrue(result.plan.days)
 
     def test_longest_supported_plan_fits_one_telegram_message(self) -> None:
         with self.database() as session:
@@ -322,6 +316,144 @@ class WorkoutPlanServiceTests(unittest.TestCase):
 
         self.assertEqual(80, day_count)
         self.assertEqual(400, item_count)
+
+    def test_all_stage_seven_profile_combinations_generate_valid_deterministic_programs(self) -> None:
+        definitions = {item.code: item for item in EXERCISE_DEFINITIONS}
+        count = 0
+        for goal in ("muscle_gain", "strength", "fat_loss"):
+            for experience in ("beginner", "intermediate", "advanced"):
+                for environment in ("gym", "functional_gym", "street", "home"):
+                    for frequency in (2, 3, 4, 5, 6):
+                        for duration in (30, 45, 60, 90):
+                            with self.subTest(
+                                goal=goal,
+                                experience=experience,
+                                environment=environment,
+                                frequency=frequency,
+                                duration=duration,
+                            ):
+                                profile = self.make_profile(
+                                    self.user_id,
+                                    goal=goal,
+                                    experience_level=experience,
+                                    training_environment=environment,
+                                    workouts_per_week=frequency,
+                                    session_duration_minutes=duration,
+                                )
+                                normalized = normalize_profile(profile)
+                                first = generate_program(normalized)
+                                second = generate_program(normalized)
+                                self.assertEqual(first, second)
+                                self.assertEqual(frequency, len(first.days))
+                                for day in first.days:
+                                    self.assertTrue(day.exercises)
+                                    self.assertLessEqual(
+                                        len(day.exercises),
+                                        DURATION_EXERCISE_BUDGETS[duration],
+                                    )
+                                    codes = [item.exercise_code for item in day.exercises]
+                                    self.assertEqual(len(codes), len(set(codes)))
+                                    for code in codes:
+                                        definition = definitions[code]
+                                        self.assertIn(environment, definition.environments)
+                                        self.assertIn(experience, definition.experience_levels)
+                                        if environment == "home":
+                                            self.assertEqual("bodyweight", definition.equipment)
+                                count += 1
+        self.assertEqual(720, count)
+
+    def test_goal_and_experience_selection_priorities(self) -> None:
+        beginner = generate_program(normalize_profile(self.make_profile(
+            self.user_id, training_environment="gym", goal="muscle_gain",
+            experience_level="beginner", workouts_per_week=3,
+            session_duration_minutes=60,
+        )))
+        advanced = generate_program(normalize_profile(self.make_profile(
+            self.user_id, training_environment="gym", goal="muscle_gain",
+            experience_level="advanced", workouts_per_week=3,
+            session_duration_minutes=60,
+        )))
+        strength = generate_program(normalize_profile(self.make_profile(
+            self.user_id, training_environment="gym", goal="strength",
+            experience_level="advanced", workouts_per_week=3,
+            session_duration_minutes=60,
+        )))
+        lookup = {item.code: item for item in EXERCISE_DEFINITIONS}
+        beginner_equipment = [lookup[item.exercise_code].equipment for day in beginner.days for item in day.exercises]
+        advanced_equipment = [lookup[item.exercise_code].equipment for day in advanced.days for item in day.exercises]
+        strength_main = [
+            item for day in strength.days for item in day.exercises
+            if item.reps_max <= 6
+        ]
+        strength_codes = {
+            item.exercise_code for day in strength.days for item in day.exercises
+        }
+        self.assertGreater(
+            sum(value in {"machine", "cable"} for value in beginner_equipment),
+            sum(value in {"machine", "cable"} for value in advanced_equipment),
+        )
+        self.assertTrue(any(value == "barbell" for value in advanced_equipment))
+        self.assertTrue(strength_main)
+        self.assertTrue(
+            {"barbell_back_squat", "barbell_bench_press", "barbell_deadlift"}
+            .issubset(strength_codes)
+        )
+
+    def test_fat_loss_street_and_home_rules_remain_resistance_based(self) -> None:
+        lookup = {item.code: item for item in EXERCISE_DEFINITIONS}
+        for environment in ("street", "home"):
+            with self.subTest(environment=environment):
+                program = generate_program(normalize_profile(self.make_profile(
+                    self.user_id,
+                    goal="fat_loss",
+                    experience_level="beginner",
+                    training_environment=environment,
+                    workouts_per_week=3,
+                    session_duration_minutes=60,
+                )))
+                for day in program.days:
+                    patterns = {
+                        lookup[item.exercise_code].movement_pattern
+                        for item in day.exercises
+                    }
+                    self.assertTrue(
+                        patterns & {"squat", "hinge", "horizontal_push", "horizontal_pull"}
+                    )
+                    for item in day.exercises:
+                        definition = lookup[item.exercise_code]
+                        self.assertIn(environment, definition.environments)
+                        if environment == "home":
+                            self.assertEqual("bodyweight", definition.equipment)
+
+    def test_duration_preserves_main_priority_and_changes_volume(self) -> None:
+        short = generate_program(normalize_profile(self.make_profile(
+            self.user_id, training_environment="gym", session_duration_minutes=30,
+        )))
+        long = generate_program(normalize_profile(self.make_profile(
+            self.user_id, training_environment="gym", session_duration_minutes=90,
+        )))
+        self.assertEqual(short.days[0].exercises[0].exercise_code, long.days[0].exercises[0].exercise_code)
+        self.assertLess(len(short.days[0].exercises), len(long.days[0].exercises))
+
+    def test_high_frequency_home_plan_persists_and_is_execution_readable(self) -> None:
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+            profile.goal = "strength"
+            profile.experience_level = "advanced"
+            profile.training_environment = "home"
+            profile.workouts_per_week = 6
+            profile.session_duration_minutes = 90
+            session.commit()
+
+        assigned = assign_workout_plan(self.user_id, self.database)
+        loaded = get_assigned_workout_plan(self.user_id, self.database)
+
+        self.assertEqual(6, len(assigned.plan.days))
+        self.assertEqual(assigned.plan, loaded)
+        with self.database() as session:
+            stored = session.scalars(select(UserWorkoutPlanExercise)).all()
+        self.assertTrue(stored)
+        self.assertTrue(all(item.sets >= 1 for item in stored))
 
 
 if __name__ == "__main__":

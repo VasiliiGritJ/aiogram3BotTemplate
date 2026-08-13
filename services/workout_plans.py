@@ -29,24 +29,35 @@ from services.exercise_catalog import (
 )
 
 
-CATALOG_VERSION = 2
+CATALOG_VERSION = 3
 DEFAULT_GOAL = "muscle_gain"
 DEFAULT_EXPERIENCE = "beginner"
 DEFAULT_EQUIPMENT = "gym"
+ADAPTIVE_TEMPLATE_CODE = "v3_adaptive_rule_based"
+# Legacy controlled templates are retained for existing assigned-plan references.
+# New Stage 7C assignments use the adaptive rule-based program below.
 MAX_TEMPLATE_WORKOUTS_PER_WEEK = 4
 SHORT_SESSION_MAX_MINUTES = 45
 
-SUPPORTED_GOALS = {"muscle_gain", "fat_loss"}
-SUPPORTED_EXPERIENCE = {"beginner", "some_experience"}
+SUPPORTED_GOALS = {"muscle_gain", "strength", "fat_loss"}
+SUPPORTED_EXPERIENCE = {"beginner", "intermediate", "advanced"}
+LEGACY_TEMPLATE_GOALS = {"muscle_gain", "fat_loss"}
+LEGACY_TEMPLATE_EXPERIENCE = {"beginner", "some_experience"}
+SUPPORTED_ENVIRONMENTS = {"gym", "functional_gym", "street", "home"}
+SUPPORTED_FREQUENCIES = {2, 3, 4, 5, 6}
+SUPPORTED_DURATIONS = {30, 45, 60, 90}
+DURATION_EXERCISE_BUDGETS = {30: 3, 45: 4, 60: 5, 90: 6}
 
 GOAL_NAMES = {
-    "muscle_gain": "Базовая силовая программа",
-    "fat_loss": "Общая физическая подготовка",
+    "muscle_gain": "Набор мышечной массы",
+    "strength": "Силовая программа",
+    "fat_loss": "Снижение процента жира",
 }
 EXPERIENCE_NAMES = {
     "beginner": "новичок",
+    "intermediate": "средний",
+    "advanced": "продвинутый",
     "some_experience": "с опытом",
-    "experienced": "опытный",
 }
 
 class WorkoutPlanError(RuntimeError):
@@ -97,8 +108,9 @@ class TemplateDefinition:
 class NormalizedProfile:
     goal: str
     experience_level: str
+    training_environment: str
     workouts_per_week: int
-    duration_bucket: str
+    session_duration_minutes: int
     equipment: str
     has_limitations: bool
     fallback_notes: tuple[str, ...]
@@ -143,6 +155,28 @@ class CatalogStats:
     templates: int
     template_days: int
     template_exercises: int
+
+
+@dataclass(frozen=True)
+class GeneratedExerciseDefinition:
+    exercise_code: str
+    sets: int
+    reps_min: int
+    reps_max: int
+    rest_seconds: int
+
+
+@dataclass(frozen=True)
+class GeneratedDayDefinition:
+    day_number: int
+    title: str
+    exercises: tuple[GeneratedExerciseDefinition, ...]
+
+
+@dataclass(frozen=True)
+class GeneratedProgramDefinition:
+    name: str
+    days: tuple[GeneratedDayDefinition, ...]
 
 
 DAY_BLUEPRINTS = {
@@ -259,8 +293,8 @@ def _exercise_targets(
 def build_template_definitions() -> tuple[TemplateDefinition, ...]:
     """Build a finite, versioned matrix from controlled day blueprints."""
     definitions: list[TemplateDefinition] = []
-    for goal in sorted(SUPPORTED_GOALS):
-        for experience_level in sorted(SUPPORTED_EXPERIENCE):
+    for goal in sorted(LEGACY_TEMPLATE_GOALS):
+        for experience_level in sorted(LEGACY_TEMPLATE_EXPERIENCE):
             sets, reps_min, reps_max, rest_seconds = _exercise_targets(
                 goal,
                 experience_level,
@@ -322,15 +356,10 @@ def _has_limitations(value: str | None) -> bool:
 
 
 def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
-    """Map persisted onboarding values to the finite template matrix."""
+    """Validate Stage 7 profiles and preserve safe legacy defaults."""
     fallback_notes: list[str] = []
 
     goal = profile.goal
-    if goal == "strength":
-        raise WorkoutPlanNotReadyError(
-            "Программа для цели «Стать сильнее» появится на следующем этапе. "
-            "Ваш профиль сохранён."
-        )
     if goal not in SUPPORTED_GOALS:
         goal = DEFAULT_GOAL
         fallback_notes.append(
@@ -338,12 +367,12 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
         )
 
     experience = profile.experience_level
-    if experience in {"some_experience", "intermediate"}:
-        experience = "some_experience"
-    elif experience in {"experienced", "advanced"}:
-        experience = "some_experience"
+    if experience == "some_experience":
+        experience = "intermediate"
+    elif experience == "experienced":
+        experience = "advanced"
         fallback_notes.append(
-            "Для опытного уровня пока использован ближайший доступный шаблон с опытом."
+            "Legacy-уровень опыта приведён к каноническому значению."
         )
     elif experience not in SUPPORTED_EXPERIENCE:
         experience = DEFAULT_EXPERIENCE
@@ -354,38 +383,36 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
     try:
         requested_workouts = int(profile.workouts_per_week)
     except (TypeError, ValueError):
-        requested_workouts = 1
+        requested_workouts = 3
     training_environment = getattr(profile, "training_environment", None)
-    if training_environment not in {None, "gym"}:
-        raise WorkoutPlanNotReadyError(
-            "Программа для выбранного места тренировок появится на следующем "
-            "этапе. Ваш профиль сохранён."
-        )
-    if training_environment is not None and requested_workouts > 4:
-        raise WorkoutPlanNotReadyError(
-            "Программа на 5–6 тренировок в неделю появится на следующем этапе. "
-            "Ваш профиль сохранён."
-        )
-    workouts_per_week = min(
-        max(requested_workouts, 1),
-        MAX_TEMPLATE_WORKOUTS_PER_WEEK,
-    )
-    if workouts_per_week != requested_workouts:
+    if training_environment is None:
+        training_environment = "gym"
         fallback_notes.append(
-            f"Для первой версии назначено {workouts_per_week} тренировок "
-            "в неделю."
+            "Место тренировок не было указано в legacy-профиле: выбран "
+            "тренажёрный зал."
+        )
+    elif training_environment not in SUPPORTED_ENVIRONMENTS:
+        training_environment = "gym"
+        fallback_notes.append("Место тренировок не распознано: выбран тренажёрный зал.")
+    workouts_per_week = requested_workouts
+    if workouts_per_week not in SUPPORTED_FREQUENCIES:
+        workouts_per_week = min(SUPPORTED_FREQUENCIES, key=lambda value: abs(value - requested_workouts))
+        fallback_notes.append(
+            f"Частота тренировок приведена к {workouts_per_week} р./нед."
         )
 
     try:
         duration = int(profile.session_duration_minutes)
     except (TypeError, ValueError):
-        duration = SHORT_SESSION_MAX_MINUTES
+        duration = 45
         fallback_notes.append(
             "Длительность не распознана — выбран короткий формат."
         )
-    duration_bucket = (
-        "short" if duration <= SHORT_SESSION_MAX_MINUTES else "standard"
-    )
+    if duration not in SUPPORTED_DURATIONS:
+        duration = min(SUPPORTED_DURATIONS, key=lambda value: abs(value - duration))
+        fallback_notes.append(
+            f"Длительность приведена к {duration} мин."
+        )
     has_limitations = _has_limitations(profile.limitations)
     if has_limitations:
         fallback_notes.append(LIMITATIONS_NOTICE)
@@ -393,9 +420,10 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
     return NormalizedProfile(
         goal=goal,
         experience_level=experience,
+        training_environment=training_environment,
         workouts_per_week=workouts_per_week,
-        duration_bucket=duration_bucket,
-        equipment=DEFAULT_EQUIPMENT,
+        session_duration_minutes=duration,
+        equipment=training_environment,
         has_limitations=has_limitations,
         fallback_notes=tuple(fallback_notes),
     )
@@ -404,7 +432,7 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
 def _profile_signature(profile: NormalizedProfile) -> str:
     payload = {
         "catalog_version": CATALOG_VERSION,
-        "duration_bucket": profile.duration_bucket,
+        "session_duration_minutes": profile.session_duration_minutes,
         "equipment": profile.equipment,
         "experience_level": profile.experience_level,
         "goal": profile.goal,
@@ -413,6 +441,185 @@ def _profile_signature(profile: NormalizedProfile) -> str:
     }
     serialized = json.dumps(payload, ensure_ascii=True, sort_keys=True)
     return sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _day_slots(goal: str, workouts_per_week: int, day_number: int) -> tuple[str, ...]:
+    """Return deterministic movement priorities for one weekly training day."""
+    full_body = (
+        ("squat", "horizontal_push", "horizontal_pull", "hinge", "core"),
+        ("hinge", "vertical_push", "vertical_pull", "squat", "core"),
+        ("squat", "horizontal_pull", "horizontal_push", "hinge", "core"),
+    )
+    upper = ("horizontal_push", "horizontal_pull", "vertical_push", "vertical_pull", "isolation", "core")
+    lower = ("squat", "hinge", "isolation", "squat", "core", "isolation")
+    push = ("horizontal_push", "vertical_push", "isolation", "isolation", "core")
+    pull = ("vertical_pull", "horizontal_pull", "hinge", "isolation", "core")
+    legs = ("squat", "hinge", "squat", "isolation", "core")
+    if goal == "strength" and workouts_per_week == 3:
+        return (
+            ("squat", "horizontal_push", "horizontal_pull", "core"),
+            ("horizontal_push", "hinge", "vertical_pull", "core"),
+            ("hinge", "squat", "vertical_push", "horizontal_pull", "core"),
+        )[day_number - 1]
+    if workouts_per_week <= 3:
+        return full_body[(day_number - 1) % len(full_body)]
+    if workouts_per_week == 4:
+        return (upper, lower, upper, lower)[day_number - 1]
+    if workouts_per_week == 5:
+        return (upper, lower, push, pull, legs)[day_number - 1]
+    return (push, pull, legs, push, pull, legs)[day_number - 1]
+
+
+def _exercise_priority(
+    definition: ExerciseDefinition,
+    profile: NormalizedProfile,
+    slot: str,
+) -> tuple[int, int, str]:
+    """Sort candidates by product policy, then stable catalog code."""
+    equipment = definition.equipment
+    score = 0
+    if profile.training_environment == "home" and equipment != "bodyweight":
+        return (99, 99, definition.code)
+    if profile.experience_level == "beginner":
+        score += 0 if equipment in {"machine", "cable", "bodyweight"} else 3
+        if equipment == "barbell" and slot in {"squat", "hinge"}:
+            score += 10
+    elif profile.experience_level == "advanced":
+        score += 0 if equipment in {"barbell", "dumbbell", "bodyweight"} else 2
+    else:
+        score += 0 if equipment in {"dumbbell", "barbell", "cable", "bodyweight"} else 1
+    if profile.goal == "strength" and slot in {
+        "squat", "hinge", "horizontal_push",
+    }:
+        score += 0 if equipment == "barbell" and profile.experience_level != "beginner" else 2
+    if definition.movement_pattern == "locomotion_conditioning":
+        score += 8
+    return (score, 0 if definition.primary_muscle_group not in {"biceps", "triceps"} else 1, definition.code)
+
+
+def _choose_exercise(
+    profile: NormalizedProfile,
+    slot: str,
+    used_codes: set[str],
+) -> ExerciseDefinition:
+    candidates = [
+        definition
+        for definition in EXERCISE_DEFINITIONS
+        if profile.training_environment in definition.environments
+        and profile.experience_level in definition.experience_levels
+        and definition.movement_pattern == slot
+        and definition.code not in used_codes
+        and not (
+            profile.training_environment == "home"
+            and definition.equipment != "bodyweight"
+        )
+    ]
+    if not candidates and slot == "vertical_pull":
+        candidates = [
+            definition
+            for definition in EXERCISE_DEFINITIONS
+            if profile.training_environment in definition.environments
+            and profile.experience_level in definition.experience_levels
+            and definition.movement_pattern == "horizontal_pull"
+            and definition.code not in used_codes
+            and not (
+                profile.training_environment == "home"
+                and definition.equipment != "bodyweight"
+            )
+        ]
+    if not candidates and slot == "vertical_push":
+        candidates = [
+            definition
+            for definition in EXERCISE_DEFINITIONS
+            if profile.training_environment in definition.environments
+            and profile.experience_level in definition.experience_levels
+            and definition.movement_pattern == "horizontal_push"
+            and definition.code not in used_codes
+            and not (
+                profile.training_environment == "home"
+                and definition.equipment != "bodyweight"
+            )
+        ]
+    if not candidates:
+        candidates = [
+            definition
+            for definition in EXERCISE_DEFINITIONS
+            if profile.training_environment in definition.environments
+            and profile.experience_level in definition.experience_levels
+            and definition.code not in used_codes
+            and definition.movement_pattern
+            in {
+                "squat", "hinge", "horizontal_push", "vertical_push",
+                "horizontal_pull", "vertical_pull", "core",
+            }
+            and not (
+                profile.training_environment == "home"
+                and definition.equipment != "bodyweight"
+            )
+        ]
+    if not candidates:
+        raise WorkoutCatalogError(
+            f"No compatible exercise for {profile.training_environment}/{slot}"
+        )
+    return min(candidates, key=lambda definition: _exercise_priority(definition, profile, slot))
+
+
+def _prescription(
+    profile: NormalizedProfile,
+    definition: ExerciseDefinition,
+    position: int,
+) -> tuple[int, int, int, int]:
+    main = position == 1
+    bodyweight = definition.progression_type == "bodyweight_reps"
+    if profile.goal == "strength":
+        if main and definition.movement_pattern in {"squat", "hinge", "horizontal_push"}:
+            if profile.experience_level == "beginner":
+                return 3, 5, 8, 120
+            return 4, 3, 6, 180
+        return (3 if main else 2), (6 if main else 8), (10 if main else 12), (90 if main else 60)
+    if profile.goal == "fat_loss":
+        return (3 if main else 2), (8 if main else 10), (12 if main else 15), (75 if main else 45)
+    if bodyweight:
+        return (3 if main else 2), (8 if main else 10), (15 if main else 20), (75 if main else 45)
+    return (3 if main else 2), (6 if main else 8), (12 if main else 15), (90 if main else 60)
+
+
+def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
+    """Build a deterministic, taxonomy-filtered prescription for one profile."""
+    days: list[GeneratedDayDefinition] = []
+    budget = DURATION_EXERCISE_BUDGETS[profile.session_duration_minutes]
+    for day_number in range(1, profile.workouts_per_week + 1):
+        used_codes: set[str] = set()
+        exercises: list[GeneratedExerciseDefinition] = []
+        for slot in _day_slots(profile.goal, profile.workouts_per_week, day_number):
+            if len(exercises) >= budget:
+                break
+            definition = _choose_exercise(profile, slot, used_codes)
+            used_codes.add(definition.code)
+            sets, reps_min, reps_max, rest_seconds = _prescription(
+                profile, definition, len(exercises)
+            )
+            exercises.append(
+                GeneratedExerciseDefinition(
+                    definition.code, sets, reps_min, reps_max, rest_seconds
+                )
+            )
+        if not exercises:
+            raise WorkoutCatalogError("Generated workout day is empty.")
+        days.append(
+            GeneratedDayDefinition(
+                day_number=day_number,
+                title=f"Тренировка {day_number}",
+                exercises=tuple(exercises),
+            )
+        )
+    return GeneratedProgramDefinition(
+        name=(
+            f"{GOAL_NAMES[profile.goal]}, {EXPERIENCE_NAMES[profile.experience_level]}, "
+            f"{profile.training_environment}, {profile.workouts_per_week} р./нед."
+        ),
+        days=tuple(days),
+    )
 
 
 def _ensure_catalog_in_session(session: Session) -> CatalogStats:
@@ -515,6 +722,22 @@ def _ensure_catalog_in_session(session: Session) -> CatalogStats:
                     )
                 )
 
+    adaptive_template = session.scalar(
+        select(WorkoutTemplate).where(WorkoutTemplate.code == ADAPTIVE_TEMPLATE_CODE)
+    )
+    if adaptive_template is None:
+        adaptive_template = WorkoutTemplate(
+            code=ADAPTIVE_TEMPLATE_CODE,
+            name="Адаптивная программа Stage 7",
+            goal="muscle_gain",
+            experience_level="beginner",
+            workouts_per_week=1,
+            duration_bucket="short",
+            equipment="adaptive",
+        )
+        session.add(adaptive_template)
+        session.flush()
+
     return CatalogStats(
         exercises=session.scalar(select(func.count(Exercise.id))) or 0,
         templates=session.scalar(select(func.count(WorkoutTemplate.id))) or 0,
@@ -614,12 +837,7 @@ def assign_workout_plan(
             signature = _profile_signature(normalized)
             _ensure_catalog_in_session(session)
 
-            template_code = _template_code(
-                normalized.goal,
-                normalized.experience_level,
-                normalized.workouts_per_week,
-                normalized.duration_bucket,
-            )
+            template_code = ADAPTIVE_TEMPLATE_CODE
             template = session.scalar(
                 select(WorkoutTemplate).where(
                     WorkoutTemplate.code == template_code
@@ -646,30 +864,20 @@ def assign_workout_plan(
                     fallback_notes=normalized.fallback_notes,
                 )
 
-            selected_days: list[
-                tuple[WorkoutTemplateDay, list[tuple[WorkoutTemplateExercise, Exercise]]]
-            ] = []
-            template_days = session.scalars(
-                select(WorkoutTemplateDay)
-                .where(WorkoutTemplateDay.template_id == template.id)
-                .order_by(WorkoutTemplateDay.day_number)
-            ).all()
-            for template_day in template_days:
-                rows = session.execute(
-                    select(WorkoutTemplateExercise, Exercise)
-                    .join(
-                        Exercise,
-                        Exercise.id == WorkoutTemplateExercise.exercise_id,
-                    )
-                    .where(
-                        WorkoutTemplateExercise.template_day_id == template_day.id
-                    )
-                    .order_by(WorkoutTemplateExercise.exercise_order)
+            generated = generate_program(normalized)
+            codes = {
+                item.exercise_code
+                for day in generated.days
+                for item in day.exercises
+            }
+            exercises_by_code = {
+                exercise.code: exercise
+                for exercise in session.scalars(
+                    select(Exercise).where(Exercise.code.in_(codes))
                 ).all()
-                selected_days.append((template_day, list(rows)))
-
-            if not selected_days:
-                raise WorkoutCatalogError("Controlled template has no days.")
+            }
+            if len(exercises_by_code) != len(codes):
+                raise WorkoutCatalogError("Generated plan references unknown exercise.")
 
             if existing is not None:
                 session.delete(existing)
@@ -685,18 +893,19 @@ def assign_workout_plan(
             )
             session.add(plan)
             session.flush()
-            for template_day, selected_exercises in selected_days:
+            for generated_day in generated.days:
                 plan_day = UserWorkoutPlanDay(
                     plan_id=plan.id,
-                    day_number=template_day.day_number,
-                    title=template_day.title,
+                    day_number=generated_day.day_number,
+                    title=generated_day.title,
                 )
                 session.add(plan_day)
                 session.flush()
-                for exercise_order, (item, exercise) in enumerate(
-                    selected_exercises,
+                for exercise_order, item in enumerate(
+                    generated_day.exercises,
                     start=1,
                 ):
+                    exercise = exercises_by_code[item.exercise_code]
                     session.add(
                         UserWorkoutPlanExercise(
                             plan_day_id=plan_day.id,
