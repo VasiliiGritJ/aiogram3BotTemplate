@@ -11,7 +11,16 @@ from enum import Enum
 
 WEIGHT_QUANTUM_KG = Decimal("0.5")
 WEIGHT_STEP_RATIO = Decimal("0.05")
+STRENGTH_WEIGHT_STEP_RATIO = Decimal("0.025")
 MAX_AUTOMATIC_WEIGHT_CHANGE_RATIO = Decimal("0.10")
+
+
+class ProgressionStrategy(str, Enum):
+    """Persisted protocol selected for one exercise prescription."""
+
+    HYPERTROPHY_LOAD_REPS = "hypertrophy_load_reps"
+    STRENGTH_LOAD_REPS = "strength_load_reps"
+    BODYWEIGHT_REPS = "bodyweight_reps"
 
 
 class ProgressionReason(str, Enum):
@@ -28,6 +37,12 @@ class ProgressionReason(str, Enum):
     BODYWEIGHT_HOLD_AT_UPPER = "bodyweight_hold_at_upper"
     BODYWEIGHT_ADD_REPS = "bodyweight_add_reps"
     BODYWEIGHT_RECOVER_RANGE = "bodyweight_recover_range"
+    BODYWEIGHT_ADVANCE_VARIATION = "bodyweight_advance_variation"
+    STRENGTH_INCREASE_WEIGHT = "strength_increase_weight"
+    STRENGTH_HOLD_ADD_REPS = "strength_hold_add_reps"
+    STRENGTH_HOLD_RECOVER_RANGE = "strength_hold_recover_range"
+    STRENGTH_DELOAD = "strength_deload"
+    STRENGTH_HOLD_NO_SAFE_WEIGHT_STEP = "strength_hold_no_safe_weight_step"
 
 
 @dataclass(frozen=True)
@@ -68,9 +83,14 @@ class ProgressionRecommendation:
     suggested_reps: tuple[int, ...] | None
     previous_weights_kg: tuple[Decimal, ...] = ()
     previous_reps: tuple[int, ...] = ()
+    strategy: ProgressionStrategy = ProgressionStrategy.HYPERTROPHY_LOAD_REPS
+    suggested_exercise_code: str | None = None
 
 
-def calculate_weight_step(weight_kg: Decimal) -> Decimal | None:
+def calculate_weight_step(
+    weight_kg: Decimal,
+    ratio: Decimal = WEIGHT_STEP_RATIO,
+) -> Decimal | None:
     """Return the conservative generic load step or ``None`` when unsafe.
 
     This is an equipment-agnostic technical MVP policy, not a claim about a
@@ -82,7 +102,7 @@ def calculate_weight_step(weight_kg: Decimal) -> Decimal | None:
         return None
 
     rounded_relative_step = (
-        (weight_kg * WEIGHT_STEP_RATIO / WEIGHT_QUANTUM_KG)
+        (weight_kg * ratio / WEIGHT_QUANTUM_KG)
         .to_integral_value(rounding=ROUND_FLOOR)
         * WEIGHT_QUANTUM_KG
     )
@@ -95,6 +115,9 @@ def calculate_weight_step(weight_kg: Decimal) -> Decimal | None:
 def calculate_progression(
     target: ProgressionTarget,
     previous_performance: PreviousExercisePerformance | None,
+    strategy: ProgressionStrategy = ProgressionStrategy.HYPERTROPHY_LOAD_REPS,
+    *,
+    bodyweight_successor_code: str | None = None,
 ) -> ProgressionRecommendation:
     """Calculate one deterministic next-exercise recommendation.
 
@@ -103,12 +126,14 @@ def calculate_progression(
     later read-only service.
     """
     _require_valid_target(target)
+    if not isinstance(strategy, ProgressionStrategy):
+        raise ValueError("Unsupported progression strategy.")
     if previous_performance is None:
-        return _recommendation(ProgressionReason.NO_HISTORY)
+        return _recommendation(ProgressionReason.NO_HISTORY, strategy=strategy)
 
     normalized = _normalize_previous_performance(target, previous_performance)
     if normalized is None:
-        return _recommendation(ProgressionReason.INSUFFICIENT_DATA)
+        return _recommendation(ProgressionReason.INSUFFICIENT_DATA, strategy=strategy)
     weights, reps = normalized
 
     if len(set(weights)) != 1:
@@ -116,11 +141,42 @@ def calculate_progression(
             ProgressionReason.MIXED_WEIGHTS_HOLD,
             previous_weights=weights,
             previous_reps=reps,
+            strategy=strategy,
         )
 
     weight = weights[0]
+    if strategy == ProgressionStrategy.BODYWEIGHT_REPS:
+        if weight != 0:
+            return _recommendation(
+                ProgressionReason.INSUFFICIENT_DATA,
+                previous_weights=weights,
+                previous_reps=reps,
+                strategy=strategy,
+            )
+        return _bodyweight_recommendation(
+            target,
+            reps,
+            weight,
+            strategy=strategy,
+            successor_code=bodyweight_successor_code,
+        )
     if weight == 0:
-        return _bodyweight_recommendation(target, reps, weight)
+        if strategy == ProgressionStrategy.STRENGTH_LOAD_REPS:
+            return _recommendation(
+                ProgressionReason.INSUFFICIENT_DATA,
+                previous_weights=weights,
+                previous_reps=reps,
+                strategy=strategy,
+            )
+        # Backward compatibility for legacy snapshots without a strategy.
+        return _bodyweight_recommendation(
+            target,
+            reps,
+            weight,
+            strategy=strategy,
+        )
+    if strategy == ProgressionStrategy.STRENGTH_LOAD_REPS:
+        return _strength_recommendation(target, weights, reps, weight)
 
     if min(reps) >= target.reps_max:
         return _weight_change_recommendation(
@@ -157,14 +213,28 @@ def _bodyweight_recommendation(
     target: ProgressionTarget,
     reps: tuple[int, ...],
     weight: Decimal,
+    *,
+    strategy: ProgressionStrategy,
+    successor_code: str | None = None,
 ) -> ProgressionRecommendation:
     if min(reps) >= target.reps_max:
+        if successor_code:
+            return _recommendation(
+                ProgressionReason.BODYWEIGHT_ADVANCE_VARIATION,
+                suggested_weight=weight,
+                suggested_reps=(target.reps_min,) * target.target_sets,
+                previous_weights=(weight,) * target.target_sets,
+                previous_reps=reps,
+                strategy=strategy,
+                suggested_exercise_code=successor_code,
+            )
         return _recommendation(
             ProgressionReason.BODYWEIGHT_HOLD_AT_UPPER,
             suggested_weight=weight,
             suggested_reps=(target.reps_max,) * target.target_sets,
             previous_weights=(weight,) * target.target_sets,
             previous_reps=reps,
+            strategy=strategy,
         )
     if min(reps) >= target.reps_min:
         return _recommendation(
@@ -173,6 +243,7 @@ def _bodyweight_recommendation(
             suggested_reps=tuple(min(target.reps_max, value + 1) for value in reps),
             previous_weights=(weight,) * target.target_sets,
             previous_reps=reps,
+            strategy=strategy,
         )
     return _recommendation(
         ProgressionReason.BODYWEIGHT_RECOVER_RANGE,
@@ -180,6 +251,72 @@ def _bodyweight_recommendation(
         suggested_reps=tuple(_clamp_reps(value, target) for value in reps),
         previous_weights=(weight,) * target.target_sets,
         previous_reps=reps,
+        strategy=strategy,
+    )
+
+
+def _strength_recommendation(
+    target: ProgressionTarget,
+    weights: tuple[Decimal, ...],
+    reps: tuple[int, ...],
+    weight: Decimal,
+) -> ProgressionRecommendation:
+    strategy = ProgressionStrategy.STRENGTH_LOAD_REPS
+    if min(reps) >= target.reps_max:
+        step = calculate_weight_step(weight, STRENGTH_WEIGHT_STEP_RATIO)
+        if step is None:
+            return _recommendation(
+                ProgressionReason.STRENGTH_HOLD_NO_SAFE_WEIGHT_STEP,
+                suggested_weight=weight,
+                suggested_reps=(target.reps_max,) * target.target_sets,
+                previous_weights=weights,
+                previous_reps=reps,
+                strategy=strategy,
+            )
+        return _recommendation(
+            ProgressionReason.STRENGTH_INCREASE_WEIGHT,
+            suggested_weight=weight + step,
+            suggested_reps=(target.reps_min,) * target.target_sets,
+            previous_weights=weights,
+            previous_reps=reps,
+            strategy=strategy,
+        )
+    if min(reps) >= target.reps_min:
+        return _recommendation(
+            ProgressionReason.STRENGTH_HOLD_ADD_REPS,
+            suggested_weight=weight,
+            suggested_reps=tuple(min(target.reps_max, value + 1) for value in reps),
+            previous_weights=weights,
+            previous_reps=reps,
+            strategy=strategy,
+        )
+    if max(reps) >= target.reps_min:
+        return _recommendation(
+            ProgressionReason.STRENGTH_HOLD_RECOVER_RANGE,
+            suggested_weight=weight,
+            suggested_reps=tuple(_clamp_reps(value, target) for value in reps),
+            previous_weights=weights,
+            previous_reps=reps,
+            strategy=strategy,
+        )
+
+    step = calculate_weight_step(weight, STRENGTH_WEIGHT_STEP_RATIO)
+    if step is None:
+        return _recommendation(
+            ProgressionReason.STRENGTH_HOLD_NO_SAFE_WEIGHT_STEP,
+            suggested_weight=weight,
+            suggested_reps=(target.reps_min,) * target.target_sets,
+            previous_weights=weights,
+            previous_reps=reps,
+            strategy=strategy,
+        )
+    return _recommendation(
+        ProgressionReason.STRENGTH_DELOAD,
+        suggested_weight=weight - step,
+        suggested_reps=(target.reps_min,) * target.target_sets,
+        previous_weights=weights,
+        previous_reps=reps,
+        strategy=strategy,
     )
 
 
@@ -252,6 +389,8 @@ def _recommendation(
     suggested_reps: tuple[int, ...] | None = None,
     previous_weights: tuple[Decimal, ...] = (),
     previous_reps: tuple[int, ...] = (),
+    strategy: ProgressionStrategy = ProgressionStrategy.HYPERTROPHY_LOAD_REPS,
+    suggested_exercise_code: str | None = None,
 ) -> ProgressionRecommendation:
     return ProgressionRecommendation(
         reason=reason,
@@ -259,6 +398,8 @@ def _recommendation(
         suggested_reps=suggested_reps,
         previous_weights_kg=previous_weights,
         previous_reps=previous_reps,
+        strategy=strategy,
+        suggested_exercise_code=suggested_exercise_code,
     )
 
 

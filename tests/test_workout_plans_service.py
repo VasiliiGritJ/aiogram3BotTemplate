@@ -32,6 +32,7 @@ from services.workout_plans import (
     normalize_profile,
     generate_program,
 )
+from services.workout_progression import ProgressionStrategy
 
 
 def sqlite_url(path: Path) -> str:
@@ -424,6 +425,75 @@ class WorkoutPlanServiceTests(unittest.TestCase):
                         self.assertIn(environment, definition.environments)
                         if environment == "home":
                             self.assertEqual("bodyweight", definition.equipment)
+
+    def test_progression_strategy_routing_uses_goal_role_and_capability(self) -> None:
+        lookup = {item.code: item for item in EXERCISE_DEFINITIONS}
+        muscle_gain = generate_program(normalize_profile(self.make_profile(
+            self.user_id,
+            goal="muscle_gain",
+            experience_level="advanced",
+            training_environment="gym",
+        )))
+        strength = generate_program(normalize_profile(self.make_profile(
+            self.user_id,
+            goal="strength",
+            experience_level="advanced",
+            training_environment="gym",
+        )))
+        fat_loss_home = generate_program(normalize_profile(self.make_profile(
+            self.user_id,
+            goal="fat_loss",
+            experience_level="beginner",
+            training_environment="home",
+        )))
+
+        self.assertTrue(all(
+            item.progression_strategy
+            in {
+                ProgressionStrategy.HYPERTROPHY_LOAD_REPS,
+                ProgressionStrategy.BODYWEIGHT_REPS,
+            }
+            for day in muscle_gain.days for item in day.exercises
+        ))
+        for day in strength.days:
+            self.assertEqual(
+                ProgressionStrategy.STRENGTH_LOAD_REPS,
+                day.exercises[0].progression_strategy,
+            )
+            self.assertTrue(all(
+                item.progression_strategy
+                != ProgressionStrategy.STRENGTH_LOAD_REPS
+                for item in day.exercises[1:]
+            ))
+        self.assertTrue(all(
+            item.progression_strategy == ProgressionStrategy.BODYWEIGHT_REPS
+            for day in fat_loss_home.days for item in day.exercises
+            if lookup[item.exercise_code].progression_type == "bodyweight_reps"
+        ))
+
+    def test_assigned_plan_persists_progression_strategy(self) -> None:
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+            profile.goal = "strength"
+            profile.experience_level = "advanced"
+            profile.training_environment = "gym"
+            session.commit()
+
+        assign_workout_plan(self.user_id, self.database)
+
+        with self.database() as session:
+            stored = session.scalars(
+                select(UserWorkoutPlanExercise)
+                .order_by(
+                    UserWorkoutPlanExercise.plan_day_id,
+                    UserWorkoutPlanExercise.exercise_order,
+                )
+            ).all()
+        self.assertTrue(stored)
+        self.assertEqual(
+            ProgressionStrategy.STRENGTH_LOAD_REPS,
+            stored[0].progression_strategy,
+        )
 
     def test_duration_preserves_main_priority_and_changes_volume(self) -> None:
         short = generate_program(normalize_profile(self.make_profile(

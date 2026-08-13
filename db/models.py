@@ -540,6 +540,11 @@ class UserWorkoutPlanExercise(Base):
             "rest_seconds >= 0",
             name="ck_user_workout_plan_exercises_rest",
         ),
+        CheckConstraint(
+            "progression_strategy IS NULL OR progression_strategy IN ("
+            "'hypertrophy_load_reps', 'strength_load_reps', 'bodyweight_reps')",
+            name="ck_user_workout_plan_exercises_progression_strategy",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -557,6 +562,7 @@ class UserWorkoutPlanExercise(Base):
     reps_max: Mapped[int] = mapped_column(Integer())
     rest_seconds: Mapped[int] = mapped_column(Integer())
     hint: Mapped[str] = mapped_column(Text())
+    progression_strategy: Mapped[str | None] = mapped_column(Text(), nullable=True)
 
 
 class WorkoutSession(Base):
@@ -665,6 +671,18 @@ class WorkoutSessionExercise(Base):
             "selected_rest_seconds >= 0",
             name="ck_workout_session_exercises_selected_rest",
         ),
+        CheckConstraint(
+            "planned_progression_strategy IS NULL OR "
+            "planned_progression_strategy IN ('hypertrophy_load_reps', "
+            "'strength_load_reps', 'bodyweight_reps')",
+            name="ck_workout_session_exercises_planned_progression_strategy",
+        ),
+        CheckConstraint(
+            "selected_progression_strategy IS NULL OR "
+            "selected_progression_strategy IN ('hypertrophy_load_reps', "
+            "'strength_load_reps', 'bodyweight_reps')",
+            name="ck_workout_session_exercises_selected_progression_strategy",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -688,6 +706,9 @@ class WorkoutSessionExercise(Base):
     planned_target_reps_max: Mapped[int] = mapped_column(Integer())
     planned_rest_seconds: Mapped[int] = mapped_column(Integer())
     planned_hint: Mapped[str] = mapped_column(Text())
+    planned_progression_strategy: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
 
     selected_exercise_id: Mapped[int | None] = mapped_column(
         ForeignKey("exercises.id", ondelete="SET NULL"),
@@ -700,6 +721,9 @@ class WorkoutSessionExercise(Base):
     selected_target_reps_max: Mapped[int] = mapped_column(Integer())
     selected_rest_seconds: Mapped[int] = mapped_column(Integer())
     selected_hint: Mapped[str] = mapped_column(Text())
+    selected_progression_strategy: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
 
     workout_session: Mapped["WorkoutSession"] = relationship(
         back_populates="exercises"

@@ -20,7 +20,11 @@ from services.workout_execution import (
     WorkoutStartResult,
     WorkoutStateError,
 )
-from services.workout_progression import ProgressionReason, ProgressionRecommendation
+from services.workout_progression import (
+    ProgressionReason,
+    ProgressionRecommendation,
+    ProgressionStrategy,
+)
 
 
 class _Dispatcher:
@@ -190,6 +194,7 @@ def _recommendation(
     suggested_reps: tuple[int, ...] | None = None,
     previous_weights: tuple[str, ...] = (),
     previous_reps: tuple[int, ...] = (),
+    strategy: ProgressionStrategy = ProgressionStrategy.HYPERTROPHY_LOAD_REPS,
 ) -> ProgressionRecommendation:
     return ProgressionRecommendation(
         reason=reason,
@@ -199,6 +204,7 @@ def _recommendation(
         suggested_reps=suggested_reps,
         previous_weights_kg=tuple(Decimal(weight) for weight in previous_weights),
         previous_reps=previous_reps,
+        strategy=strategy,
     )
 
 
@@ -512,6 +518,44 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         self.assertIn("не меняйте веса автоматически", mixed)
         self.assertIn("собств. вес", bodyweight)
         self.assertIn("попробуй 12/11/9", bodyweight)
+
+    def test_progression_hint_formats_strength_and_bodyweight_successor(self) -> None:
+        exercise = _exercise()
+        strength = workout_ui.format_progression_recommendation(
+            exercise,
+            _recommendation(
+                ProgressionReason.STRENGTH_DELOAD,
+                suggested_weight="97.5",
+                suggested_reps=(3, 3, 3),
+                previous_weights=("100", "100", "100"),
+                previous_reps=(2, 2, 1),
+            ),
+        )
+        successor = ProgressionRecommendation(
+            reason=ProgressionReason.BODYWEIGHT_ADVANCE_VARIATION,
+            suggested_weight_kg=Decimal("0"),
+            suggested_reps=(8, 8, 8),
+            previous_weights_kg=(Decimal("0"),) * 3,
+            previous_reps=(12, 12, 12),
+            suggested_exercise_code="push_up",
+        )
+        bodyweight = workout_ui.format_progression_recommendation(
+            exercise,
+            successor,
+        )
+
+        self.assertIn("97,5", strength)
+        self.assertIn("8/8/8", bodyweight)
+        self.assertNotIn("push_up", bodyweight)
+
+        no_history = workout_ui.format_progression_recommendation(
+            exercise,
+            _recommendation(
+                ProgressionReason.NO_HISTORY,
+                strategy=ProgressionStrategy.BODYWEIGHT_REPS,
+            ),
+        )
+        self.assertIn("с собственным весом", no_history)
 
     def test_progression_hint_is_read_only_and_stable_after_resume(self) -> None:
         message = _Message()

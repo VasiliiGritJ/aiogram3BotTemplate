@@ -137,7 +137,8 @@ class WorkoutExecutionSchemaTests(unittest.TestCase):
                 "selected_exercise_name", "selected_primary_muscle_group",
                 "selected_target_sets", "selected_target_reps_min",
                 "selected_target_reps_max", "selected_rest_seconds",
-                "selected_hint",
+                "selected_hint", "planned_progression_strategy",
+                "selected_progression_strategy",
             },
             {
                 column["name"]

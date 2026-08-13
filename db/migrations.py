@@ -661,6 +661,30 @@ def _expand_training_profile(connection: Connection) -> None:
     )
 
 
+def _add_progression_strategies(connection: Connection) -> None:
+    """Persist plan intent and immutable planned/selected execution strategy."""
+    allowed = (
+        "'hypertrophy_load_reps', 'strength_load_reps', 'bodyweight_reps'"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE user_workout_plan_exercises ADD COLUMN "
+        "progression_strategy TEXT CHECK (progression_strategy IS NULL OR "
+        f"progression_strategy IN ({allowed}))"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE workout_session_exercises ADD COLUMN "
+        "planned_progression_strategy TEXT CHECK ("
+        "planned_progression_strategy IS NULL OR "
+        f"planned_progression_strategy IN ({allowed}))"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE workout_session_exercises ADD COLUMN "
+        "selected_progression_strategy TEXT CHECK ("
+        "selected_progression_strategy IS NULL OR "
+        f"selected_progression_strategy IN ({allowed}))"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -670,6 +694,7 @@ MIGRATIONS = (
     Migration(6, "subscription_payments", _create_subscription_payments),
     Migration(7, "exercise_taxonomy", _add_exercise_taxonomy),
     Migration(8, "training_profile_expansion", _expand_training_profile),
+    Migration(9, "workout_progression_strategies", _add_progression_strategies),
 )
 
 

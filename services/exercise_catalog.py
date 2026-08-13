@@ -261,6 +261,19 @@ EXERCISE_ALTERNATIVES = {
     "barbell_back_squat": ("leg_press",),
 }
 
+# This is deliberately separate from replacement alternatives: advancing a
+# bodyweight variation is only allowed when the controlled catalog names one
+# unambiguous successor. Missing metadata means a safe hold at the upper range.
+BODYWEIGHT_PROGRESSION_SUCCESSORS = {
+    "incline_push_up": "push_up",
+    "bodyweight_squat": "reverse_lunge",
+}
+
+
+def exercise_definition_by_code(code: str) -> ExerciseDefinition | None:
+    """Return one controlled definition without introducing a DB dependency."""
+    return next((item for item in EXERCISE_DEFINITIONS if item.code == code), None)
+
 
 def validate_exercise_definition(definition: ExerciseDefinition) -> None:
     """Raise ValueError when controlled taxonomy is internally inconsistent."""

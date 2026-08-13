@@ -154,6 +154,7 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
                             reps_max=12,
                             rest_seconds=90,
                             hint=exercise.hint,
+                            progression_strategy="hypertrophy_load_reps",
                         )
                     )
             session.commit()
@@ -225,6 +226,9 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
                 item.planned_exercise_id == item.selected_exercise_id
                 and item.planned_exercise_name == item.selected_exercise_name
                 and item.planned_target_sets == item.selected_target_sets
+                and item.planned_progression_strategy
+                == item.selected_progression_strategy
+                == "hypertrophy_load_reps"
                 for item in result.workout.exercises
             )
         )

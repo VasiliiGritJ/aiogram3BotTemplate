@@ -38,7 +38,9 @@ from services.workout_execution import (
 from services.workout_progression import (
     ProgressionReason,
     ProgressionRecommendation,
+    ProgressionStrategy,
 )
+from services.exercise_catalog import exercise_definition_by_code
 from services.workout_progression_history import (
     ProgressionHistoryError,
     get_progression_recommendation,
@@ -169,6 +171,11 @@ def format_progression_recommendation(
         f"{exercise.selected_target_reps_min}–{exercise.selected_target_reps_max}"
     )
     if recommendation.reason == ProgressionReason.NO_HISTORY:
+        if recommendation.strategy == ProgressionStrategy.BODYWEIGHT_REPS:
+            return (
+                f"Цель: {target_text} повторений с собственным весом. "
+                "Начните в комфортном темпе."
+            )
         return f"Цель: {target_text} повторений. Выберите комфортный рабочий вес."
     if recommendation.reason == ProgressionReason.INSUFFICIENT_DATA:
         return f"Данных для подсказки пока недостаточно. Цель: {target_text}."
@@ -190,15 +197,29 @@ def format_progression_recommendation(
 
     if recommendation.reason == ProgressionReason.INCREASE_WEIGHT:
         today = f"Сегодня: попробуй {today_weight}, цель {today_reps}."
+    elif recommendation.reason == ProgressionReason.STRENGTH_INCREASE_WEIGHT:
+        today = f"Сегодня: небольшой шаг до {today_weight}, цель {today_reps}."
     elif recommendation.reason == ProgressionReason.HOLD_ADD_REPS:
+        today = f"Сегодня: оставь {today_weight} и попробуй {today_reps}."
+    elif recommendation.reason == ProgressionReason.STRENGTH_HOLD_ADD_REPS:
         today = f"Сегодня: оставь {today_weight} и попробуй {today_reps}."
     elif recommendation.reason in {
         ProgressionReason.HOLD_RECOVER_RANGE,
         ProgressionReason.HOLD_NO_SAFE_WEIGHT_STEP,
+        ProgressionReason.STRENGTH_HOLD_RECOVER_RANGE,
+        ProgressionReason.STRENGTH_HOLD_NO_SAFE_WEIGHT_STEP,
     }:
         today = f"Сегодня: оставь {today_weight}, цель {today_reps}."
     elif recommendation.reason == ProgressionReason.DECREASE_WEIGHT:
         today = f"Сегодня: попробуй {today_weight}, цель {today_reps}."
+    elif recommendation.reason == ProgressionReason.STRENGTH_DELOAD:
+        today = f"Сегодня: небольшой шаг назад до {today_weight}, цель {today_reps}."
+    elif recommendation.reason == ProgressionReason.BODYWEIGHT_ADVANCE_VARIATION:
+        successor = exercise_definition_by_code(
+            recommendation.suggested_exercise_code or ""
+        )
+        name = successor.name if successor is not None else "более сложный вариант"
+        today = f"Сегодня: попробуй {escape(name)}, цель {today_reps}."
     elif recommendation.reason == ProgressionReason.BODYWEIGHT_ADD_REPS:
         today = f"Сегодня: собственный вес, попробуй {today_reps}."
     else:

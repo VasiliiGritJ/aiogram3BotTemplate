@@ -7,14 +7,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import (
+    Exercise,
     WorkoutSession,
     WorkoutSessionExercise,
     WorkoutSetResult,
     dbSession,
 )
+from services.exercise_catalog import BODYWEIGHT_PROGRESSION_SUCCESSORS
 from services.workout_progression import (
     PreviousExercisePerformance,
     ProgressionRecommendation,
+    ProgressionStrategy,
     ProgressionTarget,
     SetPerformance,
     calculate_progression,
@@ -56,7 +59,21 @@ def get_progression_recommendation(
             current_workout,
             current_exercise,
         )
-        return calculate_progression(target, previous)
+        strategy = _strategy_from_snapshot(current_exercise)
+        successor = None
+        if (
+            strategy == ProgressionStrategy.BODYWEIGHT_REPS
+            and current_exercise.selected_exercise_id is not None
+        ):
+            selected = session.get(Exercise, current_exercise.selected_exercise_id)
+            if selected is not None:
+                successor = BODYWEIGHT_PROGRESSION_SUCCESSORS.get(selected.code)
+        return calculate_progression(
+            target,
+            previous,
+            strategy,
+            bodyweight_successor_code=successor,
+        )
 
 
 def _require_owned_snapshot(
@@ -133,6 +150,21 @@ def _target_from_snapshot(exercise: WorkoutSessionExercise) -> ProgressionTarget
         reps_min=exercise.selected_target_reps_min,
         reps_max=exercise.selected_target_reps_max,
     )
+
+
+def _strategy_from_snapshot(
+    exercise: WorkoutSessionExercise,
+) -> ProgressionStrategy:
+    """Keep historical NULL snapshots on the accepted Stage 4 semantics."""
+    value = exercise.selected_progression_strategy
+    if value is None:
+        return ProgressionStrategy.HYPERTROPHY_LOAD_REPS
+    try:
+        return ProgressionStrategy(value)
+    except ValueError:
+        # The migration constrains new data; defensive fallback keeps a corrupt
+        # legacy row neutral rather than inventing a new protocol.
+        return ProgressionStrategy.HYPERTROPHY_LOAD_REPS
 
 
 def _as_decimal(value: object) -> Decimal:

@@ -15,7 +15,7 @@ from db.models import (
     WorkoutSessionExercise,
     WorkoutSetResult,
 )
-from services.workout_progression import ProgressionReason
+from services.workout_progression import ProgressionReason, ProgressionStrategy
 from services.workout_progression_history import (
     ProgressionOwnershipError,
     ProgressionSnapshotNotFoundError,
@@ -89,6 +89,7 @@ class WorkoutProgressionHistoryTests(unittest.TestCase):
         reps_max: int = 12,
         results: tuple[tuple[int, float, int], ...] = (),
         exercise_order: int = 1,
+        progression_strategy: str | None = None,
     ) -> int:
         if status in {"completed", "cancelled"} and finished_at is None:
             finished_at = started_at + timedelta(minutes=30)
@@ -122,6 +123,7 @@ class WorkoutProgressionHistoryTests(unittest.TestCase):
                 planned_target_reps_max=reps_max,
                 planned_rest_seconds=90,
                 planned_hint="planned hint",
+                planned_progression_strategy=progression_strategy,
                 selected_exercise_id=(
                     self.primary_exercise_id
                     if selected_exercise_id is _UNSET
@@ -134,6 +136,7 @@ class WorkoutProgressionHistoryTests(unittest.TestCase):
                 selected_target_reps_max=reps_max,
                 selected_rest_seconds=90,
                 selected_hint="selected hint",
+                selected_progression_strategy=progression_strategy,
             )
             session.add(snapshot)
             session.flush()
@@ -196,6 +199,71 @@ class WorkoutProgressionHistoryTests(unittest.TestCase):
         self.assertEqual(ProgressionReason.INCREASE_WEIGHT, recommendation.reason)
         self.assertEqual((Decimal("30"),) * 3, recommendation.previous_weights_kg)
         self.assertEqual(Decimal("31.5"), recommendation.suggested_weight_kg)
+
+    def test_strength_snapshot_uses_conservative_strategy(self) -> None:
+        self._completed_snapshot(
+            started_at=BASE_TIME - timedelta(days=2),
+            finished_at=BASE_TIME - timedelta(days=1),
+            target_sets=3,
+            reps_min=3,
+            reps_max=6,
+            results=((1, 100, 6), (2, 100, 6), (3, 100, 6)),
+        )
+
+        recommendation = self._recommendation_for_current(
+            target_sets=3,
+            reps_min=3,
+            reps_max=6,
+            progression_strategy=ProgressionStrategy.STRENGTH_LOAD_REPS,
+        )
+
+        self.assertEqual(
+            ProgressionReason.STRENGTH_INCREASE_WEIGHT,
+            recommendation.reason,
+        )
+        self.assertEqual(Decimal("102.5"), recommendation.suggested_weight_kg)
+        self.assertEqual(
+            ProgressionStrategy.STRENGTH_LOAD_REPS,
+            recommendation.strategy,
+        )
+
+    def test_legacy_null_strategy_preserves_hypertrophy_semantics(self) -> None:
+        self._completed_snapshot(
+            started_at=BASE_TIME - timedelta(days=2),
+            finished_at=BASE_TIME - timedelta(days=1),
+            results=((1, 20, 12), (2, 20, 12), (3, 20, 12)),
+        )
+
+        recommendation = self._recommendation_for_current(
+            progression_strategy=None,
+        )
+
+        self.assertEqual(ProgressionReason.INCREASE_WEIGHT, recommendation.reason)
+        self.assertEqual(
+            ProgressionStrategy.HYPERTROPHY_LOAD_REPS,
+            recommendation.strategy,
+        )
+
+    def test_bodyweight_history_uses_only_explicit_catalog_successor(self) -> None:
+        incline_push_up_id = self._create_exercise("incline_push_up")
+        self._completed_snapshot(
+            started_at=BASE_TIME - timedelta(days=2),
+            finished_at=BASE_TIME - timedelta(days=1),
+            selected_exercise_id=incline_push_up_id,
+            results=((1, 0, 12), (2, 0, 12), (3, 0, 12)),
+        )
+
+        recommendation = self._recommendation_for_current(
+            selected_exercise_id=incline_push_up_id,
+            progression_strategy=ProgressionStrategy.BODYWEIGHT_REPS,
+        )
+
+        self.assertEqual(
+            ProgressionReason.BODYWEIGHT_ADVANCE_VARIATION,
+            recommendation.reason,
+        )
+        self.assertEqual("push_up", recommendation.suggested_exercise_code)
+        self.assertEqual(Decimal("0"), recommendation.suggested_weight_kg)
 
     def test_cancelled_and_in_progress_snapshots_are_ignored(self) -> None:
         self._completed_snapshot(

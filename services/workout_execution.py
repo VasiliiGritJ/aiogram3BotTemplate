@@ -90,6 +90,8 @@ class WorkoutSessionExerciseView:
     selected_rest_seconds: int
     selected_hint: str
     set_results: tuple[WorkoutSetResultView, ...]
+    planned_progression_strategy: str | None = None
+    selected_progression_strategy: str | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +216,8 @@ def _exercise_view(
         selected_rest_seconds=exercise.selected_rest_seconds,
         selected_hint=exercise.selected_hint,
         set_results=tuple(_result_view(result) for result in results),
+        planned_progression_strategy=exercise.planned_progression_strategy,
+        selected_progression_strategy=exercise.selected_progression_strategy,
     )
 
 
@@ -362,6 +366,7 @@ def _create_workout_session(
                 planned_target_reps_max=plan_exercise.reps_max,
                 planned_rest_seconds=plan_exercise.rest_seconds,
                 planned_hint=plan_exercise.hint,
+                planned_progression_strategy=plan_exercise.progression_strategy,
                 selected_exercise_id=plan_exercise.exercise_id,
                 selected_exercise_name=plan_exercise.exercise_name,
                 selected_primary_muscle_group=plan_exercise.primary_muscle_group,
@@ -370,6 +375,7 @@ def _create_workout_session(
                 selected_target_reps_max=plan_exercise.reps_max,
                 selected_rest_seconds=plan_exercise.rest_seconds,
                 selected_hint=plan_exercise.hint,
+                selected_progression_strategy=plan_exercise.progression_strategy,
             )
         )
     session.flush()

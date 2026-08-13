@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from services.workout_progression import (
     ProgressionReason,
+    ProgressionStrategy,
     ProgressionTarget,
     PreviousExercisePerformance,
     SetPerformance,
@@ -197,6 +198,120 @@ class WorkoutProgressionTests(unittest.TestCase):
         self.assertEqual(
             calculate_progression(target, previous),
             calculate_progression(target, previous),
+        )
+
+    def test_strength_progression_uses_conservative_load_step(self) -> None:
+        recommendation = calculate_progression(
+            self.target(minimum=3, maximum=6),
+            self.performance(
+                (6, 6, 6),
+                weights=("100", "100", "100"),
+                target=self.target(minimum=3, maximum=6),
+            ),
+            ProgressionStrategy.STRENGTH_LOAD_REPS,
+        )
+
+        self.assert_recommendation(
+            recommendation,
+            ProgressionReason.STRENGTH_INCREASE_WEIGHT,
+            "102.5",
+            (3, 3, 3),
+        )
+
+    def test_strength_mixed_success_holds_weight_and_adds_reps(self) -> None:
+        target = self.target(minimum=3, maximum=6)
+        recommendation = calculate_progression(
+            target,
+            self.performance((6, 5, 3), weights=("100",) * 3, target=target),
+            ProgressionStrategy.STRENGTH_LOAD_REPS,
+        )
+
+        self.assert_recommendation(
+            recommendation,
+            ProgressionReason.STRENGTH_HOLD_ADD_REPS,
+            "100",
+            (6, 6, 4),
+        )
+
+    def test_strength_isolated_miss_holds_but_systemic_miss_deloads(self) -> None:
+        target = self.target(minimum=3, maximum=6)
+        isolated = calculate_progression(
+            target,
+            self.performance((5, 3, 2), weights=("100",) * 3, target=target),
+            ProgressionStrategy.STRENGTH_LOAD_REPS,
+        )
+        systemic = calculate_progression(
+            target,
+            self.performance((2, 2, 1), weights=("100",) * 3, target=target),
+            ProgressionStrategy.STRENGTH_LOAD_REPS,
+        )
+
+        self.assert_recommendation(
+            isolated,
+            ProgressionReason.STRENGTH_HOLD_RECOVER_RANGE,
+            "100",
+            (5, 3, 3),
+        )
+        self.assert_recommendation(
+            systemic,
+            ProgressionReason.STRENGTH_DELOAD,
+            "97.5",
+            (3, 3, 3),
+        )
+
+    def test_bodyweight_successor_is_explicit_and_never_invents_load(self) -> None:
+        upper = self.performance((12, 12, 12), weights=("0",) * 3)
+        advancing = calculate_progression(
+            self.target(),
+            upper,
+            ProgressionStrategy.BODYWEIGHT_REPS,
+            bodyweight_successor_code="push_up",
+        )
+        holding = calculate_progression(
+            self.target(),
+            upper,
+            ProgressionStrategy.BODYWEIGHT_REPS,
+        )
+
+        self.assert_recommendation(
+            advancing,
+            ProgressionReason.BODYWEIGHT_ADVANCE_VARIATION,
+            "0",
+            (8, 8, 8),
+        )
+        self.assertEqual("push_up", advancing.suggested_exercise_code)
+        self.assert_recommendation(
+            holding,
+            ProgressionReason.BODYWEIGHT_HOLD_AT_UPPER,
+            "0",
+            (12, 12, 12),
+        )
+        self.assertIsNone(holding.suggested_exercise_code)
+
+    def test_bodyweight_strategy_rejects_external_weight(self) -> None:
+        recommendation = calculate_progression(
+            self.target(),
+            self.performance((12, 12, 12)),
+            ProgressionStrategy.BODYWEIGHT_REPS,
+        )
+
+        self.assert_recommendation(
+            recommendation, ProgressionReason.INSUFFICIENT_DATA, None, None
+        )
+
+    def test_strength_strategy_rejects_bodyweight_history(self) -> None:
+        recommendation = calculate_progression(
+            self.target(minimum=3, maximum=6),
+            self.performance(
+                (6, 6, 6),
+                weights=("0", "0", "0"),
+                target=self.target(minimum=3, maximum=6),
+            ),
+            ProgressionStrategy.STRENGTH_LOAD_REPS,
+        )
+
+        self.assert_recommendation(
+            recommendation, ProgressionReason.INSUFFICIENT_DATA, None, None
         )
 
 

@@ -27,6 +27,7 @@ from services.exercise_catalog import (
     ExerciseDefinition,
     validate_exercise_definition,
 )
+from services.workout_progression import ProgressionStrategy
 
 
 CATALOG_VERSION = 3
@@ -126,6 +127,7 @@ class PlanExerciseView:
     reps_max: int
     rest_seconds: int
     hint: str
+    progression_strategy: str | None = None
 
 
 @dataclass(frozen=True)
@@ -164,6 +166,7 @@ class GeneratedExerciseDefinition:
     reps_min: int
     reps_max: int
     rest_seconds: int
+    progression_strategy: str
 
 
 @dataclass(frozen=True)
@@ -509,6 +512,8 @@ def _choose_exercise(
         and profile.experience_level in definition.experience_levels
         and definition.movement_pattern == slot
         and definition.code not in used_codes
+        and definition.progression_type
+        in {"external_load_reps", "bodyweight_reps"}
         and not (
             profile.training_environment == "home"
             and definition.equipment != "bodyweight"
@@ -522,6 +527,8 @@ def _choose_exercise(
             and profile.experience_level in definition.experience_levels
             and definition.movement_pattern == "horizontal_pull"
             and definition.code not in used_codes
+            and definition.progression_type
+            in {"external_load_reps", "bodyweight_reps"}
             and not (
                 profile.training_environment == "home"
                 and definition.equipment != "bodyweight"
@@ -535,6 +542,8 @@ def _choose_exercise(
             and profile.experience_level in definition.experience_levels
             and definition.movement_pattern == "horizontal_push"
             and definition.code not in used_codes
+            and definition.progression_type
+            in {"external_load_reps", "bodyweight_reps"}
             and not (
                 profile.training_environment == "home"
                 and definition.equipment != "bodyweight"
@@ -547,6 +556,8 @@ def _choose_exercise(
             if profile.training_environment in definition.environments
             and profile.experience_level in definition.experience_levels
             and definition.code not in used_codes
+            and definition.progression_type
+            in {"external_load_reps", "bodyweight_reps"}
             and definition.movement_pattern
             in {
                 "squat", "hinge", "horizontal_push", "vertical_push",
@@ -569,7 +580,7 @@ def _prescription(
     definition: ExerciseDefinition,
     position: int,
 ) -> tuple[int, int, int, int]:
-    main = position == 1
+    main = position == 0
     bodyweight = definition.progression_type == "bodyweight_reps"
     if profile.goal == "strength":
         if main and definition.movement_pattern in {"squat", "hinge", "horizontal_push"}:
@@ -582,6 +593,27 @@ def _prescription(
     if bodyweight:
         return (3 if main else 2), (8 if main else 10), (15 if main else 20), (75 if main else 45)
     return (3 if main else 2), (6 if main else 8), (12 if main else 15), (90 if main else 60)
+
+
+def _progression_strategy(
+    profile: NormalizedProfile,
+    definition: ExerciseDefinition,
+    position: int,
+) -> ProgressionStrategy:
+    """Route a persisted prescription by goal, exercise role and capability."""
+    if definition.progression_type == "bodyweight_reps":
+        return ProgressionStrategy.BODYWEIGHT_REPS
+    if definition.progression_type != "external_load_reps":
+        raise WorkoutCatalogError(
+            f"Unsupported progression capability: {definition.progression_type}"
+        )
+    if (
+        profile.goal == "strength"
+        and position == 0
+        and definition.movement_pattern in {"squat", "hinge", "horizontal_push"}
+    ):
+        return ProgressionStrategy.STRENGTH_LOAD_REPS
+    return ProgressionStrategy.HYPERTROPHY_LOAD_REPS
 
 
 def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
@@ -601,7 +633,12 @@ def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
             )
             exercises.append(
                 GeneratedExerciseDefinition(
-                    definition.code, sets, reps_min, reps_max, rest_seconds
+                    definition.code,
+                    sets,
+                    reps_min,
+                    reps_max,
+                    rest_seconds,
+                    _progression_strategy(profile, definition, len(exercises)),
                 )
             )
         if not exercises:
@@ -797,6 +834,7 @@ def _load_plan_view(session: Session, plan: UserWorkoutPlan) -> WorkoutPlanView:
                         reps_max=item.reps_max,
                         rest_seconds=item.rest_seconds,
                         hint=item.hint,
+                        progression_strategy=item.progression_strategy,
                     )
                     for item, exercise in items
                 ),
@@ -918,6 +956,7 @@ def assign_workout_plan(
                             reps_max=item.reps_max,
                             rest_seconds=item.rest_seconds,
                             hint=exercise.hint,
+                            progression_strategy=item.progression_strategy,
                         )
                     )
             session.flush()
