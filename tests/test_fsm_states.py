@@ -11,14 +11,15 @@ class FSMStateDefinitionTests(unittest.TestCase):
         self.assertIsInstance(ContactWithDevs.Message, FSMState)
 
         onboarding_states = (
+            Onboarding.goal,
+            Onboarding.experience_level,
+            Onboarding.training_environment,
+            Onboarding.workouts_per_week,
+            Onboarding.session_duration_minutes,
             Onboarding.age,
             Onboarding.sex,
             Onboarding.height_cm,
             Onboarding.weight_kg,
-            Onboarding.goal,
-            Onboarding.experience_level,
-            Onboarding.workouts_per_week,
-            Onboarding.session_duration_minutes,
             Onboarding.limitations,
             Onboarding.confirmation,
         )

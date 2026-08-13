@@ -204,12 +204,17 @@ class FitnessProfile(Base):
     __tablename__ = "fitness_profiles"
     __table_args__ = (
         CheckConstraint(
-            "goal IN ('muscle_gain', 'fat_loss')",
+            "goal IN ('muscle_gain', 'strength', 'fat_loss')",
             name="ck_fitness_profiles_goal",
         ),
         CheckConstraint(
-            "experience_level IN ('beginner', 'some_experience', 'experienced')",
+            "experience_level IN ('beginner', 'intermediate', 'advanced')",
             name="ck_fitness_profiles_experience_level",
+        ),
+        CheckConstraint(
+            "training_environment IS NULL OR training_environment IN "
+            "('gym', 'functional_gym', 'street', 'home')",
+            name="ck_fitness_profiles_training_environment",
         ),
     )
 
@@ -222,6 +227,9 @@ class FitnessProfile(Base):
     weight_kg: Mapped[float] = mapped_column(Float())
     goal: Mapped[str] = mapped_column(Text())
     experience_level: Mapped[str] = mapped_column(Text())
+    training_environment: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
     workouts_per_week: Mapped[int] = mapped_column(Integer())
     session_duration_minutes: Mapped[int] = mapped_column(Integer())
     limitations: Mapped[str | None] = mapped_column(Text(), nullable=True)

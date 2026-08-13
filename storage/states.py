@@ -14,14 +14,15 @@ class ContactWithDevs(StatesGroup):
 
 
 class Onboarding(StatesGroup):
+    goal = FSMState()
+    experience_level = FSMState()
+    training_environment = FSMState()
+    workouts_per_week = FSMState()
+    session_duration_minutes = FSMState()
     age = FSMState()
     sex = FSMState()
     height_cm = FSMState()
     weight_kg = FSMState()
-    goal = FSMState()
-    experience_level = FSMState()
-    workouts_per_week = FSMState()
-    session_duration_minutes = FSMState()
     limitations = FSMState()
     confirmation = FSMState()
 

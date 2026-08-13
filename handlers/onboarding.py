@@ -9,7 +9,10 @@ from aiogram.fsm.context import FSMContext
 from db import User
 from handlers.markups import (
     onboarding_confirmation_mkp,
+    onboarding_duration_mkp,
+    onboarding_environment_mkp,
     onboarding_experience_mkp,
+    onboarding_frequency_mkp,
     onboarding_goal_mkp,
     onboarding_limitations_mkp,
     onboarding_sex_mkp,
@@ -17,8 +20,10 @@ from handlers.markups import (
 from handlers.workout_execution import workout_menu_markup
 from services.onboarding import (
     EXPERIENCE_LABELS,
+    GOAL_DESCRIPTIONS,
     GOAL_LABELS,
     SEX_LABELS,
+    TRAINING_ENVIRONMENT_LABELS,
     OnboardingData,
     OnboardingPersistenceError,
     OnboardingValidationError,
@@ -45,15 +50,18 @@ async def start_onboarding(
 ) -> None:
     await state.clear()
     await state.update_data(editing_profile=editing_profile)
-    await state.set_state(Onboarding.age)
+    await state.set_state(Onboarding.goal)
     text = (
         "Давайте составим ваш фитнес-профиль.\n\n"
-        "Сколько вам полных лет?"
+        "Какая у вас основная цель?\n\n"
+        f"Набрать мышечную массу — {GOAL_DESCRIPTIONS['muscle_gain']}.\n"
+        f"Стать сильнее — {GOAL_DESCRIPTIONS['strength']}.\n"
+        f"Снизить процент жира — {GOAL_DESCRIPTIONS['fat_loss']}."
     )
     if edit:
-        await message.edit_text(text)
+        await message.edit_text(text, reply_markup=onboarding_goal_mkp())
     else:
-        await message.answer(text)
+        await message.answer(text, reply_markup=onboarding_goal_mkp())
 
 
 @dp.message(Onboarding.age)
@@ -109,8 +117,13 @@ async def onboarding_weight(message: types.Message, state: FSMContext):
         return
 
     await state.update_data(weight_kg=weight_kg)
-    await state.set_state(Onboarding.goal)
-    await message.answer("Какая у вас основная цель?", reply_markup=onboarding_goal_mkp())
+    await state.set_state(Onboarding.limitations)
+    await message.answer(
+        "Травмы или ограничения (необязательно). "
+        "Кратко опишите их или выберите «Нет ограничений».\n\n"
+        "Бот не ставит диагнозы. При сомнениях обсудите нагрузку со специалистом.",
+        reply_markup=onboarding_limitations_mkp(),
+    )
 
 
 @dp.callback_query(
@@ -151,40 +164,74 @@ async def onboarding_experience(call: types.CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(experience_level=experience)
-    await state.set_state(Onboarding.workouts_per_week)
-    await call.message.edit_text("Сколько тренировок в неделю вы планируете?")
+    await state.set_state(Onboarding.training_environment)
+    await call.message.edit_text(
+        "Где вы будете тренироваться?",
+        reply_markup=onboarding_environment_mkp(),
+    )
     await call.answer()
 
 
-@dp.message(Onboarding.workouts_per_week)
-async def onboarding_workouts(message: types.Message, state: FSMContext):
+@dp.callback_query(
+    StateFilter(Onboarding.training_environment),
+    F.data.startswith("onboarding:environment:"),
+)
+async def onboarding_environment(call: types.CallbackQuery, state: FSMContext):
+    value = call.data.rsplit(":", 1)[-1]
     try:
-        workouts = parse_workouts_per_week(message.text or "")
+        environment = validate_choice(
+            value,
+            TRAINING_ENVIRONMENT_LABELS,
+            "место тренировки",
+        )
     except OnboardingValidationError as error:
-        await message.answer(str(error))
+        await call.answer(str(error), show_alert=True)
+        return
+
+    await state.update_data(training_environment=environment)
+    await state.set_state(Onboarding.workouts_per_week)
+    await call.message.edit_text(
+        "Сколько тренировок в неделю вы планируете?",
+        reply_markup=onboarding_frequency_mkp(),
+    )
+    await call.answer()
+
+
+@dp.callback_query(
+    StateFilter(Onboarding.workouts_per_week),
+    F.data.startswith("onboarding:frequency:"),
+)
+async def onboarding_workouts(call: types.CallbackQuery, state: FSMContext):
+    try:
+        workouts = parse_workouts_per_week(call.data.rsplit(":", 1)[-1])
+    except OnboardingValidationError as error:
+        await call.answer(str(error), show_alert=True)
         return
 
     await state.update_data(workouts_per_week=workouts)
     await state.set_state(Onboarding.session_duration_minutes)
-    await message.answer("Сколько минут обычно можете уделить тренировке?")
+    await call.message.edit_text(
+        "Сколько времени вы готовы уделять тренировке?",
+        reply_markup=onboarding_duration_mkp(),
+    )
+    await call.answer()
 
 
-@dp.message(Onboarding.session_duration_minutes)
-async def onboarding_duration(message: types.Message, state: FSMContext):
+@dp.callback_query(
+    StateFilter(Onboarding.session_duration_minutes),
+    F.data.startswith("onboarding:duration:"),
+)
+async def onboarding_duration(call: types.CallbackQuery, state: FSMContext):
     try:
-        duration = parse_session_duration_minutes(message.text or "")
+        duration = parse_session_duration_minutes(call.data.rsplit(":", 1)[-1])
     except OnboardingValidationError as error:
-        await message.answer(str(error))
+        await call.answer(str(error), show_alert=True)
         return
 
     await state.update_data(session_duration_minutes=duration)
-    await state.set_state(Onboarding.limitations)
-    await message.answer(
-        "Травмы или ограничения (необязательно). "
-        "Кратко опишите их или выберите «Нет ограничений».\n\n"
-        "Бот не ставит диагнозы. При сомнениях обсудите нагрузку со специалистом.",
-        reply_markup=onboarding_limitations_mkp(),
-    )
+    await state.set_state(Onboarding.age)
+    await call.message.edit_text("Сколько вам полных лет?")
+    await call.answer()
 
 
 def _summary(data: dict) -> str:
@@ -197,6 +244,7 @@ def _summary(data: dict) -> str:
         f"Вес: {data['weight_kg']:g} кг\n"
         f"Цель: {GOAL_LABELS[data['goal']]}\n"
         f"Опыт: {EXPERIENCE_LABELS[data['experience_level']]}\n"
+        f"Место: {TRAINING_ENVIRONMENT_LABELS[data['training_environment']]}\n"
         f"Тренировок в неделю: {data['workouts_per_week']}\n"
         f"Длительность: {data['session_duration_minutes']} мин\n"
         f"Ограничения: {escape(limitations)}\n\n"
@@ -261,7 +309,7 @@ async def onboarding_confirm(call: types.CallbackQuery, state: FSMContext):
                 text = "Анкета сохранена. План подготовлен, а пробный период начнётся с первой тренировки."
             else:
                 text = "Анкета уже была сохранена. Пробный период не изменён."
-    except (TypeError, OnboardingPersistenceError):
+    except (TypeError, OnboardingPersistenceError, OnboardingValidationError):
         await call.answer("Не удалось сохранить анкету. Отправьте /start.", show_alert=True)
         return
 

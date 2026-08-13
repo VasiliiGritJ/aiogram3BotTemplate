@@ -13,6 +13,7 @@ from services.onboarding import (
     EXPERIENCE_LABELS,
     GOAL_LABELS,
     SEX_LABELS,
+    TRAINING_ENVIRONMENT_LABELS,
     get_fitness_profile,
 )
 from storage.config import admins, bot, dp
@@ -51,6 +52,11 @@ async def profileCall(call: types.CallbackQuery, state: FSMContext):
 
     link = await create_start_link(bot, str(call.from_user.id))
     limitations = escape(profile.limitations or "Нет")
+    environment = (
+        TRAINING_ENVIRONMENT_LABELS.get(profile.training_environment)
+        if profile.training_environment is not None
+        else "Не указано"
+    )
     text = (
         f"Здравствуйте, {escape(call.from_user.first_name)}!\n\n"
         f"Возраст: {profile.age}\n"
@@ -59,6 +65,7 @@ async def profileCall(call: types.CallbackQuery, state: FSMContext):
         f"Вес: {profile.weight_kg:g} кг\n"
         f"Цель: {GOAL_LABELS.get(profile.goal, profile.goal)}\n"
         f"Опыт: {EXPERIENCE_LABELS.get(profile.experience_level, profile.experience_level)}\n"
+        f"Место: {environment}\n"
         f"Тренировок в неделю: {profile.workouts_per_week}\n"
         f"Длительность: {profile.session_duration_minutes} мин\n"
         f"Ограничения: {limitations}\n\n"

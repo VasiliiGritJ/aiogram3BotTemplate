@@ -276,13 +276,19 @@ def onboarding_goal_mkp():
         inline_keyboard=[
             [
                 types.InlineKeyboardButton(
-                    text="Набор мышечной массы / веса",
+                    text="Набрать мышечную массу",
                     callback_data="onboarding:goal:muscle_gain",
                 )
             ],
             [
                 types.InlineKeyboardButton(
-                    text="Снижение веса / жира",
+                    text="Стать сильнее",
+                    callback_data="onboarding:goal:strength",
+                )
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text="Снизить процент жира",
                     callback_data="onboarding:goal:fat_loss",
                 )
             ],
@@ -301,15 +307,80 @@ def onboarding_experience_mkp():
             ],
             [
                 types.InlineKeyboardButton(
-                    text="Есть небольшой опыт",
-                    callback_data="onboarding:experience:some_experience",
+                    text="Средний",
+                    callback_data="onboarding:experience:intermediate",
                 )
             ],
             [
                 types.InlineKeyboardButton(
-                    text="Опытный",
-                    callback_data="onboarding:experience:experienced",
+                    text="Продвинутый",
+                    callback_data="onboarding:experience:advanced",
                 )
+            ],
+        ]
+    )
+
+
+def onboarding_environment_mkp():
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text="Тренажёрный зал",
+                callback_data="onboarding:environment:gym",
+            )],
+            [types.InlineKeyboardButton(
+                text="Функциональный зал",
+                callback_data="onboarding:environment:functional_gym",
+            )],
+            [types.InlineKeyboardButton(
+                text="Улица",
+                callback_data="onboarding:environment:street",
+            )],
+            [types.InlineKeyboardButton(
+                text="Дом",
+                callback_data="onboarding:environment:home",
+            )],
+        ]
+    )
+
+
+def onboarding_frequency_mkp():
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text=str(value),
+                    callback_data=f"onboarding:frequency:{value}",
+                )
+                for value in (2, 3, 4)
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text=str(value),
+                    callback_data=f"onboarding:frequency:{value}",
+                )
+                for value in (5, 6)
+            ],
+        ]
+    )
+
+
+def onboarding_duration_mkp():
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(
+                    text=f"{value} мин",
+                    callback_data=f"onboarding:duration:{value}",
+                )
+                for value in (30, 45)
+            ],
+            [
+                types.InlineKeyboardButton(
+                    text=f"{value} мин",
+                    callback_data=f"onboarding:duration:{value}",
+                )
+                for value in (60, 90)
             ],
         ]
     )

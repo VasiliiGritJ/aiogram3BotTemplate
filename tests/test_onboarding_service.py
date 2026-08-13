@@ -4,13 +4,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
-
 from db.migrations import run_migrations
 from db.models import FitnessProfile, SqliteSession, User, UserAccess
 from services.onboarding import (
     EXPERIENCE_LABELS,
     GOAL_LABELS,
+    SESSION_DURATION_OPTIONS,
+    TRAINING_ENVIRONMENT_LABELS,
+    WORKOUT_FREQUENCY_OPTIONS,
     OnboardingData,
     OnboardingValidationError,
     normalize_limitations,
@@ -62,17 +63,20 @@ class OnboardingValidationTests(unittest.TestCase):
         )
 
     def test_workouts_per_week_validation(self) -> None:
-        self.assertEqual(1, parse_workouts_per_week("1"))
-        self.assertEqual(7, parse_workouts_per_week("7"))
-        self.assert_invalid(parse_workouts_per_week, "0", "8", "2.5", "abc", "")
+        for value in WORKOUT_FREQUENCY_OPTIONS:
+            self.assertEqual(value, parse_workouts_per_week(str(value)))
+        self.assert_invalid(
+            parse_workouts_per_week, "0", "1", "7", "2.5", "abc", ""
+        )
 
     def test_session_duration_validation(self) -> None:
-        self.assertEqual(10, parse_session_duration_minutes("10"))
-        self.assertEqual(300, parse_session_duration_minutes("300"))
+        for value in SESSION_DURATION_OPTIONS:
+            self.assertEqual(value, parse_session_duration_minutes(str(value)))
         self.assert_invalid(
             parse_session_duration_minutes,
-            "9",
-            "301",
+            "29",
+            "50",
+            "120",
             "60.5",
             "abc",
             "",
@@ -86,6 +90,20 @@ class OnboardingValidationTests(unittest.TestCase):
         self.assertEqual(
             "beginner",
             validate_choice("beginner", EXPERIENCE_LABELS, "опыт"),
+        )
+        self.assertEqual(
+            "gym",
+            validate_choice("gym", TRAINING_ENVIRONMENT_LABELS, "место"),
+        )
+        self.assertEqual(
+            {"muscle_gain", "strength", "fat_loss"}, set(GOAL_LABELS)
+        )
+        self.assertEqual(
+            {"beginner", "intermediate", "advanced"}, set(EXPERIENCE_LABELS)
+        )
+        self.assertEqual(
+            {"gym", "functional_gym", "street", "home"},
+            set(TRAINING_ENVIRONMENT_LABELS),
         )
         with self.assertRaises(OnboardingValidationError):
             validate_choice("unknown", GOAL_LABELS, "цель")
@@ -130,6 +148,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
             "weight_kg": 80.5,
             "goal": "muscle_gain",
             "experience_level": "beginner",
+            "training_environment": "gym",
             "workouts_per_week": 3,
             "session_duration_minutes": 60,
             "limitations": None,
@@ -186,7 +205,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
     def test_failed_profile_insert_rolls_back_access(self) -> None:
         invalid_data = self.valid_data(goal="unsupported_goal")
 
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises(OnboardingValidationError):
             save_profile_and_trial(
                 self.user_id,
                 invalid_data,

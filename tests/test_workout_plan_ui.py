@@ -1,6 +1,11 @@
 import unittest
 
 from handlers.markups import (
+    onboarding_duration_mkp,
+    onboarding_environment_mkp,
+    onboarding_experience_mkp,
+    onboarding_frequency_mkp,
+    onboarding_goal_mkp,
     onboarding_limitations_mkp,
     profile_mpk,
     start_mkp,
@@ -63,6 +68,41 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
         self.assertEqual(
             ["onboarding:limitations:none"],
             self.callback_values(onboarding_limitations_mkp()),
+        )
+
+    def test_stage_seven_onboarding_choices_use_stable_domain_values(self) -> None:
+        self.assertEqual(
+            [
+                "onboarding:goal:muscle_gain",
+                "onboarding:goal:strength",
+                "onboarding:goal:fat_loss",
+            ],
+            self.callback_values(onboarding_goal_mkp()),
+        )
+        self.assertEqual(
+            [
+                "onboarding:experience:beginner",
+                "onboarding:experience:intermediate",
+                "onboarding:experience:advanced",
+            ],
+            self.callback_values(onboarding_experience_mkp()),
+        )
+        self.assertEqual(
+            [
+                "onboarding:environment:gym",
+                "onboarding:environment:functional_gym",
+                "onboarding:environment:street",
+                "onboarding:environment:home",
+            ],
+            self.callback_values(onboarding_environment_mkp()),
+        )
+        self.assertEqual(
+            [f"onboarding:frequency:{value}" for value in (2, 3, 4, 5, 6)],
+            self.callback_values(onboarding_frequency_mkp()),
+        )
+        self.assertEqual(
+            [f"onboarding:duration:{value}" for value in (30, 45, 60, 90)],
+            self.callback_values(onboarding_duration_mkp()),
         )
 
 

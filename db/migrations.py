@@ -607,6 +607,60 @@ def _add_exercise_taxonomy(connection: Connection) -> None:
         )
 
 
+def _expand_training_profile(connection: Connection) -> None:
+    """Canonicalize profile choices and leave legacy environment unknown."""
+    connection.exec_driver_sql(
+        """CREATE TABLE fitness_profiles_v8 (
+            user_id INTEGER NOT NULL PRIMARY KEY,
+            age INTEGER NOT NULL,
+            sex TEXT NOT NULL,
+            height_cm INTEGER NOT NULL,
+            weight_kg FLOAT NOT NULL,
+            goal TEXT NOT NULL,
+            experience_level TEXT NOT NULL,
+            training_environment TEXT,
+            workouts_per_week INTEGER NOT NULL,
+            session_duration_minutes INTEGER NOT NULL,
+            limitations TEXT,
+            completed_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_fitness_profiles_goal
+                CHECK (goal IN ('muscle_gain', 'strength', 'fat_loss')),
+            CONSTRAINT ck_fitness_profiles_experience_level
+                CHECK (experience_level IN (
+                    'beginner', 'intermediate', 'advanced'
+                )),
+            CONSTRAINT ck_fitness_profiles_training_environment CHECK (
+                training_environment IS NULL OR training_environment IN (
+                    'gym', 'functional_gym', 'street', 'home'
+                )
+            ),
+            FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE
+        )"""
+    )
+    connection.exec_driver_sql(
+        """INSERT INTO fitness_profiles_v8 (
+            user_id, age, sex, height_cm, weight_kg, goal,
+            experience_level, training_environment, workouts_per_week,
+            session_duration_minutes, limitations, completed_at, updated_at
+        ) SELECT
+            user_id, age, sex, height_cm, weight_kg, goal,
+            CASE experience_level
+                WHEN 'some_experience' THEN 'intermediate'
+                WHEN 'experienced' THEN 'advanced'
+                ELSE experience_level
+            END,
+            NULL,
+            workouts_per_week, session_duration_minutes, limitations,
+            completed_at, updated_at
+        FROM fitness_profiles"""
+    )
+    connection.exec_driver_sql("DROP TABLE fitness_profiles")
+    connection.exec_driver_sql(
+        "ALTER TABLE fitness_profiles_v8 RENAME TO fitness_profiles"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -615,6 +669,7 @@ MIGRATIONS = (
     Migration(5, "workout_execution", _create_workout_execution),
     Migration(6, "subscription_payments", _create_subscription_payments),
     Migration(7, "exercise_taxonomy", _add_exercise_taxonomy),
+    Migration(8, "training_profile_expansion", _expand_training_profile),
 )
 
 

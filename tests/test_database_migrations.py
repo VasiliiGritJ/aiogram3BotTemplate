@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8), applied)
         self.assertTrue(
             {
                 "users",
@@ -67,9 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7), first_run)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(7, applied_count)
+        self.assertEqual(8, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -113,7 +113,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3, 4, 5, 6, 7), applied)
+        self.assertEqual((3, 4, 5, 6, 7, 8), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
@@ -346,8 +346,8 @@ class DatabaseMigrationTests(unittest.TestCase):
                 WHERE e.code = 'barbell_bench_press'"""
             ).one()
 
-        self.assertEqual((7,), run_migrations(session.engine))
-        self.assertEqual((), run_migrations(session.engine))
+        self.assertEqual((7,), run_migrations(session.engine, target_version=7))
+        self.assertEqual((), run_migrations(session.engine, target_version=7))
 
         inspector = inspect(session.engine)
         taxonomy_columns = {
@@ -389,6 +389,67 @@ class DatabaseMigrationTests(unittest.TestCase):
             taxonomy,
         )
 
+    def test_migration_eight_maps_legacy_profile_without_inventing_place(self) -> None:
+        session = self.make_session("stage-seven-profile.db")
+        self.assertEqual(
+            (1, 2, 3, 4, 5, 6, 7),
+            run_migrations(session.engine, target_version=7),
+        )
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                """INSERT INTO users
+                (id, tg_id, fullname, username, inviter_id)
+                VALUES
+                (1, 8101, 'Intermediate User', 'intermediate_user', 0),
+                (2, 8102, 'Advanced User', 'advanced_user', 0)"""
+            )
+            connection.exec_driver_sql(
+                """INSERT INTO fitness_profiles (
+                    user_id, age, sex, height_cm, weight_kg, goal,
+                    experience_level, workouts_per_week,
+                    session_duration_minutes, limitations, completed_at,
+                    updated_at
+                ) VALUES
+                (1, 30, 'male', 180, 80, 'muscle_gain',
+                 'some_experience', 3, 60, NULL,
+                 '2026-08-09 12:00:00', '2026-08-10 12:00:00'),
+                (2, 32, 'female', 170, 65, 'fat_loss',
+                 'experienced', 4, 45, 'Legacy limitation',
+                 '2026-08-09 13:00:00', '2026-08-10 13:00:00')"""
+            )
+            connection.exec_driver_sql(
+                """INSERT INTO user_access (user_id, trial_ends_at)
+                VALUES (1, '2026-08-20 12:00:00'),
+                       (2, '2026-08-21 13:00:00')"""
+            )
+
+        with session.engine.connect() as connection:
+            access_before = connection.exec_driver_sql(
+                "SELECT * FROM user_access ORDER BY user_id"
+            ).fetchall()
+
+        self.assertEqual((8,), run_migrations(session.engine))
+        self.assertEqual((), run_migrations(session.engine))
+
+        with session.engine.connect() as connection:
+            profiles = connection.exec_driver_sql(
+                """SELECT user_id, goal, experience_level,
+                    training_environment, workouts_per_week,
+                    session_duration_minutes, limitations, completed_at,
+                    updated_at FROM fitness_profiles ORDER BY user_id"""
+            ).fetchall()
+            access_after = connection.exec_driver_sql(
+                "SELECT * FROM user_access ORDER BY user_id"
+            ).fetchall()
+
+        self.assertEqual("intermediate", profiles[0].experience_level)
+        self.assertEqual("advanced", profiles[1].experience_level)
+        self.assertIsNone(profiles[0].training_environment)
+        self.assertIsNone(profiles[1].training_environment)
+        self.assertEqual("muscle_gain", profiles[0].goal)
+        self.assertEqual("fat_loss", profiles[1].goal)
+        self.assertEqual(access_before, access_after)
+
     def test_fitness_profile_and_access_schema(self) -> None:
         session = self.make_session()
         run_migrations(session.engine)
@@ -409,6 +470,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             {
                 "user_id", "age", "sex", "height_cm", "weight_kg", "goal",
                 "experience_level", "workouts_per_week",
+                "training_environment",
                 "session_duration_minutes", "limitations", "completed_at",
                 "updated_at",
             },
@@ -555,7 +617,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

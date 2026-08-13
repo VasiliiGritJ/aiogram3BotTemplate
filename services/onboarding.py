@@ -17,10 +17,8 @@ MIN_HEIGHT_CM = 100
 MAX_HEIGHT_CM = 250
 MIN_WEIGHT_KG = 30.0
 MAX_WEIGHT_KG = 500.0
-MIN_WORKOUTS_PER_WEEK = 1
-MAX_WORKOUTS_PER_WEEK = 7
-MIN_SESSION_DURATION_MINUTES = 10
-MAX_SESSION_DURATION_MINUTES = 300
+WORKOUT_FREQUENCY_OPTIONS = (2, 3, 4, 5, 6)
+SESSION_DURATION_OPTIONS = (30, 45, 60, 90)
 MAX_LIMITATIONS_LENGTH = 500
 TRIAL_DURATION = timedelta(days=3)
 NO_LIMITATIONS_VALUES = {
@@ -39,13 +37,25 @@ SEX_LABELS = {
     "not_specified": "Не указывать",
 }
 GOAL_LABELS = {
-    "muscle_gain": "Набор мышечной массы / веса",
-    "fat_loss": "Снижение веса / жира",
+    "muscle_gain": "Набрать мышечную массу",
+    "strength": "Стать сильнее",
+    "fat_loss": "Снизить процент жира",
+}
+GOAL_DESCRIPTIONS = {
+    "muscle_gain": "мышцы, рост рабочих весов и массы тела",
+    "strength": "силовые тренировки с упором на присед, жим и тягу",
+    "fat_loss": "сохранить мышцы и силу, снижая жировую массу",
 }
 EXPERIENCE_LABELS = {
     "beginner": "Новичок",
-    "some_experience": "Есть небольшой опыт",
-    "experienced": "Опытный",
+    "intermediate": "Средний",
+    "advanced": "Продвинутый",
+}
+TRAINING_ENVIRONMENT_LABELS = {
+    "gym": "Тренажёрный зал",
+    "functional_gym": "Функциональный зал",
+    "street": "Улица",
+    "home": "Дом",
 }
 
 
@@ -65,6 +75,7 @@ class OnboardingData:
     weight_kg: float
     goal: str
     experience_level: str
+    training_environment: str
     workouts_per_week: int
     session_duration_minutes: int
     limitations: str | None
@@ -120,27 +131,66 @@ def parse_weight_kg(value: str) -> float:
 
 
 def parse_workouts_per_week(value: str) -> int:
-    return _parse_integer(
-        value,
-        MIN_WORKOUTS_PER_WEEK,
-        MAX_WORKOUTS_PER_WEEK,
-        "Введите количество тренировок в неделю от 1 до 7.",
-    )
+    try:
+        parsed = int(value.strip())
+    except (AttributeError, TypeError, ValueError) as error:
+        raise OnboardingValidationError(
+            "Выберите количество тренировок с помощью кнопок."
+        ) from error
+    if parsed not in WORKOUT_FREQUENCY_OPTIONS:
+        raise OnboardingValidationError(
+            "Выберите количество тренировок с помощью кнопок."
+        )
+    return parsed
 
 
 def parse_session_duration_minutes(value: str) -> int:
-    return _parse_integer(
-        value,
-        MIN_SESSION_DURATION_MINUTES,
-        MAX_SESSION_DURATION_MINUTES,
-        "Введите длительность тренировки в минутах от 10 до 300.",
-    )
+    try:
+        parsed = int(value.strip())
+    except (AttributeError, TypeError, ValueError) as error:
+        raise OnboardingValidationError(
+            "Выберите длительность тренировки с помощью кнопок."
+        ) from error
+    if parsed not in SESSION_DURATION_OPTIONS:
+        raise OnboardingValidationError(
+            "Выберите длительность тренировки с помощью кнопок."
+        )
+    return parsed
 
 
 def validate_choice(value: str, choices: dict[str, str], field_name: str) -> str:
     if value not in choices:
         raise OnboardingValidationError(f"Выберите {field_name} с помощью кнопок.")
     return value
+
+
+def validate_onboarding_data(data: OnboardingData) -> OnboardingData:
+    """Validate the complete domain object before any profile write."""
+    validate_choice(data.sex, SEX_LABELS, "вариант")
+    validate_choice(data.goal, GOAL_LABELS, "цель")
+    validate_choice(data.experience_level, EXPERIENCE_LABELS, "опыт")
+    validate_choice(
+        data.training_environment,
+        TRAINING_ENVIRONMENT_LABELS,
+        "место тренировки",
+    )
+    if data.workouts_per_week not in WORKOUT_FREQUENCY_OPTIONS:
+        raise OnboardingValidationError(
+            "Выберите количество тренировок с помощью кнопок."
+        )
+    if data.session_duration_minutes not in SESSION_DURATION_OPTIONS:
+        raise OnboardingValidationError(
+            "Выберите длительность тренировки с помощью кнопок."
+        )
+    if not MIN_AGE <= data.age <= MAX_AGE:
+        raise OnboardingValidationError("Возраст вне допустимого диапазона.")
+    if not MIN_HEIGHT_CM <= data.height_cm <= MAX_HEIGHT_CM:
+        raise OnboardingValidationError("Рост вне допустимого диапазона.")
+    if not math.isfinite(data.weight_kg) or not MIN_WEIGHT_KG <= data.weight_kg <= MAX_WEIGHT_KG:
+        raise OnboardingValidationError("Вес вне допустимого диапазона.")
+    if data.limitations is not None and len(data.limitations) > MAX_LIMITATIONS_LENGTH:
+        raise OnboardingValidationError("Описание ограничений слишком длинное.")
+    return data
 
 
 def normalize_limitations(value: str) -> str | None:
@@ -181,6 +231,7 @@ def update_existing_profile(
     session_factory: Callable[[], Session] = dbSession,
 ) -> FitnessProfile:
     """Update an existing profile without changing the user's access record."""
+    data = validate_onboarding_data(data)
     changed_at = (
         as_utc_naive(updated_at) if updated_at is not None else utc_now()
     )
@@ -202,6 +253,7 @@ def update_existing_profile(
             profile.weight_kg = data.weight_kg
             profile.goal = data.goal
             profile.experience_level = data.experience_level
+            profile.training_environment = data.training_environment
             profile.workouts_per_week = data.workouts_per_week
             profile.session_duration_minutes = data.session_duration_minutes
             profile.limitations = data.limitations
@@ -218,6 +270,7 @@ def save_profile_and_access(
     session_factory: Callable[[], Session] = dbSession,
 ) -> OnboardingResult:
     """Create profile and trial-eligible access without starting the trial."""
+    data = validate_onboarding_data(data)
     confirmed_at = (
         as_utc_naive(confirmed_at) if confirmed_at is not None else utc_now()
     )
@@ -249,6 +302,7 @@ def save_profile_and_access(
                 weight_kg=data.weight_kg,
                 goal=data.goal,
                 experience_level=data.experience_level,
+                training_environment=data.training_environment,
                 workouts_per_week=data.workouts_per_week,
                 session_duration_minutes=data.session_duration_minutes,
                 limitations=data.limitations,

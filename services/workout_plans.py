@@ -57,6 +57,10 @@ class FitnessProfileRequiredError(WorkoutPlanError):
     """Raised when a workout plan is requested before onboarding."""
 
 
+class WorkoutPlanNotReadyError(WorkoutPlanError):
+    """Raised when Stage 7 profile choices need the Stage 7C generator."""
+
+
 class WorkoutCatalogError(WorkoutPlanError):
     """Raised when the controlled catalog is incomplete or inconsistent."""
 
@@ -322,6 +326,11 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
     fallback_notes: list[str] = []
 
     goal = profile.goal
+    if goal == "strength":
+        raise WorkoutPlanNotReadyError(
+            "Программа для цели «Стать сильнее» появится на следующем этапе. "
+            "Ваш профиль сохранён."
+        )
     if goal not in SUPPORTED_GOALS:
         goal = DEFAULT_GOAL
         fallback_notes.append(
@@ -329,7 +338,9 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
         )
 
     experience = profile.experience_level
-    if experience == "experienced":
+    if experience in {"some_experience", "intermediate"}:
+        experience = "some_experience"
+    elif experience in {"experienced", "advanced"}:
         experience = "some_experience"
         fallback_notes.append(
             "Для опытного уровня пока использован ближайший доступный шаблон с опытом."
@@ -344,6 +355,17 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
         requested_workouts = int(profile.workouts_per_week)
     except (TypeError, ValueError):
         requested_workouts = 1
+    training_environment = getattr(profile, "training_environment", None)
+    if training_environment not in {None, "gym"}:
+        raise WorkoutPlanNotReadyError(
+            "Программа для выбранного места тренировок появится на следующем "
+            "этапе. Ваш профиль сохранён."
+        )
+    if training_environment is not None and requested_workouts > 4:
+        raise WorkoutPlanNotReadyError(
+            "Программа на 5–6 тренировок в неделю появится на следующем этапе. "
+            "Ваш профиль сохранён."
+        )
     workouts_per_week = min(
         max(requested_workouts, 1),
         MAX_TEMPLATE_WORKOUTS_PER_WEEK,
