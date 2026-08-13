@@ -1,70 +1,51 @@
 # NEXT_TASK.md
 
-## Текущая задача: Stage 6 — production-readiness коммерческих платежей
+## Текущая задача: Stage 7A — exercise taxonomy и controlled library
 
 ### Принятый baseline
 
-- Stages 1–4 приняты; onboarding, trial, планы, guided workout, history и deterministic progression работают.
-- Stage 5 принят в sandbox: migration 6, `SubscriptionPayment`, идемпотентный `PaymentService`, YooKassa adapter, Telegram UX и безопасный polling lifecycle реализованы.
-- Sandbox YooKassa shop подтверждён; один sandbox payment успешно обработан. Повторный reconcile не изменил период доступа повторно.
-- UX корректно различает текущий trial и уже оплаченный платный период, зарезервированный после trial; технический product code и лишние платёжные кнопки скрыты.
-- Последний полный unittest suite: **204/204 PASS**. Реальная `db.db` содержит sandbox acceptance-данные и остаётся защищённым локально modified файлом.
-- Single-instance guard предотвращает второй локальный polling до обращения к Telegram; причина локальных 409 устранена.
+- Stages 1–5 приняты; onboarding, access/trial, план, guided workout, history, deterministic progression и sandbox payment path работают.
+- Stage 6 technical checkpoint завершён: payment runtime разделяет test/production mode fail-closed; webhook processor/HTTP boundary/health contract тестируемы. Реальные production credentials, платежи, webhook registration и deploy не выполнялись.
+- Stage 7 product spec зафиксирован в `PROJECT_SPEC.md`; полная декомпозиция находится в `ROADMAP.md`.
+- Реальная `db.db` содержит локальные acceptance-данные и остаётся защищённым modified-файлом: не использовать её как test fixture, не stage/commit/reset/restore.
 
-## Цель Stage 6
+## Цель 7A
 
-Подготовить отдельный, контролируемый путь к коммерческой эксплуатации платежей. На этом этапе нельзя считать sandbox-настройки, цену 100 RUB или тестовую оплату готовыми к production.
+Подготовить контролируемую, расширяемую taxonomy упражнений и библиотеку минимум из 70 качественных упражнений для будущих планов, функциональных форматов и runtime replacement. Это фундамент, но не генерация новых планов, не новый onboarding и не UI замены.
 
-## Обязательные предварительные решения владельца
+## Обязательные продуктовые правила
 
-До любых production-вызовов или deploy письменно зафиксировать:
+- Сохранить все существующие стабильные exercise ID и не удалять legacy exercises.
+- Покрыть грудь, спину, квадрицепс, заднюю поверхность бедра, ягодицы, плечи, бицепс, трицепс, икры и core.
+- Описывать упражнения структурированно: целевая мышца, тип движения, тип оборудования, подходящая среда и уровень/приоритет; не плодить бренды и почти одинаковые варианты.
+- Поддержать современные тренажёры, блоки, гантели, штангу, Smith/Hack/leg press и аналогичные распространённые машины, собственный вес, турник/брусья и функциональный инвентарь.
+- В taxonomy должны быть данные, чтобы позднее безопасно выбрать замену по мышце, движению, уровню, месту и доступному оборудованию.
 
-- коммерческую цену, валюту, период доступа, условия возврата и отображаемый пользователю текст;
-- юридический статус продавца/получателя платежей и merchant-настройки YooKassa;
-- применимые требования 54-ФЗ, чеков и передачи фискальных данных;
-- production return URL, публичный HTTPS endpoint и способ безопасного хранения production credentials;
-- процедуру поддержки: отмены, возвраты, спорные платежи и обработку недоступности провайдера.
+## Первый implementation block
 
-## План работы
+1. Изучить существующие `Exercise`, Stage 2 plan data, alternatives, snapshots, migrations и tests.
+2. Предложить минимальную schema boundary для taxonomy: какие новые поля действительно нужны и почему текущих `muscle_group`, `primary_muscle_group`, `equipment`, `variant`, `alternative_name`, `restriction_tags` недостаточно.
+3. До кода зафиксировать конкретный controlled catalog и mapping legacy exercises; не менять stable IDs.
+4. Если migration действительно нужна, реализовать её отдельным маленьким шагом: temp DB и copy acceptance до явного разрешения применять к реальной `db.db`.
+5. Добавить/обновить seed/library data и детерминированные tests покрытия, uniqueness и обратной совместимости.
 
-### Phase 1. Commercial and legal readiness
+## Вне scope 7A
 
-- Зафиксировать утверждённые коммерческие условия и юридическую схему до изменения product config.
-- Определить применимые требования к 54-ФЗ/чекам и ответственную сторону за их исполнение.
-- Не использовать sandbox цену как fallback или production price.
+- onboarding/profile migration;
+- генерация планов для новых целей/частот/длительностей;
+- новые progression algorithms;
+- functional execution UI;
+- text-program parser, OCR или AI;
+- runtime exercise swap UI;
+- production payments, webhook registration, deploy и внешние API calls.
 
-### Phase 2. Production configuration and deployment design
-
-- Спроектировать отдельную production-конфигурацию без коммита секретов.
-- Подготовить безопасный deployment, backup/restore и наблюдаемость без утечки персональных данных или секретов.
-- Подтвердить single-instance lifecycle для выбранной production-среды.
-- Runtime contract: Internet → HTTPS/TLS termination на deployment edge/reverse proxy → private/internal aiohttp webhook server → `PaymentWebhookProcessor` → authoritative YooKassa verification → идемпотентное применение доступа через `PaymentService`. Публичный webhook endpoint обязан быть HTTPS; aiohttp не управляет сертификатами, а forwarded headers не являются security proof. Регистрация production webhook — отдельное явное внешнее действие.
-
-### Phase 3. Verified payment confirmation
-
-- Спроектировать и протестировать production webhook с проверкой подлинности и идемпотентной обработкой.
-- Сохранить polling/reconcile только как контролируемый резервный путь, если он необходим.
-- Не доверять redirect Telegram или странице успеха как доказательству оплаты.
-
-### Phase 4. Controlled production acceptance
-
-- Перед первым реальным платежом создать backup и пройти отдельный safety gate владельца.
-- Провести ограниченную production-приёмку: успешная оплата, повторное событие, отмена/ошибка и отсутствие двойного продления.
-- Отдельно подтвердить deploy и операционный план отката.
-
-## Вне scope без отдельного подтверждения
-
-- реальные production payment/create/reconcile вызовы;
-- production credentials, webhook registration, deploy или публикация;
-- изменение коммерческой цены, возвратов или юридических условий по предположению;
-- очистка/восстановление `db.db`, удаление sandbox payment или переписывание Git history.
-
-## Постоянные ограничения
+## Safety и checkpoint
 
 - `storage/.env` не читать, не выводить, не менять и не коммитить.
-- `db.db` защищена: не stage, не commit, не reset/restore и не использовать для экспериментов.
-- Push, реальная внешняя операция и production action требуют отдельного явного подтверждения владельца.
+- Реальную `db.db` не менять до отдельного copy-migration acceptance и явного разрешения; никогда не stage/commit/reset/restore.
+- Новые миграции сначала проверять на temp DB и копии реальной базы; Stage 1–6 data, plans, sessions и snapshots должны сохраниться.
+- Перед checkpoint: targeted tests, полный suite один раз, compileall и `git diff --check`; commit — только с exact whitelist и без push.
 
-## Критерий готовности Stage 6
+## Критерий готовности 7A
 
-Коммерческие, юридические и технические prerequisites документированы и одобрены; production confirmation path, deployment и acceptance plan воспроизводимо проверены до первого реального платежа.
+Минимальная taxonomy проверена миграционно и покрыта тестами; библиотека содержит минимум 70 качественных упражнений с требуемым покрытием; legacy IDs/планы/history читаемы; следующие блоки могут использовать taxonomy без догадок.

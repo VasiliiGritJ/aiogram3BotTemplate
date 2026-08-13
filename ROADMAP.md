@@ -19,6 +19,8 @@
 - `[x]` **Stage 4 — ACCEPTED / COMPLETE:** детерминированная progression использует последнее завершённое выполнение по `selected_exercise_id`; применяются объяснимые правила increase / hold / decrease и отдельные безопасные правила для упражнений с собственным весом. Рекомендация рассчитывается read-only из истории и показывается в Telegram как необязательная подсказка, не меняя план, snapshot или результаты. Migration 6 не потребовалась. Live Telegram acceptance пройдена: проверен сценарий без истории, отменённые тренировки не участвуют в progression. В качестве инфраструктурного исправления добавлена необязательная поддержка SOCKS5 для Telegram через `TELEGRAM_PROXY_URL`. Дальнейший polish Stage 4 отложен.
 
 - `[x]` **Stage 5 — ACCEPTED / COMPLETE (sandbox):** migration 6, идемпотентная модель платежей, PaymentService и YooKassa adapter приняты. Sandbox-оплата успешно подтверждена: повторный reconcile не продлевает доступ второй раз; UX корректно показывает оплаченный платный период, зарезервированный после trial, без технического product code и лишних платёжных кнопок. Полный suite — 204/204 PASS. Причина Telegram 409 на локальной машине устранена single-instance guard для polling. Sandbox payment остаётся в защищённой локальной `db.db`. Production-платежи ещё не готовы: требуются отдельные коммерческие, юридические и инфраструктурные решения.
+- `[x]` **Stage 6 — TECHNICAL CHECKPOINT COMPLETE:** разделены test/production payment modes с fail-closed проверкой типа магазина; подготовлены идемпотентный webhook processor, HTTP adapter, runtime contract, health checks и безопасная observability. Полный suite — 235/235 PASS. Реальные production-платежи, webhook registration и deploy не выполнялись и остаются отдельной коммерческой, юридической и hosting-границей.
+- `[~]` **Stage 7 — PRODUCT EXPANSION SPEC FROZEN:** перед production-платежами зафиксированы цели, уровни опыта, среды тренировки, библиотека упражнений, типы программ, замены и расширение progression. Реализация начинается с taxonomy/library; code, schema и реальная `db.db` в docs-block не менялись.
 
 Нумерация «Этапов 0–3» ниже — историческая декомпозиция ранних работ. Незакрытые старые флажки в этих разделах не отменяют подтверждённую приёмку Stage 1. Существующие разделы сохранены без перенумерации как подробная долгосрочная дорожная карта.
 
@@ -262,7 +264,77 @@
 
 ## Ближайшая задача
 
-**Следующая задача — Stage 6 `[~]`:** подготовка коммерческого production-readiness для платежей. До включения настоящих платежей отдельно определить коммерческую цену, юридический/merchant статус, требования 54-ФЗ и чеков, production-конфигурацию, webhook, deploy и production acceptance. Точный scope и границы внешних действий зафиксированы в [NEXT_TASK.md](NEXT_TASK.md).
+**Следующая задача — Stage 7A `[~]`:** exercise taxonomy и контролируемая библиотека. Сначала спроектировать и проверить минимальную расширяемую структуру упражнений, сохранить стабильные ID и довести библиотеку до 70 качественных упражнений; затем отдельно расширять профиль и генерацию планов. Точный scope и миграционная граница зафиксированы в [NEXT_TASK.md](NEXT_TASK.md).
+
+---
+
+## Stage 7. Product expansion before production launch
+
+Цель: довести тренировочную часть до pre-launch качества, не смешивая её с production-платежами, медицинским модулем или неограниченной AI-генерацией.
+
+### 7A. Exercise taxonomy and controlled library
+
+- Цель: расширить библиотеку минимум до 70 качественных упражнений и добавить данные, достаточные для безопасного отбора и замены.
+- Области: `Exercise`, seed/library data, plan selection, snapshots и migration tests.
+- Migration: **ожидается** — только после утверждения минимального набора структурированных taxonomy-полей; стабильные exercise ID не менять.
+- Риски: поломка Stage 2 plans/alternatives, дубли упражнений, несоответствие snapshot/history.
+- Checkpoint: миграция проходит на temp/copy DB, legacy plans читаются, библиотека имеет покрытие 10 мышечных групп, тесты выбора и сохранности ID зелёные.
+
+### 7B. Onboarding and profile dimensions
+
+- Цель: добавить канонические цели, три уровня опыта, место тренировки, частоту 2–6 и длительность 30/45/60/90 без вопроса о персональном оборудовании.
+- Области: `FitnessProfile`, onboarding FSM/UI, profile display/edit, plan invalidation/assignment rules.
+- Migration: **ожидается** для новых profile values/fields и безопасного преобразования legacy значений.
+- Риски: несовместимость существующих профилей, неверный access/trial flow, случайное создание нового плана во время активной workout session.
+- Checkpoint: старые профили мигрируют читаемо, новые варианты валидируются, UI остаётся русским и кратким, regression onboarding/access/workout tests зелёные.
+
+### 7C. Deterministic program generation
+
+- Цель: назначать планы по цели, опыту, месту, частоте и длительности для hypertrophy, strength, bodyweight и functional режимов.
+- Области: templates/planning service, assigned plans, exercise taxonomy и tests.
+- Migration: **возможно** для расширения template metadata; решение принимается только после 7A/7B.
+- Риски: перегрузка по времени, недоступное оборудование, изменение уже начатых/исторических тренировок.
+- Checkpoint: одинаковый профиль даёт одинаковый план, план укладывается в duration, только доступные упражнения выбираются, snapshot/history не меняются.
+
+### 7D. Multi-type progression
+
+- Цель: сохранить текущую double progression для гипертрофии и добавить отдельные объяснимые правила для силовых, собственного веса и функциональных программ.
+- Области: progression core/history service, workout screen и tests.
+- Migration: **не ожидается** по умолчанию; recommendation остаётся read-only, пока schema действительно достаточна.
+- Риски: применение hypertrophy-правил к чужому типу программы, агрессивное изменение нагрузки, потеря детерминированности.
+- Checkpoint: reason codes и границы каждого типа покрыты тестами; рекомендации не меняют snapshots/results и устойчивы к resume.
+
+### 7E. Functional and street formats
+
+- Цель: поддержать functional training (AMRAP, EMOM, For Time), а для улицы — подходы и круговые тренировки.
+- Области: program model, execution UI/FSM, session snapshots, history display.
+- Migration: **вероятно** — только если существующая модель sets/reps не может хранить формат без неоднозначности.
+- Риски: cursor/resume, неполная история результата, ложная унификация разных форматов.
+- Checkpoint: каждый формат проходит start/resume/complete/cancel; результаты читаемы в истории; без медицинских обещаний.
+
+### 7F. User-provided text program
+
+- Цель: принять программу только текстом, разобрать её в preview и сохранить исключительно после подтверждения.
+- Области: parser, confirmation UI, assigned user program и validation.
+- Migration: **возможно** для отличия пользовательского плана и его режима; текст сам по себе не становится источником исполнения без структурированного preview.
+- Риски: ошибочный разбор, выполнение без подтверждения, небезопасные/неподдерживаемые упражнения.
+- Checkpoint: deterministic parse fixtures, controlled validation errors, строгий/замены/AI-adapt режимы сохраняются явно, OCR отсутствует.
+
+### 7G. Exercise replacement and UX integration
+
+- Цель: дать замену во время тренировки по taxonomy и среде, не стирая запланированное упражнение.
+- Области: workout execution service/UI, alternatives selection, session snapshots и progression identity.
+- Migration: **не ожидается**, если 7A и существующие planned/selected snapshots достаточны.
+- Риски: замена чужой сессии, неверный cursor, смешение истории оригинала и альтернативы.
+- Checkpoint: ownership/stale callback tests, planned vs selected сохраняются, alternative progression независима, cancel/resume работают.
+
+### 7H. Product regression and live acceptance
+
+- Цель: провести полный regression и живую Telegram-приёмку всех новых путей.
+- Области: тестовый набор, миграции на копии DB, controlled live acceptance.
+- Migration: **нет новой по умолчанию**; применяются только уже одобренные миграции после copy acceptance.
+- Риски: регрессия trial/subscription, workout history, access, single-instance polling.
+- Checkpoint: полный suite, compile/diff checks, migration copy acceptance и сценарии owner live acceptance; production payment/deploy не входят в этот этап.
 
 ## Историческая ближайшая задача (Stage 4)
 
