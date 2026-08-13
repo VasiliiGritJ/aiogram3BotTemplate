@@ -26,6 +26,13 @@ from services.workout_progression import (
     ProgressionRecommendation,
     ProgressionStrategy,
 )
+from services.workout_replacements import (
+    ReplacementCandidate,
+    ReplacementNotAllowedError,
+    ReplacementOptions,
+    ReplacementReason,
+    ReplacementResult,
+)
 
 
 class _Dispatcher:
@@ -238,10 +245,24 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             block_id=block.id, started_at=None, finished_at=None,
             workout_format=python_types.SimpleNamespace(value="amrap"),
             completed_rounds=0, current_minute=None,
+            exercises=(
+                python_types.SimpleNamespace(
+                    exercise_id=31,
+                    name="Приседания",
+                    planned_exercise_id=3,
+                    selected_exercise_id=3,
+                ),
+            ),
         )
         markup = workout_ui.workout_format_mkp(state)
         callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
         self.assertIn("workout:format:start:71", callbacks)
+        replacement_markup = workout_ui.workout_format_mkp(
+            state, show_replacements=True
+        )
+        self.assertIn(
+            "workout:replace:31", self.callback_values(replacement_markup)
+        )
 
     def run_async(self, coroutine) -> None:
         asyncio.run(coroutine)
@@ -434,6 +455,107 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         save.assert_called_once_with(7, 21, 31, 1, 12.5, 10)
         self.assertEqual({}, state.data)
         self.assertIn("12.5 кг × 10", reps_message.answers[0][0])
+
+    def test_standard_replacement_ui_uses_server_selected_options(self) -> None:
+        call = _Call(data="workout:replace:current")
+        state = _State()
+        options = ReplacementOptions(
+            session_exercise_id=31,
+            current_exercise_name="Жим",
+            candidates=(
+                ReplacementCandidate(
+                    14, "dumbbell_bench_press", "Гантели", "Грудь", "dumbbell"
+                ),
+            ),
+        )
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_current_step", return_value=_step()),
+            patch.object(
+                workout_ui, "get_replacement_options", return_value=options
+            ) as get_options,
+        ):
+            self.run_async(workout_ui.workout_replace_current(call, state))
+        get_options.assert_called_once_with(7, 31)
+        self.assertIn(
+            "workout:replace:choose:31:14",
+            self.callback_values(call.message.edits[-1][1]),
+        )
+        self.assertIn(
+            "workout:replace:cancel", self.callback_values(call.message.edits[-1][1])
+        )
+
+    def test_replacement_choice_and_stale_callbacks_are_controlled(self) -> None:
+        call = _Call(data="workout:replace:choose:31:14")
+        state = _State()
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "apply_replacement",
+                return_value=ReplacementResult(31, 3, 14, "Гантели", True),
+            ) as apply,
+            patch.object(
+                workout_ui, "show_current_workout", new_callable=AsyncMock
+            ) as current,
+        ):
+            self.run_async(workout_ui.workout_replace_action(call, state))
+        apply.assert_called_once_with(7, 31, 14)
+        current.assert_awaited_once_with(call.message, 7, edit=True)
+
+        stale = _Call(data="workout:replace:choose:31:14")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "apply_replacement",
+                side_effect=ReplacementNotAllowedError(
+                    ReplacementReason.EXERCISE_STARTED, "started"
+                ),
+            ),
+            patch.object(
+                workout_ui, "show_current_workout", new_callable=AsyncMock
+            ) as current,
+        ):
+            self.run_async(workout_ui.workout_replace_action(stale, _State()))
+        self.assertIn("Упражнение уже начато", stale.answers[-1][0][0])
+        current.assert_awaited_once()
+
+    def test_replacement_button_is_hidden_for_strict_or_replaced_snapshot(self) -> None:
+        message = _Message()
+        strict = replace(
+            _workout(), plan_source="user_defined", adaptation_mode="strict"
+        )
+        with (
+            patch.object(workout_ui, "get_active_workout", return_value=strict),
+            patch.object(workout_ui, "get_current_step", return_value=_step()),
+        ):
+            self.run_async(workout_ui.show_current_workout(message, 7, edit=False))
+        self.assertNotIn(
+            "workout:replace:current", self.callback_values(message.answers[-1][1])
+        )
+
+        replaced_message = _Message()
+        replaced_exercise = replace(
+            _exercise(), selected_exercise_id=14, selected_exercise_name="Гантели"
+        )
+        replaced_step = CurrentWorkoutStep("record_set", 21, replaced_exercise, 1)
+        with (
+            patch.object(workout_ui, "get_active_workout", return_value=_workout()),
+            patch.object(workout_ui, "get_current_step", return_value=replaced_step),
+            patch.object(
+                workout_ui,
+                "get_progression_recommendation",
+                return_value=_recommendation(ProgressionReason.NO_HISTORY),
+            ),
+        ):
+            self.run_async(
+                workout_ui.show_current_workout(replaced_message, 7, edit=False)
+            )
+        self.assertNotIn(
+            "workout:replace:current",
+            self.callback_values(replaced_message.answers[-1][1]),
+        )
 
     def test_invalid_input_reprompts_without_losing_fsm(self) -> None:
         state = _State()

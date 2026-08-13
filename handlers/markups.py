@@ -171,7 +171,11 @@ def user_program_preview_mkp():
     ])
 
 
-def workout_current_mkp(*, ready_to_complete: bool = False):
+def workout_current_mkp(
+    *,
+    ready_to_complete: bool = False,
+    show_replacement: bool = False,
+):
     buttons = []
     if ready_to_complete:
         buttons.append(
@@ -191,6 +195,15 @@ def workout_current_mkp(*, ready_to_complete: bool = False):
                 )
             ]
         )
+        if show_replacement:
+            buttons.append(
+                [
+                    types.InlineKeyboardButton(
+                        text="🔄 Заменить упражнение",
+                        callback_data="workout:replace:current",
+                    )
+                ]
+            )
     buttons.append(
         [
             types.InlineKeyboardButton(
@@ -202,13 +215,23 @@ def workout_current_mkp(*, ready_to_complete: bool = False):
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def workout_format_mkp(state):
+def workout_format_mkp(state, *, show_replacements: bool = False):
     """Render only durable format actions; callback data contains no user data."""
     buttons = []
     if state.started_at is None:
         buttons.append([types.InlineKeyboardButton(
             text="▶️ Начать блок", callback_data=f"workout:format:start:{state.block_id}"
         )])
+        if show_replacements:
+            for exercise in state.exercises:
+                if (
+                    exercise.planned_exercise_id is not None
+                    and exercise.planned_exercise_id == exercise.selected_exercise_id
+                ):
+                    buttons.append([types.InlineKeyboardButton(
+                        text=f"🔄 Заменить: {exercise.name}",
+                        callback_data=f"workout:replace:{exercise.exercise_id}",
+                    )])
     elif state.finished_at is None:
         if state.workout_format.value == "emom":
             minute = state.current_minute or 1
@@ -235,6 +258,31 @@ def workout_format_mkp(state):
     buttons.append([types.InlineKeyboardButton(
         text="❌ Отменить тренировку", callback_data="workout:cancel"
     )])
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def workout_replacement_mkp(options):
+    """Render only server-selected, local snapshot/exercise identifiers."""
+    buttons = [
+        [
+            types.InlineKeyboardButton(
+                text=f"🔄 {candidate.name}",
+                callback_data=(
+                    "workout:replace:choose:"
+                    f"{options.session_exercise_id}:{candidate.exercise_id}"
+                ),
+            )
+        ]
+        for candidate in options.candidates
+    ]
+    buttons.append(
+        [
+            types.InlineKeyboardButton(
+                text="⬅️ Оставить текущее",
+                callback_data="workout:replace:cancel",
+            )
+        ]
+    )
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

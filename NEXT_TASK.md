@@ -1,46 +1,62 @@
 # NEXT_TASK.md
 
-## Текущая задача: Stage 7G — замена упражнения во время тренировки
+## Следующая задача: Stage 7H — полный product regression и live acceptance
 
 ### Принятый baseline
 
-- Stage 7A–7E: controlled taxonomy, расширенный профиль, deterministic generator,
-  multi-type progression и durable workout formats.
-- Stage 7F: пользователь может прислать программу обычным русским текстом,
-  проверить структурированный preview и сохранить её только после подтверждения.
-- Сохранённый план различает `generated` / `user_defined` и режимы `strict` /
-  `replacements` / `adaptive`; эти признаки snapshot-ятся в начатую тренировку.
-- Deterministic parser сохраняет только controlled exercise IDs, отклоняет
-  неоднозначные/нераспознанные строки и не хранит исходный текст постоянно.
-- Migration 11 проверена на временной БД и новой копии реальной БД через
-  7→8→9→10→11; реальная `db.db` остаётся на migration 6 и защищена.
-- Regression checkpoint Stage 7F: targeted 112/112 PASS; полный suite и точный
-  commit зафиксированы в отчёте текущего checkpoint.
+- Stage 7A–7F: контролируемая библиотека из 111 упражнений, расширенный профиль,
+  deterministic generator, multi-type progression, functional/street formats и
+  безопасный импорт пользовательской программы из текста.
+- Stage 7G: во время активной тренировки можно один раз заменить ещё не начатое
+  упражнение на максимум три безопасных эквивалента из taxonomy. Выбор учитывает
+  среду, опыт, primary muscle, movement pattern, progression capability,
+  equivalence/role и оборудование.
+- `planned_exercise_id` и planned snapshot остаются неизменными; меняется только
+  selected snapshot текущей WorkoutSession. Progression продолжает искать историю
+  по фактически выполненному `selected_exercise_id`.
+- STRICT user program не предлагает замену; REPLACEMENTS/ADAPTIVE и generated
+  plans поддерживают её. После первого сохранённого подхода или старта timed block
+  замена блокируется. Stale/duplicate callbacks и ownership проверяются сервисом.
+- Migration 12 не потребовалась: текущая schema уже содержит immutable
+  planned/selected snapshots. Реальная `db.db` остаётся на migration 6 и защищена.
+- Последний local checkpoint: полный unittest suite 300/300 PASS, compileall PASS,
+  `git diff --check` PASS. Live Telegram acceptance ещё не выполнялся.
 
-## Цель 7G
+## Цель Stage 7H
 
-Добавить контролируемую замену текущего упражнения во время активной тренировки:
+Провести контролируемую приёмку всего Stage 7 на временной БД/копии и затем в
+Telegram только по отдельному явному разрешению владельца. Цель — подтвердить,
+что новые profile/generator/format/user-program/replacement flows не нарушают
+access, subscription, history, resume и polling lifecycle.
 
-- предлагать только совместимые alternatives из controlled taxonomy с учётом
-  среды, паттерна движения, целевой мышцы и доступного оборудования;
-- разрешать замену только для планов, чей `adaptation_mode` допускает её;
-- проверять ownership, активную session и актуальный cursor на каждом действии;
-- никогда не переписывать planned snapshot: история должна отдельно показывать,
-  что было запланировано и что фактически выбрано;
-- progression альтернативы должна использовать её собственный
-  `selected_exercise_id`, не историю исходного упражнения;
-- stale/double callbacks, resume, cancel и restart должны быть безопасны;
-- не создавать второй workout engine и не менять уже записанные результаты.
+### Обязательные проверки
 
-Migration 12 не ожидается: существующие planned/selected snapshots уже рассчитаны
-на runtime swap. Если анализ выявит реальный недостаток схемы, остановиться и
-сначала объяснить его владельцу.
+- Один полный regression suite, compileall и `git diff --check` только после
+  окончательного интеграционного checkpoint, без повторов при отсутствии новых
+  кодовых изменений.
+- Copy acceptance migrations 7→8→9→10→11: idempotent second run, `quick_check`,
+  `foreign_key_check`, сохранность Stage 1–6 данных. Реальную `db.db` не
+  мигрировать без отдельного решения владельца.
+- Targeted end-to-end scenarios на temporary DB: generated plans по profile,
+  strict/replacements/adaptive user program, standard and timed formats,
+  replacement before start/after saved work, selected-history progression,
+  cancel/resume/history.
+- Live acceptance — отдельные ограниченные шаги: сначала ровно один bot process,
+  затем owner-driven Telegram checks. Не создавать payments и не выполнять
+  YooKassa actions.
 
-## Safety
+### Safety
 
-- `db.db` не stage/reset/restore и не мигрировать без отдельного подтверждения.
-- `storage/.env` не читать и не менять.
-- Никаких Telegram/YooKassa network calls, production/deploy или push без
+- `db.db` не stage/reset/restore/мигрировать; `storage/.env` не читать и не менять.
+- Не выполнять Telegram/YooKassa network actions, bot launch, deploy или push без
   отдельного явного подтверждения владельца.
-- Сначала targeted service/UI tests, затем один full suite, compileall и
-  `git diff --check`; live Telegram acceptance — отдельный шаг.
+- Новые schema changes/Migration 12 не создавать без доказанного пробела в
+  immutable snapshot semantics.
+- Не смешивать Stage 7H с production payments, webhook registration, legal/commercial
+  decisions или расширением catalogue без отдельной задачи.
+
+### Done-критерий
+
+Stage 7H завершается только после зелёных технических проверок, copy migration
+acceptance и явной owner live acceptance. После этого можно отдельно обновить
+ROADMAP и запросить разрешение на точный checkpoint commit/push.

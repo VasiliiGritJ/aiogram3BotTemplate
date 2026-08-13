@@ -48,6 +48,8 @@ class FormatExercise:
     station_order: int
     name: str
     reps: int
+    planned_exercise_id: int | None
+    selected_exercise_id: int | None
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,8 @@ def _state(session: Session, block: WorkoutSessionBlock, now: datetime) -> Forma
             station_order=row.selected_station_order or index,
             name=row.selected_exercise_name,
             reps=row.selected_format_reps or row.selected_target_reps_min,
+            planned_exercise_id=row.planned_exercise_id,
+            selected_exercise_id=row.selected_exercise_id,
         )
         for index, row in enumerate(rows, start=1)
     )

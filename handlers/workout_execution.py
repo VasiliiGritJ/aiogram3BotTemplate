@@ -19,6 +19,7 @@ from handlers.markups import (
     workout_history_mkp,
     workout_input_mkp,
     workout_format_mkp,
+    workout_replacement_mkp,
 )
 from services.access import AccessStatus, get_access_decision
 from services.workout_execution import (
@@ -46,6 +47,12 @@ from services.workout_progression_history import (
     ProgressionHistoryError,
     get_progression_recommendation,
 )
+from services.workout_replacements import (
+    ReplacementNotAllowedError,
+    ReplacementReason,
+    apply_replacement,
+    get_replacement_options,
+)
 from services.workout_formats import (
     WorkoutFormatError,
     finish_format_block,
@@ -69,6 +76,7 @@ WORKOUT_HISTORY_CALLBACK = "workout:history"
 WORKOUT_HISTORY_PAGE_PREFIX = "workout:history:page:"
 WORKOUT_HISTORY_DETAIL_PREFIX = "workout:history:detail:"
 WORKOUT_FORMAT_PREFIX = "workout:format:"
+WORKOUT_REPLACEMENT_PREFIX = "workout:replace:"
 
 MAX_WEIGHT_INPUT_LENGTH = 32
 MAX_REPS_INPUT_LENGTH = 9
@@ -296,9 +304,30 @@ async def show_current_workout(
         text = _format_step(workout, step, recommendation)
         if step.kind == "format_block" and step.format_block is not None:
             state = get_format_state(user_id, step.format_block.id)
-            markup = workout_format_mkp(state)
+            markup = workout_format_mkp(
+                state,
+                show_replacements=(
+                    state.started_at is None
+                    and not (
+                        workout.plan_source == "user_defined"
+                        and workout.adaptation_mode == "strict"
+                    )
+                ),
+            )
         else:
-            markup = workout_current_mkp(ready_to_complete=step.ready_to_complete)
+            markup = workout_current_mkp(
+                ready_to_complete=step.ready_to_complete,
+                show_replacement=(
+                    not step.ready_to_complete
+                    and step.exercise is not None
+                    and step.exercise.planned_exercise_id
+                    == step.exercise.selected_exercise_id
+                    and not (
+                        workout.plan_source == "user_defined"
+                        and workout.adaptation_mode == "strict"
+                    )
+                ),
+            )
 
     if edit:
         await message.edit_text(text, reply_markup=markup)
@@ -397,6 +426,129 @@ async def workout_record_set(call: types.CallbackQuery, state: FSMContext) -> No
         await state.clear()
         await show_current_workout(call.message, user.id, edit=True)
     await call.answer()
+
+
+def _replacement_feedback(reason: ReplacementReason) -> str:
+    return {
+        ReplacementReason.STRICT_MODE: (
+            "Эта программа настроена на строгое следование без замен."
+        ),
+        ReplacementReason.EXERCISE_STARTED: (
+            "Упражнение уже начато — заменить его можно на следующей тренировке."
+        ),
+        ReplacementReason.TIMED_BLOCK_STARTED: (
+            "Блок уже начат — замену можно сделать в следующей тренировке."
+        ),
+        ReplacementReason.UNAVAILABLE: (
+            "Сейчас нет безопасной замены для этого упражнения."
+        ),
+        ReplacementReason.ALREADY_REPLACED: (
+            "Для этого упражнения замена уже выбрана."
+        ),
+    }.get(reason, "Действие устарело. Показываю актуальное состояние.")
+
+
+async def _replacement_options(
+    call: types.CallbackQuery,
+    state: FSMContext,
+    user_id: int,
+    session_exercise_id: int,
+) -> None:
+    try:
+        options = get_replacement_options(user_id, session_exercise_id)
+    except ReplacementNotAllowedError as error:
+        await state.clear()
+        await call.answer(_replacement_feedback(error.reason), show_alert=True)
+        return
+    except (WorkoutExecutionError, SQLAlchemyError):
+        await state.clear()
+        await call.answer("Действие устарело. Показываю актуальное состояние.", show_alert=True)
+        await show_current_workout(call.message, user_id, edit=True)
+        return
+
+    if not options.candidates:
+        await state.clear()
+        await call.answer("Сейчас нет безопасной замены для этого упражнения.", show_alert=True)
+        return
+
+    await state.clear()
+    await call.message.edit_text(
+        f"Чем заменить «{escape(options.current_exercise_name)}»?",
+        reply_markup=workout_replacement_mkp(options),
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data == "workout:replace:current")
+async def workout_replace_current(
+    call: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    user = User.get(tg_id=call.from_user.id)
+    if user is None:
+        await call.answer("Отправьте /start, чтобы начать.", show_alert=True)
+        return
+    try:
+        step = get_current_step(user.id)
+    except (WorkoutExecutionError, SQLAlchemyError):
+        await state.clear()
+        await call.answer("Действие устарело. Показываю актуальное состояние.", show_alert=True)
+        await show_current_workout(call.message, user.id, edit=True)
+        return
+    if step.ready_to_complete or step.exercise is None:
+        await state.clear()
+        await call.answer("Действие устарело. Показываю актуальное состояние.", show_alert=True)
+        await show_current_workout(call.message, user.id, edit=True)
+        return
+    await _replacement_options(call, state, user.id, step.exercise.id)
+
+
+@dp.callback_query(F.data.startswith(WORKOUT_REPLACEMENT_PREFIX))
+async def workout_replace_action(
+    call: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    """Use DB state for replacement callbacks; callback data carries only ids."""
+    user = User.get(tg_id=call.from_user.id)
+    parts = (call.data or "").split(":")
+    if user is None:
+        await call.answer("Отправьте /start, чтобы начать.", show_alert=True)
+        return
+    if parts == ["workout", "replace", "cancel"]:
+        await state.clear()
+        await show_current_workout(call.message, user.id, edit=True)
+        await call.answer()
+        return
+    if (
+        len(parts) == 5
+        and parts[:3] == ["workout", "replace", "choose"]
+        and parts[3].isdecimal()
+        and parts[4].isdecimal()
+    ):
+        try:
+            apply_replacement(user.id, int(parts[3]), int(parts[4]))
+        except ReplacementNotAllowedError as error:
+            await state.clear()
+            await call.answer(_replacement_feedback(error.reason), show_alert=True)
+            await show_current_workout(call.message, user.id, edit=True)
+            return
+        except (WorkoutExecutionError, SQLAlchemyError):
+            await state.clear()
+            await call.answer("Действие устарело. Показываю актуальное состояние.", show_alert=True)
+            await show_current_workout(call.message, user.id, edit=True)
+            return
+        await state.clear()
+        await show_current_workout(call.message, user.id, edit=True)
+        await call.answer("Упражнение заменено.")
+        return
+
+    if len(parts) == 3 and parts[2].isdecimal():
+        await _replacement_options(call, state, user.id, int(parts[2]))
+        return
+
+    await state.clear()
+    await call.answer("Действие устарело. Показываю актуальное состояние.", show_alert=True)
+    await show_current_workout(call.message, user.id, edit=True)
 
 
 @dp.callback_query(F.data.startswith(WORKOUT_FORMAT_PREFIX))
