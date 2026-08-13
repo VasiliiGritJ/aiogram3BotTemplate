@@ -38,6 +38,7 @@
 - Спроектировать отдельную production-конфигурацию без коммита секретов.
 - Подготовить безопасный deployment, backup/restore и наблюдаемость без утечки персональных данных или секретов.
 - Подтвердить single-instance lifecycle для выбранной production-среды.
+- Runtime contract: Internet → HTTPS/TLS termination на deployment edge/reverse proxy → private/internal aiohttp webhook server → `PaymentWebhookProcessor` → authoritative YooKassa verification → идемпотентное применение доступа через `PaymentService`. Публичный webhook endpoint обязан быть HTTPS; aiohttp не управляет сертификатами, а forwarded headers не являются security proof. Регистрация production webhook — отдельное явное внешнее действие.
 
 ### Phase 3. Verified payment confirmation
 

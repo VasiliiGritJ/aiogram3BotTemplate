@@ -13,6 +13,8 @@ from services.payment_webhook import PaymentWebhookReason, PaymentWebhookResult
 from storage.payment_webhook_http import (
     PAYMENT_WEBHOOK_MAX_BODY_BYTES,
     PAYMENT_WEBHOOK_PATH,
+    PAYMENT_WEBHOOK_LIVENESS_PATH,
+    PAYMENT_WEBHOOK_READINESS_PATH,
     PaymentWebhookHttpConfigurationError,
     PaymentWebhookServerConfig,
     build_payment_webhook_http_runtime,
@@ -172,6 +174,27 @@ class PaymentWebhookHttpTests(unittest.TestCase):
         self.assertIsNone(post_match.http_exception)
         self.assertEqual(PAYMENT_WEBHOOK_MAX_BODY_BYTES, app._client_max_size)
 
+    def test_liveness_and_readiness_are_local_and_non_sensitive(self) -> None:
+        processor = _Processor(RuntimeError("provider-must-not-be-called"))
+        app = create_payment_webhook_app(
+            processor, PaymentWebhookServerConfig("127.0.0.1", 8080)
+        )
+        live_match = self.run_async(
+            app.router.resolve(make_mocked_request("GET", PAYMENT_WEBHOOK_LIVENESS_PATH))
+        )
+        ready_match = self.run_async(
+            app.router.resolve(make_mocked_request("GET", PAYMENT_WEBHOOK_READINESS_PATH))
+        )
+
+        live = self.run_async(live_match.handler(make_mocked_request("GET", PAYMENT_WEBHOOK_LIVENESS_PATH)))
+        ready = self.run_async(ready_match.handler(make_mocked_request("GET", PAYMENT_WEBHOOK_READINESS_PATH)))
+
+        self.assertEqual(200, live.status)
+        self.assertEqual({"status": "live"}, decode(live))
+        self.assertEqual(200, ready.status)
+        self.assertEqual({"status": "ready"}, decode(ready))
+        self.assertEqual([], processor.payloads)
+
     def test_server_config_is_explicit_and_validated(self) -> None:
         for invalid in (
             ("", 8080),
@@ -188,6 +211,7 @@ class PaymentWebhookHttpTests(unittest.TestCase):
         values = {
             "PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1",
             "PAYMENT_WEBHOOK_BIND_PORT": "8081",
+            "PAYMENT_WEBHOOK_PATH": "/internal/yookassa",
         }
         payment_runtime = PaymentRuntime(object(), object(), PaymentMode.PRODUCTION)
 
@@ -199,12 +223,79 @@ class PaymentWebhookHttpTests(unittest.TestCase):
 
         self.assertEqual("127.0.0.1", runtime.config.bind_host)
         self.assertEqual(8081, runtime.config.bind_port)
+        self.assertEqual("/internal/yookassa", runtime.config.path)
         payment_builder.assert_called_once_with(values.__getitem__)
 
         with self.assertRaises(PaymentWebhookHttpConfigurationError):
             build_payment_webhook_http_runtime(
                 {"PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1"}.__getitem__
             )
+
+    def test_test_mode_allows_only_loopback_safe_defaults(self) -> None:
+        payment_runtime = PaymentRuntime(object(), object(), PaymentMode.TEST)
+        with patch(
+            "storage.payment_webhook_http.build_payment_runtime",
+            return_value=payment_runtime,
+        ):
+            runtime = build_payment_webhook_http_runtime({}.__getitem__)
+        self.assertEqual("127.0.0.1", runtime.config.bind_host)
+        self.assertEqual(8080, runtime.config.bind_port)
+        self.assertEqual(PAYMENT_WEBHOOK_PATH, runtime.config.path)
+
+    def test_production_mode_fails_closed_without_all_runtime_values(self) -> None:
+        payment_runtime = PaymentRuntime(object(), object(), PaymentMode.PRODUCTION)
+        cases = (
+            {},
+            {
+                "PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1",
+                "PAYMENT_WEBHOOK_BIND_PORT": "8080",
+            },
+            {
+                "PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1",
+                "PAYMENT_WEBHOOK_BIND_PORT": "not-a-port",
+                "PAYMENT_WEBHOOK_PATH": "/webhook",
+            },
+        )
+        for values in cases:
+            with self.subTest(values=values), patch(
+                "storage.payment_webhook_http.build_payment_runtime",
+                return_value=payment_runtime,
+            ):
+                with self.assertRaises(PaymentWebhookHttpConfigurationError):
+                    build_payment_webhook_http_runtime(values.__getitem__)
+
+    def test_unsafe_paths_are_rejected(self) -> None:
+        for path in ("//webhook", "/../webhook", "/webhook?x=1", "/webhook#x"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                PaymentWebhookServerConfig("127.0.0.1", 8080, path=path)
+
+    def test_webhook_logs_only_safe_normalized_metadata(self) -> None:
+        secret = "secret-must-not-leak"
+        raw_payload = {"event": "payment.succeeded", "token": secret}
+        processor = _Processor(PaymentWebhookResult(PaymentWebhookReason.RECONCILED))
+
+        with self.assertLogs("storage.payment_webhook_http", level="INFO") as logs:
+            response = self.call(processor, _Request(payload=raw_payload))
+
+        combined = "\n".join(logs.output)
+        self.assertEqual(200, response.status)
+        self.assertIn("event=payment.succeeded", combined)
+        self.assertIn("outcome=reconciled", combined)
+        self.assertIn("status=200", combined)
+        self.assertNotIn(secret, combined)
+        self.assertNotIn("token", combined)
+        self.assertNotIn(str(raw_payload), combined)
+
+    def test_malformed_and_transient_logs_have_category_without_raw_content(self) -> None:
+        secret = "raw-secret-body"
+        processor = _Processor(RuntimeError(secret))
+        with self.assertLogs("storage.payment_webhook_http", level="INFO") as logs:
+            response = self.call(processor, _Request(payload={"event": "payment.succeeded", "body": secret}))
+        combined = "\n".join(logs.output)
+        self.assertEqual(503, response.status)
+        self.assertIn("event=payment.succeeded", combined)
+        self.assertIn("outcome=temporarily_unavailable", combined)
+        self.assertNotIn(secret, combined)
 
     def test_entrypoint_import_has_no_bot_or_environment_side_effects(self) -> None:
         sys.modules.pop("payment_webhook_server", None)

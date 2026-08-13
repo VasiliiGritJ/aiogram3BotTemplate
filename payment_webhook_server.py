@@ -17,6 +17,7 @@ def main() -> None:
         runtime.app,
         host=runtime.config.bind_host,
         port=runtime.config.bind_port,
+        shutdown_timeout=10,
     )
 
 
