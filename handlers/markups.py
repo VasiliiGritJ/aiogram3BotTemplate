@@ -132,6 +132,45 @@ def workout_plan_mkp(
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def workout_plan_source_mkp():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="🤖 Составить программу", callback_data="workout_plan:generate"
+        )],
+        [types.InlineKeyboardButton(
+            text="📝 У меня есть своя программа", callback_data="user_program:start"
+        )],
+        [types.InlineKeyboardButton(text="Вернуться в меню", callback_data="start")],
+    ])
+
+
+def user_program_mode_mkp():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="Следовать строго", callback_data="user_program:mode:strict"
+        )],
+        [types.InlineKeyboardButton(
+            text="Разрешать замены", callback_data="user_program:mode:replacements"
+        )],
+        [types.InlineKeyboardButton(
+            text="Адаптировать по прогрессу", callback_data="user_program:mode:adaptive"
+        )],
+        [types.InlineKeyboardButton(text="Отмена", callback_data="workout_plan")],
+    ])
+
+
+def user_program_preview_mkp():
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="✅ Всё верно", callback_data="user_program:confirm"
+        )],
+        [types.InlineKeyboardButton(
+            text="✏️ Ввести заново", callback_data="user_program:retry"
+        )],
+        [types.InlineKeyboardButton(text="Отмена", callback_data="workout_plan")],
+    ])
+
+
 def workout_current_mkp(*, ready_to_complete: bool = False):
     buttons = []
     if ready_to_complete:

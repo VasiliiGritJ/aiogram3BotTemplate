@@ -360,7 +360,7 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             patch.object(plan_handler, "format_workout_plan_preview", return_value="preview"),
             patch.object(plan_handler, "workout_entry_action", return_value=action) as entry,
         ):
-            self.run_async(plan_handler.workout_plan_call(call, state))
+            self.run_async(plan_handler.generated_workout_plan_call(call, state))
         entry.assert_called_once_with(7)
         self.assertIn("workout:start", self.callback_values(call.message.edits[-1][1]))
 
@@ -617,6 +617,28 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         self.assertEqual(2, progression_service.call_count)
         progression_service.assert_called_with(7, 31)
         record_set.assert_not_called()
+
+    def test_non_adaptive_user_program_does_not_request_progression(self) -> None:
+        for mode in ("strict", "replacements"):
+            with self.subTest(mode=mode):
+                message = _Message()
+                with (
+                    patch.object(
+                        workout_ui,
+                        "get_active_workout",
+                        return_value=replace(_workout(), adaptation_mode=mode),
+                    ),
+                    patch.object(workout_ui, "get_current_step", return_value=_step()),
+                    patch.object(
+                        workout_ui,
+                        "get_progression_recommendation",
+                    ) as progression_service,
+                ):
+                    self.run_async(
+                        workout_ui.show_current_workout(message, 7, edit=False)
+                    )
+                progression_service.assert_not_called()
+                self.assertNotIn("📈", message.answers[0][0])
 
     def test_cancel_requires_confirmation_and_preserves_service_owned_results(self) -> None:
         call = _Call()

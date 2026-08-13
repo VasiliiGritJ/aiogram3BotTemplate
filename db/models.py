@@ -480,6 +480,16 @@ class WorkoutTemplateExercise(Base):
 
 class UserWorkoutPlan(Base):
     __tablename__ = "user_workout_plans"
+    __table_args__ = (
+        CheckConstraint(
+            "plan_source IN ('generated', 'user_defined')",
+            name="ck_user_workout_plans_source",
+        ),
+        CheckConstraint(
+            "adaptation_mode IN ('strict', 'replacements', 'adaptive')",
+            name="ck_user_workout_plans_adaptation_mode",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
@@ -495,6 +505,8 @@ class UserWorkoutPlan(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(), server_default=func.now()
     )
+    plan_source: Mapped[str] = mapped_column(Text(), server_default="generated")
+    adaptation_mode: Mapped[str] = mapped_column(Text(), server_default="adaptive")
 
 
 class UserWorkoutPlanDay(Base):
@@ -629,6 +641,14 @@ class WorkoutSession(Base):
             "finished_at IS NULL OR finished_at >= started_at",
             name="ck_workout_sessions_time_order",
         ),
+        CheckConstraint(
+            "plan_source IN ('generated', 'user_defined')",
+            name="ck_workout_sessions_plan_source",
+        ),
+        CheckConstraint(
+            "adaptation_mode IN ('strict', 'replacements', 'adaptive')",
+            name="ck_workout_sessions_adaptation_mode",
+        ),
         Index(
             "uq_workout_sessions_active_user",
             "user_id",
@@ -668,6 +688,8 @@ class WorkoutSession(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(), server_default=func.now()
     )
+    plan_source: Mapped[str] = mapped_column(Text(), server_default="generated")
+    adaptation_mode: Mapped[str] = mapped_column(Text(), server_default="adaptive")
 
     exercises: Mapped[list["WorkoutSessionExercise"]] = relationship(
         back_populates="workout_session",

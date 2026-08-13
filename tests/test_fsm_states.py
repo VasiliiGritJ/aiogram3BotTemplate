@@ -2,7 +2,7 @@ import unittest
 
 from aiogram.fsm.state import State as FSMState
 
-from storage.states import ContactWithDevs, Onboarding, State, WorkoutExecution
+from storage.states import ContactWithDevs, Onboarding, State, UserProgram, WorkoutExecution
 
 
 class FSMStateDefinitionTests(unittest.TestCase):
@@ -29,6 +29,9 @@ class FSMStateDefinitionTests(unittest.TestCase):
 
         self.assertIsInstance(WorkoutExecution.awaiting_weight, FSMState)
         self.assertIsInstance(WorkoutExecution.awaiting_reps, FSMState)
+        self.assertIsInstance(UserProgram.choosing_mode, FSMState)
+        self.assertIsInstance(UserProgram.awaiting_text, FSMState)
+        self.assertIsInstance(UserProgram.awaiting_confirmation, FSMState)
 
 
 if __name__ == "__main__":

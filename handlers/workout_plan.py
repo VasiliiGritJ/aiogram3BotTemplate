@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy.exc import SQLAlchemyError
 
 from db import User
-from handlers.markups import to_menu_mpk, workout_plan_mkp
+from handlers.markups import to_menu_mpk, workout_plan_mkp, workout_plan_source_mkp
 from handlers.onboarding import start_onboarding
 from handlers.workout_execution import workout_entry_action
 from services.workout_plans import (
@@ -24,6 +24,19 @@ from storage.states import tryFinish
 
 @dp.callback_query(F.data == "workout_plan")
 async def workout_plan_call(
+    call: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await tryFinish(state)
+    await call.message.edit_text(
+        "Как подготовить программу тренировок?",
+        reply_markup=workout_plan_source_mkp(),
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data == "workout_plan:generate")
+async def generated_workout_plan_call(
     call: types.CallbackQuery,
     state: FSMContext,
 ) -> None:

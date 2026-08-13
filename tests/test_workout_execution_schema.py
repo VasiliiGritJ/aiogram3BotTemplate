@@ -123,7 +123,8 @@ class WorkoutExecutionSchemaTests(unittest.TestCase):
             {
                 "id", "user_id", "source_plan_id", "source_plan_day_id",
                 "day_number", "day_title", "status", "started_at",
-                "finished_at", "updated_at",
+                "finished_at", "updated_at", "plan_source",
+                "adaptation_mode",
             },
             {column["name"] for column in inspector.get_columns("workout_sessions")},
         )

@@ -13,6 +13,9 @@ from handlers.markups import (
     workout_cancel_confirmation_mkp,
     workout_current_mkp,
     workout_plan_mkp,
+    workout_plan_source_mkp,
+    user_program_mode_mkp,
+    user_program_preview_mkp,
 )
 
 
@@ -46,6 +49,23 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
 
     def test_workout_plan_view_can_return_to_menu(self) -> None:
         self.assertEqual(["start"], self.callback_values(workout_plan_mkp()))
+
+    def test_user_can_choose_generated_or_own_program_and_confirm_preview(self) -> None:
+        self.assertEqual(
+            ["workout_plan:generate", "user_program:start", "start"],
+            self.callback_values(workout_plan_source_mkp()),
+        )
+        self.assertEqual(
+            [
+                "user_program:mode:strict", "user_program:mode:replacements",
+                "user_program:mode:adaptive", "workout_plan",
+            ],
+            self.callback_values(user_program_mode_mkp()),
+        )
+        self.assertEqual(
+            ["user_program:confirm", "user_program:retry", "workout_plan"],
+            self.callback_values(user_program_preview_mkp()),
+        )
 
     def test_workout_markups_offer_controlled_actions(self) -> None:
         self.assertEqual(

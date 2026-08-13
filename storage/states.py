@@ -32,3 +32,9 @@ class WorkoutExecution(StatesGroup):
 
     awaiting_weight = FSMState()
     awaiting_reps = FSMState()
+
+
+class UserProgram(StatesGroup):
+    choosing_mode = FSMState()
+    awaiting_text = FSMState()
+    awaiting_confirmation = FSMState()

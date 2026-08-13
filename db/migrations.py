@@ -797,6 +797,20 @@ def _add_workout_formats(connection: Connection) -> None:
         "CREATE INDEX ix_session_blocks_session_order "
         "ON workout_session_blocks(session_id, block_order)"
     )
+
+
+def _add_user_program_metadata(connection: Connection) -> None:
+    """Distinguish generated/user plans and snapshot their adaptation policy."""
+    for table in ("user_workout_plans", "workout_sessions"):
+        connection.exec_driver_sql(
+            f"ALTER TABLE {table} ADD COLUMN plan_source TEXT NOT NULL "
+            "DEFAULT 'generated' CHECK (plan_source IN ('generated', 'user_defined'))"
+        )
+        connection.exec_driver_sql(
+            f"ALTER TABLE {table} ADD COLUMN adaptation_mode TEXT NOT NULL "
+            "DEFAULT 'adaptive' CHECK (adaptation_mode IN "
+            "('strict', 'replacements', 'adaptive'))"
+        )
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -808,6 +822,7 @@ MIGRATIONS = (
     Migration(8, "training_profile_expansion", _expand_training_profile),
     Migration(9, "workout_progression_strategies", _add_progression_strategies),
     Migration(10, "workout_formats", _add_workout_formats),
+    Migration(11, "user_program_metadata", _add_user_program_metadata),
 )
 
 

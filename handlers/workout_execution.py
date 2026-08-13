@@ -281,7 +281,11 @@ async def show_current_workout(
         markup = to_menu_mpk()
     else:
         recommendation = None
-        if not step.ready_to_complete and step.exercise is not None:
+        if (
+            workout.adaptation_mode == "adaptive"
+            and not step.ready_to_complete
+            and step.exercise is not None
+        ):
             try:
                 recommendation = get_progression_recommendation(
                     user_id,

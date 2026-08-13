@@ -135,6 +135,8 @@ class WorkoutSessionView:
     updated_at: datetime
     exercises: tuple[WorkoutSessionExerciseView, ...]
     blocks: tuple[WorkoutSessionBlockView, ...] = ()
+    plan_source: str = "generated"
+    adaptation_mode: str = "adaptive"
 
 
 @dataclass(frozen=True)
@@ -300,6 +302,8 @@ def _load_workout_view(
         updated_at=workout.updated_at,
         exercises=tuple(_exercise_view(session, exercise) for exercise in exercises),
         blocks=tuple(_block_view(session, block) for block in blocks),
+        plan_source=workout.plan_source,
+        adaptation_mode=workout.adaptation_mode,
     )
 
 
@@ -425,6 +429,8 @@ def _create_workout_session(
         started_at=started_at,
         finished_at=None,
         updated_at=started_at,
+        plan_source=plan.plan_source,
+        adaptation_mode=plan.adaptation_mode,
     )
     session.add(workout)
     session.flush()
