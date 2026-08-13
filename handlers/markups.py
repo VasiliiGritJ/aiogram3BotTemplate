@@ -163,6 +163,42 @@ def workout_current_mkp(*, ready_to_complete: bool = False):
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def workout_format_mkp(state):
+    """Render only durable format actions; callback data contains no user data."""
+    buttons = []
+    if state.started_at is None:
+        buttons.append([types.InlineKeyboardButton(
+            text="▶️ Начать блок", callback_data=f"workout:format:start:{state.block_id}"
+        )])
+    elif state.finished_at is None:
+        if state.workout_format.value == "emom":
+            minute = state.current_minute or 1
+            buttons.append([
+                types.InlineKeyboardButton(
+                    text="✅ Минута выполнена",
+                    callback_data=f"workout:format:emom:{state.block_id}:{minute}:1",
+                ),
+                types.InlineKeyboardButton(
+                    text="Пропуск",
+                    callback_data=f"workout:format:emom:{state.block_id}:{minute}:0",
+                ),
+            ])
+        else:
+            buttons.append([types.InlineKeyboardButton(
+                text="✅ Круг завершён",
+                callback_data=(
+                    f"workout:format:round:{state.block_id}:{state.completed_rounds}"
+                ),
+            )])
+        buttons.append([types.InlineKeyboardButton(
+            text="🏁 Закончить блок", callback_data=f"workout:format:finish:{state.block_id}"
+        )])
+    buttons.append([types.InlineKeyboardButton(
+        text="❌ Отменить тренировку", callback_data="workout:cancel"
+    )])
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def workout_input_mkp():
     """Keep only the safe cancellation action while text input is pending."""
     return types.InlineKeyboardMarkup(

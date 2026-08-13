@@ -18,6 +18,7 @@ from handlers.markups import (
     workout_history_detail_mkp,
     workout_history_mkp,
     workout_input_mkp,
+    workout_format_mkp,
 )
 from services.access import AccessStatus, get_access_decision
 from services.workout_execution import (
@@ -45,6 +46,14 @@ from services.workout_progression_history import (
     ProgressionHistoryError,
     get_progression_recommendation,
 )
+from services.workout_formats import (
+    WorkoutFormatError,
+    finish_format_block,
+    get_format_state,
+    record_completed_round,
+    record_emom_minute,
+    start_format_block,
+)
 from storage.config import dp
 from storage.states import WorkoutExecution
 
@@ -59,6 +68,7 @@ WORKOUT_CANCEL_RESUME_CALLBACK = "workout:cancel:resume"
 WORKOUT_HISTORY_CALLBACK = "workout:history"
 WORKOUT_HISTORY_PAGE_PREFIX = "workout:history:page:"
 WORKOUT_HISTORY_DETAIL_PREFIX = "workout:history:detail:"
+WORKOUT_FORMAT_PREFIX = "workout:format:"
 
 MAX_WEIGHT_INPUT_LENGTH = 32
 MAX_REPS_INPUT_LENGTH = 9
@@ -116,6 +126,33 @@ def _format_step(
         return (
             f"🏋️ День {workout.day_number} — {escape(workout.day_title)}\n\n"
             "✅ Все упражнения и подходы выполнены."
+        )
+
+    if step.kind == "format_block" and step.format_block is not None:
+        block = step.format_block
+        exercises = "\n".join(
+            f"{item.selected_station_order or index}. {escape(item.selected_exercise_name)} — "
+            f"{item.selected_format_reps or item.selected_target_reps_min} повт."
+            for index, item in enumerate(block.exercises, start=1)
+        )
+        details = []
+        if block.duration_seconds:
+            details.append(f"Время: {block.duration_seconds // 60} мин")
+        if block.target_rounds:
+            details.append(f"Цель: {block.target_rounds} круга")
+        status = ""
+        if block.started_at is not None:
+            status = f"\nВыполнено кругов: {block.completed_rounds}"
+            if block.workout_format == "emom":
+                status = (
+                    f"\nМинут выполнено: {block.completed_minutes}; "
+                    f"пропущено: {block.missed_minutes}"
+                )
+        return (
+            f"🏋️ День {workout.day_number} — {escape(workout.day_title)}\n\n"
+            f"<b>{escape(block.title)}</b>\n"
+            f"Формат: {_format_name(block.workout_format)}\n"
+            f"{' · '.join(details)}\n\n{exercises}{status}"
         )
 
     exercise = step.exercise
@@ -253,13 +290,26 @@ async def show_current_workout(
             except (ProgressionHistoryError, SQLAlchemyError, ValueError):
                 recommendation = None
         text = _format_step(workout, step, recommendation)
-        markup = workout_current_mkp(ready_to_complete=step.ready_to_complete)
+        if step.kind == "format_block" and step.format_block is not None:
+            state = get_format_state(user_id, step.format_block.id)
+            markup = workout_format_mkp(state)
+        else:
+            markup = workout_current_mkp(ready_to_complete=step.ready_to_complete)
 
     if edit:
         await message.edit_text(text, reply_markup=markup)
     else:
         await message.answer(text, reply_markup=markup)
     return not text.startswith("Нет активной")
+
+
+def _format_name(value: str) -> str:
+    return {
+        "amrap": "AMRAP",
+        "emom": "EMOM",
+        "for_time": "На время",
+        "circuit_rounds": "Круговая тренировка",
+    }.get(value, value)
 
 
 def _workout_summary(workout: WorkoutSessionView) -> str:
@@ -342,6 +392,37 @@ async def workout_record_set(call: types.CallbackQuery, state: FSMContext) -> No
     except (WorkoutExecutionError, SQLAlchemyError):
         await state.clear()
         await show_current_workout(call.message, user.id, edit=True)
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith(WORKOUT_FORMAT_PREFIX))
+async def workout_format_action(call: types.CallbackQuery, state: FSMContext) -> None:
+    """Apply one ownership-checked, idempotent format action from DB state."""
+    user = User.get(tg_id=call.from_user.id)
+    parts = (call.data or "").split(":")
+    if user is None or len(parts) < 4 or not parts[3].isdecimal():
+        await call.answer("Это действие устарело.", show_alert=True)
+        return
+    action = parts[2]
+    block_id = int(parts[3])
+    try:
+        if action == "start":
+            start_format_block(user.id, block_id)
+        elif action == "round" and len(parts) == 5 and parts[4].isdecimal():
+            record_completed_round(user.id, block_id, int(parts[4]))
+        elif action == "emom" and len(parts) == 6 and parts[4].isdecimal() and parts[5] in {"0", "1"}:
+            record_emom_minute(user.id, block_id, int(parts[4]), parts[5] == "1")
+        elif action == "finish":
+            finish_format_block(user.id, block_id)
+        else:
+            raise WorkoutFormatError("Malformed format action.")
+    except (WorkoutExecutionError, WorkoutFormatError, SQLAlchemyError):
+        await call.answer("Действие уже изменилось. Показываю актуальное состояние.")
+        await state.clear()
+        await show_current_workout(call.message, user.id, edit=True)
+        return
+    await state.clear()
+    await show_current_workout(call.message, user.id, edit=True)
     await call.answer()
 
 
@@ -507,10 +588,22 @@ def _format_history_page(page) -> tuple[str, list[tuple[str, int]]]:
         set_count = sum(len(exercise.set_results) for exercise in workout.exercises)
         duration = _duration_minutes(workout)
         duration_text = f" · {duration} мин" if duration is not None else ""
+        format_text = ""
+        completed_blocks = [block for block in workout.blocks if block.finished_at is not None]
+        if completed_blocks:
+            format_text = " · " + ", ".join(
+                f"{_format_name(block.workout_format)}: "
+                + (
+                    f"{block.elapsed_seconds} сек"
+                    if block.workout_format == "for_time" and block.elapsed_seconds is not None
+                    else f"счёт {block.final_score or 0}"
+                )
+                for block in completed_blocks
+            )
         rows.append(
             f"{completed_at.strftime('%d.%m.%Y')}\n"
             f"День {workout.day_number} — {escape(workout.day_title)}\n"
-            f"{len(workout.exercises)} упражнений · {set_count} подходов{duration_text}"
+            f"{len(workout.exercises)} упражнений · {set_count} подходов{duration_text}{format_text}"
         )
         buttons.append(
             (f"🔎 {completed_at.strftime('%d.%m')} · День {workout.day_number}", workout.id)
@@ -576,6 +669,19 @@ def format_workout_detail_messages(
         exercise_rows.append(
             f"{escape(exercise.selected_exercise_name)} — {results or 'нет сохранённых подходов'}"
         )
+    for block in workout.blocks:
+        if block.finished_at is None:
+            continue
+        if block.workout_format == "emom":
+            result = f"{block.completed_minutes} выполнено · {block.missed_minutes} пропущено"
+        elif block.workout_format == "for_time":
+            result = (
+                f"{block.completed_rounds}/{block.target_rounds or block.completed_rounds} кругов"
+                f" · {block.elapsed_seconds or 0} сек"
+            )
+        else:
+            result = f"{block.completed_rounds} кругов · счёт {block.final_score or 0}"
+        exercise_rows.append(f"{escape(block.title)} ({_format_name(block.workout_format)}) — {result}")
 
     messages = []
     current = header

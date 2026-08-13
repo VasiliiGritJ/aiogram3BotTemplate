@@ -119,7 +119,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
             plan = session.get(UserWorkoutPlan, result.plan.id)
             template = session.get(WorkoutTemplate, plan.template_id)
 
-        self.assertEqual("v3_adaptive_rule_based", template.code)
+        self.assertEqual("v4_adaptive_formats", template.code)
         self.assertEqual(2, len(result.plan.days))
         self.assertTrue(
             all(len(day.exercises) == 4 for day in result.plan.days)
@@ -524,6 +524,62 @@ class WorkoutPlanServiceTests(unittest.TestCase):
             stored = session.scalars(select(UserWorkoutPlanExercise)).all()
         self.assertTrue(stored)
         self.assertTrue(all(item.sets >= 1 for item in stored))
+
+    def test_functional_and_street_format_routing_is_deterministic_and_safe(self) -> None:
+        lookup = {item.code: item for item in EXERCISE_DEFINITIONS}
+        counts = {}
+        for goal in ("muscle_gain", "strength", "fat_loss"):
+            program = generate_program(normalize_profile(self.make_profile(
+                self.user_id, goal=goal, experience_level="beginner",
+                training_environment="functional_gym", workouts_per_week=3,
+                session_duration_minutes=60,
+            )))
+            counts[goal] = sum(len(day.blocks) for day in program.days)
+            for day in program.days:
+                for block in day.blocks:
+                    self.assertTrue(block.exercises)
+                    codes = [item.exercise_code for item in block.exercises]
+                    self.assertEqual(len(codes), len(set(codes)))
+                    self.assertFalse({"barbell_back_squat", "barbell_bench_press", "barbell_deadlift"} & set(codes))
+                    for code in codes:
+                        self.assertIn("beginner", lookup[code].experience_levels)
+                        self.assertIn("functional_gym", lookup[code].environments)
+        self.assertLessEqual(counts["strength"], counts["muscle_gain"])
+        self.assertLess(counts["muscle_gain"], counts["fat_loss"])
+
+        street = generate_program(normalize_profile(self.make_profile(
+            self.user_id, goal="fat_loss", training_environment="street",
+            workouts_per_week=3, session_duration_minutes=60,
+        )))
+        self.assertTrue(any(day.blocks for day in street.days))
+        self.assertTrue(all(
+            block.workout_format == "circuit_rounds"
+            for day in street.days for block in day.blocks
+        ))
+        for day in street.days:
+            for block in day.blocks:
+                for item in block.exercises:
+                    definition = lookup[item.exercise_code]
+                    self.assertIn("street", definition.environments)
+                    self.assertIn(definition.equipment, {"bodyweight", "pullup_dip_station"})
+
+    def test_functional_workload_changes_with_duration_and_home_stays_standard(self) -> None:
+        short = generate_program(normalize_profile(self.make_profile(
+            self.user_id, goal="fat_loss", training_environment="functional_gym",
+            session_duration_minutes=30,
+        )))
+        long = generate_program(normalize_profile(self.make_profile(
+            self.user_id, goal="fat_loss", training_environment="functional_gym",
+            session_duration_minutes=90,
+        )))
+        self.assertLess(
+            short.days[0].blocks[0].duration_seconds,
+            long.days[0].blocks[0].duration_seconds,
+        )
+        home = generate_program(normalize_profile(self.make_profile(
+            self.user_id, goal="fat_loss", training_environment="home",
+        )))
+        self.assertTrue(all(not day.blocks for day in home.days))
 
 
 if __name__ == "__main__":

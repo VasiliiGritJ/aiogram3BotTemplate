@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10), applied)
         self.assertTrue(
             {
                 "users",
@@ -67,9 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9), first_run)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(9, applied_count)
+        self.assertEqual(10, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -113,7 +113,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3, 4, 5, 6, 7, 8, 9), applied)
+        self.assertEqual((3, 4, 5, 6, 7, 8, 9, 10), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
@@ -428,8 +428,8 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM user_access ORDER BY user_id"
             ).fetchall()
 
-        self.assertEqual((8, 9), run_migrations(session.engine))
-        self.assertEqual((), run_migrations(session.engine))
+        self.assertEqual((8, 9, 10), run_migrations(session.engine))
+        self.assertEqual((), run_migrations(session.engine, target_version=9))
 
         with session.engine.connect() as connection:
             profiles = connection.exec_driver_sql(
@@ -457,8 +457,8 @@ class DatabaseMigrationTests(unittest.TestCase):
             run_migrations(session.engine, target_version=8),
         )
 
-        self.assertEqual((9,), run_migrations(session.engine))
-        self.assertEqual((), run_migrations(session.engine))
+        self.assertEqual((9,), run_migrations(session.engine, target_version=9))
+        self.assertEqual((), run_migrations(session.engine, target_version=9))
 
         inspector = inspect(session.engine)
         plan_columns = {
@@ -511,6 +511,30 @@ class DatabaseMigrationTests(unittest.TestCase):
                     "SET selected_progression_strategy = 'timed_conditioning' "
                     "WHERE id = 1"
                 )
+
+    def test_migration_ten_adds_durable_format_blocks_without_touching_legacy_rows(self) -> None:
+        session = self.make_session("stage-seven-formats.db")
+        run_migrations(session.engine, target_version=9)
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO users (id, tg_id, fullname, username, inviter_id) "
+                "VALUES (1, 9100, 'Formats User', 'formats', 0)"
+            )
+            before = connection.exec_driver_sql("SELECT * FROM users").fetchall()
+
+        self.assertEqual((10,), run_migrations(session.engine))
+        self.assertEqual((), run_migrations(session.engine))
+        inspector = inspect(session.engine)
+        self.assertTrue({
+            "user_workout_plan_blocks", "workout_session_blocks",
+            "workout_format_interval_results",
+        }.issubset(inspector.get_table_names()))
+        with session.engine.begin() as connection:
+            self.assertEqual(before, connection.exec_driver_sql("SELECT * FROM users").fetchall())
+            versions = connection.exec_driver_sql(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).scalars().all()
+        self.assertEqual(list(range(1, 11)), versions)
 
     def test_fitness_profile_and_access_schema(self) -> None:
         session = self.make_session()
@@ -679,7 +703,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

@@ -38,7 +38,7 @@ class PaymentServiceTests(unittest.TestCase):
         )
         self._key_number = 0
         self.assertEqual(
-            (1, 2, 3, 4, 5, 6, 7, 8, 9),
+            (1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
             run_migrations(self.database.engine),
         )
         with self.database.engine.begin() as connection:

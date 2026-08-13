@@ -1,35 +1,34 @@
 # NEXT_TASK.md
 
-## Текущая задача: Stage 7E — functional + street workout formats
+## Текущая задача: Stage 7F — user-provided text program
 
 ### Принятый baseline
 
-- Stage 7A: controlled exercise taxonomy и библиотека упражнений.
-- Stage 7B: расширенный профиль пользователя.
-- Stage 7C: детерминированная генерация программы по цели, опыту и среде.
-- Stage 7D: persisted multi-type progression для `hypertrophy_load_reps`,
-  `strength_load_reps` и `bodyweight_reps`; legacy history остаётся на прежней
-  hypertrophy-семантике.
-- Migration 9 добавлена и проверена на временной БД и копии реальной БД;
-  реальная `db.db` по-прежнему находится на migration 6 и защищена.
-- Полный regression checkpoint Stage 7D: 266/266 PASS.
+- Stage 7A–7C: controlled taxonomy, training profile и deterministic generator.
+- Stage 7D: persisted progression для hypertrophy, strength и bodyweight.
+- Stage 7E: `standard_sets`, AMRAP, EMOM, For Time и street circuits реализованы
+  как immutable plan/session blocks с отдельными structured results.
+- Migration 10 проверена на временной БД и копии реальной БД через 7→8→9→10;
+  реальная `db.db` остаётся на migration 6 и защищена.
+- Regression checkpoint Stage 7E: targeted 85/85 PASS; full suite 274/274 PASS,
+  дополнительный snapshot/restart regression 5/5 PASS.
 
-## Цель 7E
+## Цель 7F
 
-Добавить детерминированные функциональные и street-workout форматы поверх
-существующей taxonomy, не смешивая их с rep-based progression Stage 7D.
+Спроектировать безопасный импорт пользовательской программы из текста в
+существующие plan/block snapshots. Ввод должен проходить controlled parsing,
+validation и явное подтверждение до назначения плана.
 
-Следующий дизайн должен отдельно определить prescriptions и progression для:
+Нужно сохранить:
 
-- timed work;
-- AMRAP;
-- EMOM;
-- For Time;
-- rounds и distance.
+- привязку упражнений к taxonomy без опасного name guessing;
+- структурированные sets/reps/rest и форматы blocks;
+- environment и beginner-safety validation;
+- неизменяемость уже начатых workout sessions;
+- понятный controlled reject для неоднозначного или неполного текста.
 
-Нельзя переиспользовать килограммы/повторения там, где source of truth должен
-быть временем, раундами или дистанцией. До утверждения product logic не
-добавлять speculative DB fields и не менять существующую историю.
+AI/LLM parsing, если он понадобится, не должен напрямую писать plan или history:
+результат сначала преобразуется в валидируемый draft обычным кодом.
 
 ## Safety
 

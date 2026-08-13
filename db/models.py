@@ -519,6 +519,37 @@ class UserWorkoutPlanDay(Base):
     title: Mapped[str] = mapped_column(Text())
 
 
+class UserWorkoutPlanBlock(Base):
+    __tablename__ = "user_workout_plan_blocks"
+    __table_args__ = (
+        UniqueConstraint("plan_day_id", "block_order", name="uq_plan_blocks_order"),
+        CheckConstraint("block_order >= 1", name="ck_plan_blocks_order"),
+        CheckConstraint(
+            "workout_format IN ('standard_sets', 'amrap', 'emom', 'for_time', "
+            "'circuit_rounds')",
+            name="ck_plan_blocks_format",
+        ),
+        CheckConstraint(
+            "duration_seconds IS NULL OR duration_seconds > 0",
+            name="ck_plan_blocks_duration",
+        ),
+        CheckConstraint(
+            "target_rounds IS NULL OR target_rounds > 0",
+            name="ck_plan_blocks_rounds",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_day_id: Mapped[int] = mapped_column(
+        ForeignKey("user_workout_plan_days.id", ondelete="CASCADE")
+    )
+    block_order: Mapped[int] = mapped_column(Integer())
+    title: Mapped[str] = mapped_column(Text())
+    workout_format: Mapped[str] = mapped_column(Text())
+    duration_seconds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    target_rounds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+
+
 class UserWorkoutPlanExercise(Base):
     __tablename__ = "user_workout_plan_exercises"
     __table_args__ = (
@@ -545,11 +576,22 @@ class UserWorkoutPlanExercise(Base):
             "'hypertrophy_load_reps', 'strength_load_reps', 'bodyweight_reps')",
             name="ck_user_workout_plan_exercises_progression_strategy",
         ),
+        CheckConstraint(
+            "format_reps IS NULL OR format_reps >= 1",
+            name="ck_user_workout_plan_exercises_format_reps",
+        ),
+        CheckConstraint(
+            "station_order IS NULL OR station_order >= 1",
+            name="ck_user_workout_plan_exercises_station_order",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     plan_day_id: Mapped[int] = mapped_column(
         ForeignKey("user_workout_plan_days.id", ondelete="CASCADE")
+    )
+    plan_block_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plan_blocks.id", ondelete="SET NULL"), nullable=True
     )
     exercise_id: Mapped[int] = mapped_column(
         ForeignKey("exercises.id", ondelete="RESTRICT")
@@ -563,6 +605,8 @@ class UserWorkoutPlanExercise(Base):
     rest_seconds: Mapped[int] = mapped_column(Integer())
     hint: Mapped[str] = mapped_column(Text())
     progression_strategy: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    format_reps: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    station_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
 
 
 class WorkoutSession(Base):
@@ -683,6 +727,22 @@ class WorkoutSessionExercise(Base):
             "'strength_load_reps', 'bodyweight_reps')",
             name="ck_workout_session_exercises_selected_progression_strategy",
         ),
+        CheckConstraint(
+            "planned_format_reps IS NULL OR planned_format_reps >= 1",
+            name="ck_workout_session_exercises_planned_format_reps",
+        ),
+        CheckConstraint(
+            "selected_format_reps IS NULL OR selected_format_reps >= 1",
+            name="ck_workout_session_exercises_selected_format_reps",
+        ),
+        CheckConstraint(
+            "planned_station_order IS NULL OR planned_station_order >= 1",
+            name="ck_workout_session_exercises_planned_station_order",
+        ),
+        CheckConstraint(
+            "selected_station_order IS NULL OR selected_station_order >= 1",
+            name="ck_workout_session_exercises_selected_station_order",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -692,6 +752,9 @@ class WorkoutSessionExercise(Base):
     source_plan_exercise_id: Mapped[int | None] = mapped_column(
         ForeignKey("user_workout_plan_exercises.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    session_block_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workout_session_blocks.id", ondelete="SET NULL"), nullable=True
     )
     exercise_order: Mapped[int] = mapped_column(Integer())
 
@@ -709,6 +772,8 @@ class WorkoutSessionExercise(Base):
     planned_progression_strategy: Mapped[str | None] = mapped_column(
         Text(), nullable=True
     )
+    planned_format_reps: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    planned_station_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
 
     selected_exercise_id: Mapped[int | None] = mapped_column(
         ForeignKey("exercises.id", ondelete="SET NULL"),
@@ -724,6 +789,8 @@ class WorkoutSessionExercise(Base):
     selected_progression_strategy: Mapped[str | None] = mapped_column(
         Text(), nullable=True
     )
+    selected_format_reps: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    selected_station_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
 
     workout_session: Mapped["WorkoutSession"] = relationship(
         back_populates="exercises"
@@ -772,3 +839,77 @@ class WorkoutSetResult(Base):
     session_exercise: Mapped["WorkoutSessionExercise"] = relationship(
         back_populates="set_results"
     )
+
+
+class WorkoutSessionBlock(Base):
+    __tablename__ = "workout_session_blocks"
+    __table_args__ = (
+        UniqueConstraint("session_id", "block_order", name="uq_session_blocks_order"),
+        CheckConstraint("block_order >= 1", name="ck_session_blocks_order"),
+        CheckConstraint(
+            "workout_format IN ('standard_sets', 'amrap', 'emom', 'for_time', "
+            "'circuit_rounds')",
+            name="ck_session_blocks_format",
+        ),
+        CheckConstraint(
+            "duration_seconds IS NULL OR duration_seconds > 0",
+            name="ck_session_blocks_duration",
+        ),
+        CheckConstraint(
+            "target_rounds IS NULL OR target_rounds > 0",
+            name="ck_session_blocks_rounds",
+        ),
+        CheckConstraint("completed_rounds >= 0", name="ck_session_blocks_completed_rounds"),
+        CheckConstraint("partial_reps >= 0", name="ck_session_blocks_partial_reps"),
+        CheckConstraint("completed_minutes >= 0", name="ck_session_blocks_completed_minutes"),
+        CheckConstraint("missed_minutes >= 0", name="ck_session_blocks_missed_minutes"),
+        CheckConstraint(
+            "elapsed_seconds IS NULL OR elapsed_seconds >= 0",
+            name="ck_session_blocks_elapsed",
+        ),
+        CheckConstraint("final_score IS NULL OR final_score >= 0", name="ck_session_blocks_score"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_sessions.id", ondelete="CASCADE")
+    )
+    source_plan_block_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plan_blocks.id", ondelete="SET NULL"), nullable=True
+    )
+    block_order: Mapped[int] = mapped_column(Integer())
+    title: Mapped[str] = mapped_column(Text())
+    workout_format: Mapped[str] = mapped_column(Text())
+    duration_seconds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    target_rounds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    completed_rounds: Mapped[int] = mapped_column(Integer(), server_default="0")
+    partial_station_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    partial_reps: Mapped[int] = mapped_column(Integer(), server_default="0")
+    completed_minutes: Mapped[int] = mapped_column(Integer(), server_default="0")
+    missed_minutes: Mapped[int] = mapped_column(Integer(), server_default="0")
+    elapsed_seconds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    final_score: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+
+
+class WorkoutFormatIntervalResult(Base):
+    __tablename__ = "workout_format_interval_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_block_id", "minute_number", name="uq_format_interval_minute"
+        ),
+        CheckConstraint("minute_number >= 1", name="ck_format_interval_minute"),
+        CheckConstraint("station_order >= 1", name="ck_format_interval_station"),
+        CheckConstraint("completed IN (0, 1)", name="ck_format_interval_completed"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_block_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_session_blocks.id", ondelete="CASCADE")
+    )
+    minute_number: Mapped[int] = mapped_column(Integer())
+    station_order: Mapped[int] = mapped_column(Integer())
+    completed: Mapped[int] = mapped_column(Integer())
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())

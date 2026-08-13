@@ -685,6 +685,118 @@ def _add_progression_strategies(connection: Connection) -> None:
     )
 
 
+def _add_workout_formats(connection: Connection) -> None:
+    """Add immutable plan/session blocks and durable timed-format results."""
+    formats = "'standard_sets', 'amrap', 'emom', 'for_time', 'circuit_rounds'"
+    connection.exec_driver_sql(
+        f"""CREATE TABLE user_workout_plan_blocks (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            plan_day_id INTEGER NOT NULL,
+            block_order INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            workout_format TEXT NOT NULL,
+            duration_seconds INTEGER,
+            target_rounds INTEGER,
+            CONSTRAINT uq_plan_blocks_order UNIQUE (plan_day_id, block_order),
+            CONSTRAINT ck_plan_blocks_order CHECK (block_order >= 1),
+            CONSTRAINT ck_plan_blocks_format CHECK (workout_format IN ({formats})),
+            CONSTRAINT ck_plan_blocks_duration CHECK (
+                duration_seconds IS NULL OR duration_seconds > 0
+            ),
+            CONSTRAINT ck_plan_blocks_rounds CHECK (
+                target_rounds IS NULL OR target_rounds > 0
+            ),
+            FOREIGN KEY(plan_day_id) REFERENCES user_workout_plan_days(id)
+                ON DELETE CASCADE
+        )"""
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE user_workout_plan_exercises ADD COLUMN plan_block_id INTEGER "
+        "REFERENCES user_workout_plan_blocks(id) ON DELETE SET NULL"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE user_workout_plan_exercises ADD COLUMN format_reps INTEGER "
+        "CHECK (format_reps IS NULL OR format_reps >= 1)"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE user_workout_plan_exercises ADD COLUMN station_order INTEGER "
+        "CHECK (station_order IS NULL OR station_order >= 1)"
+    )
+    connection.exec_driver_sql(
+        f"""CREATE TABLE workout_session_blocks (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            source_plan_block_id INTEGER,
+            block_order INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            workout_format TEXT NOT NULL,
+            duration_seconds INTEGER,
+            target_rounds INTEGER,
+            started_at DATETIME,
+            finished_at DATETIME,
+            completed_rounds INTEGER NOT NULL DEFAULT 0,
+            partial_station_order INTEGER,
+            partial_reps INTEGER NOT NULL DEFAULT 0,
+            completed_minutes INTEGER NOT NULL DEFAULT 0,
+            missed_minutes INTEGER NOT NULL DEFAULT 0,
+            elapsed_seconds INTEGER,
+            final_score INTEGER,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_session_blocks_order UNIQUE (session_id, block_order),
+            CONSTRAINT ck_session_blocks_order CHECK (block_order >= 1),
+            CONSTRAINT ck_session_blocks_format CHECK (workout_format IN ({formats})),
+            CONSTRAINT ck_session_blocks_duration CHECK (
+                duration_seconds IS NULL OR duration_seconds > 0
+            ),
+            CONSTRAINT ck_session_blocks_rounds CHECK (
+                target_rounds IS NULL OR target_rounds > 0
+            ),
+            CONSTRAINT ck_session_blocks_completed_rounds CHECK (completed_rounds >= 0),
+            CONSTRAINT ck_session_blocks_partial_reps CHECK (partial_reps >= 0),
+            CONSTRAINT ck_session_blocks_completed_minutes CHECK (completed_minutes >= 0),
+            CONSTRAINT ck_session_blocks_missed_minutes CHECK (missed_minutes >= 0),
+            CONSTRAINT ck_session_blocks_elapsed CHECK (
+                elapsed_seconds IS NULL OR elapsed_seconds >= 0
+            ),
+            CONSTRAINT ck_session_blocks_score CHECK (final_score IS NULL OR final_score >= 0),
+            FOREIGN KEY(session_id) REFERENCES workout_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_plan_block_id) REFERENCES user_workout_plan_blocks(id)
+                ON DELETE SET NULL
+        )"""
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE workout_session_exercises ADD COLUMN session_block_id INTEGER "
+        "REFERENCES workout_session_blocks(id) ON DELETE SET NULL"
+    )
+    for name in (
+        "planned_format_reps", "selected_format_reps",
+        "planned_station_order", "selected_station_order",
+    ):
+        connection.exec_driver_sql(
+            f"ALTER TABLE workout_session_exercises ADD COLUMN {name} INTEGER "
+            f"CHECK ({name} IS NULL OR {name} >= 1)"
+        )
+    connection.exec_driver_sql(
+        """CREATE TABLE workout_format_interval_results (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            session_block_id INTEGER NOT NULL,
+            minute_number INTEGER NOT NULL,
+            station_order INTEGER NOT NULL,
+            completed INTEGER NOT NULL,
+            recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_format_interval_minute
+                UNIQUE (session_block_id, minute_number),
+            CONSTRAINT ck_format_interval_minute CHECK (minute_number >= 1),
+            CONSTRAINT ck_format_interval_station CHECK (station_order >= 1),
+            CONSTRAINT ck_format_interval_completed CHECK (completed IN (0, 1)),
+            FOREIGN KEY(session_block_id) REFERENCES workout_session_blocks(id)
+                ON DELETE CASCADE
+        )"""
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX ix_session_blocks_session_order "
+        "ON workout_session_blocks(session_id, block_order)"
+    )
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -695,6 +807,7 @@ MIGRATIONS = (
     Migration(7, "exercise_taxonomy", _add_exercise_taxonomy),
     Migration(8, "training_profile_expansion", _expand_training_profile),
     Migration(9, "workout_progression_strategies", _add_progression_strategies),
+    Migration(10, "workout_formats", _add_workout_formats),
 )
 
 

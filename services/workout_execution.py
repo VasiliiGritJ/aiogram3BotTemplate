@@ -13,8 +13,10 @@ from db.models import (
     UserAccess,
     UserWorkoutPlan,
     UserWorkoutPlanDay,
+    UserWorkoutPlanBlock,
     UserWorkoutPlanExercise,
     WorkoutSession,
+    WorkoutSessionBlock,
     WorkoutSessionExercise,
     WorkoutSetResult,
     dbSession,
@@ -92,6 +94,31 @@ class WorkoutSessionExerciseView:
     set_results: tuple[WorkoutSetResultView, ...]
     planned_progression_strategy: str | None = None
     selected_progression_strategy: str | None = None
+    session_block_id: int | None = None
+    planned_format_reps: int | None = None
+    selected_format_reps: int | None = None
+    planned_station_order: int | None = None
+    selected_station_order: int | None = None
+
+
+@dataclass(frozen=True)
+class WorkoutSessionBlockView:
+    id: int
+    block_order: int
+    title: str
+    workout_format: str
+    duration_seconds: int | None
+    target_rounds: int | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    completed_rounds: int
+    partial_station_order: int | None
+    partial_reps: int
+    completed_minutes: int
+    missed_minutes: int
+    elapsed_seconds: int | None
+    final_score: int | None
+    exercises: tuple[WorkoutSessionExerciseView, ...]
 
 
 @dataclass(frozen=True)
@@ -107,6 +134,7 @@ class WorkoutSessionView:
     finished_at: datetime | None
     updated_at: datetime
     exercises: tuple[WorkoutSessionExerciseView, ...]
+    blocks: tuple[WorkoutSessionBlockView, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,6 +161,7 @@ class CurrentWorkoutStep:
     workout_id: int
     exercise: WorkoutSessionExerciseView | None
     set_number: int | None
+    format_block: WorkoutSessionBlockView | None = None
 
     @property
     def ready_to_complete(self) -> bool:
@@ -218,6 +247,29 @@ def _exercise_view(
         set_results=tuple(_result_view(result) for result in results),
         planned_progression_strategy=exercise.planned_progression_strategy,
         selected_progression_strategy=exercise.selected_progression_strategy,
+        session_block_id=exercise.session_block_id,
+        planned_format_reps=exercise.planned_format_reps,
+        selected_format_reps=exercise.selected_format_reps,
+        planned_station_order=exercise.planned_station_order,
+        selected_station_order=exercise.selected_station_order,
+    )
+
+
+def _block_view(session: Session, block: WorkoutSessionBlock) -> WorkoutSessionBlockView:
+    exercises = session.scalars(
+        select(WorkoutSessionExercise)
+        .where(WorkoutSessionExercise.session_block_id == block.id)
+        .order_by(WorkoutSessionExercise.selected_station_order, WorkoutSessionExercise.exercise_order)
+    ).all()
+    return WorkoutSessionBlockView(
+        id=block.id, block_order=block.block_order, title=block.title,
+        workout_format=block.workout_format, duration_seconds=block.duration_seconds,
+        target_rounds=block.target_rounds, started_at=block.started_at,
+        finished_at=block.finished_at, completed_rounds=block.completed_rounds,
+        partial_station_order=block.partial_station_order, partial_reps=block.partial_reps,
+        completed_minutes=block.completed_minutes, missed_minutes=block.missed_minutes,
+        elapsed_seconds=block.elapsed_seconds, final_score=block.final_score,
+        exercises=tuple(_exercise_view(session, item) for item in exercises),
     )
 
 
@@ -229,6 +281,11 @@ def _load_workout_view(
         select(WorkoutSessionExercise)
         .where(WorkoutSessionExercise.session_id == workout.id)
         .order_by(WorkoutSessionExercise.exercise_order)
+    ).all()
+    blocks = session.scalars(
+        select(WorkoutSessionBlock)
+        .where(WorkoutSessionBlock.session_id == workout.id)
+        .order_by(WorkoutSessionBlock.block_order)
     ).all()
     return WorkoutSessionView(
         id=workout.id,
@@ -242,6 +299,7 @@ def _load_workout_view(
         finished_at=workout.finished_at,
         updated_at=workout.updated_at,
         exercises=tuple(_exercise_view(session, exercise) for exercise in exercises),
+        blocks=tuple(_block_view(session, block) for block in blocks),
     )
 
 
@@ -255,6 +313,10 @@ def _next_step_models(
         .order_by(WorkoutSessionExercise.exercise_order)
     ).all()
     for exercise in exercises:
+        if exercise.session_block_id is not None:
+            block = session.get(WorkoutSessionBlock, exercise.session_block_id)
+            if block is not None and block.workout_format != "standard_sets":
+                continue
         completed_sets = set(
             session.scalars(
                 select(WorkoutSetResult.set_number).where(
@@ -276,6 +338,20 @@ def _current_step_in_session(
         raise WorkoutStateError("Workout session is not in progress.")
     exercise, set_number = _next_step_models(session, workout)
     if exercise is None:
+        block = session.scalar(
+            select(WorkoutSessionBlock)
+            .where(
+                WorkoutSessionBlock.session_id == workout.id,
+                WorkoutSessionBlock.workout_format != "standard_sets",
+                WorkoutSessionBlock.finished_at.is_(None),
+            )
+            .order_by(WorkoutSessionBlock.block_order)
+        )
+        if block is not None:
+            return CurrentWorkoutStep(
+                kind="format_block", workout_id=workout.id, exercise=None,
+                set_number=None, format_block=_block_view(session, block),
+            )
         return CurrentWorkoutStep(
             kind="ready_to_complete",
             workout_id=workout.id,
@@ -352,11 +428,35 @@ def _create_workout_session(
     )
     session.add(workout)
     session.flush()
+    block_map: dict[int, WorkoutSessionBlock] = {}
+    plan_blocks = session.scalars(
+        select(UserWorkoutPlanBlock)
+        .where(UserWorkoutPlanBlock.plan_day_id == plan_day.id)
+        .order_by(UserWorkoutPlanBlock.block_order)
+    ).all()
+    for plan_block in plan_blocks:
+        snapshot = WorkoutSessionBlock(
+            session_id=workout.id,
+            source_plan_block_id=plan_block.id,
+            block_order=plan_block.block_order,
+            title=plan_block.title,
+            workout_format=plan_block.workout_format,
+            duration_seconds=plan_block.duration_seconds,
+            target_rounds=plan_block.target_rounds,
+            updated_at=started_at,
+        )
+        session.add(snapshot)
+        session.flush()
+        block_map[plan_block.id] = snapshot
     for plan_exercise in plan_exercises:
         session.add(
             WorkoutSessionExercise(
                 session_id=workout.id,
                 source_plan_exercise_id=plan_exercise.id,
+                session_block_id=(
+                    block_map[plan_exercise.plan_block_id].id
+                    if plan_exercise.plan_block_id in block_map else None
+                ),
                 exercise_order=plan_exercise.exercise_order,
                 planned_exercise_id=plan_exercise.exercise_id,
                 planned_exercise_name=plan_exercise.exercise_name,
@@ -367,6 +467,8 @@ def _create_workout_session(
                 planned_rest_seconds=plan_exercise.rest_seconds,
                 planned_hint=plan_exercise.hint,
                 planned_progression_strategy=plan_exercise.progression_strategy,
+                planned_format_reps=plan_exercise.format_reps,
+                planned_station_order=plan_exercise.station_order,
                 selected_exercise_id=plan_exercise.exercise_id,
                 selected_exercise_name=plan_exercise.exercise_name,
                 selected_primary_muscle_group=plan_exercise.primary_muscle_group,
@@ -376,6 +478,8 @@ def _create_workout_session(
                 selected_rest_seconds=plan_exercise.rest_seconds,
                 selected_hint=plan_exercise.hint,
                 selected_progression_strategy=plan_exercise.progression_strategy,
+                selected_format_reps=plan_exercise.format_reps,
+                selected_station_order=plan_exercise.station_order,
             )
         )
     session.flush()

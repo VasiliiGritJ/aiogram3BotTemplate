@@ -139,6 +139,9 @@ class WorkoutExecutionSchemaTests(unittest.TestCase):
                 "selected_target_reps_max", "selected_rest_seconds",
                 "selected_hint", "planned_progression_strategy",
                 "selected_progression_strategy",
+                "session_block_id", "planned_format_reps",
+                "selected_format_reps", "planned_station_order",
+                "selected_station_order",
             },
             {
                 column["name"]
@@ -194,6 +197,7 @@ class WorkoutExecutionSchemaTests(unittest.TestCase):
                 ),
                 "planned_exercise_id": ("exercises", "SET NULL"),
                 "selected_exercise_id": ("exercises", "SET NULL"),
+                "session_block_id": ("workout_session_blocks", "SET NULL"),
             },
             foreign_keys("workout_session_exercises"),
         )

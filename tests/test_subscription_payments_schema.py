@@ -19,7 +19,7 @@ class SubscriptionPaymentsSchemaTests(unittest.TestCase):
         self.database = Path(self.temp_directory.name) / "payments.db"
         self.session = SqliteSession(sqlite_url(self.database))
         self.assertEqual(
-            (1, 2, 3, 4, 5, 6, 7, 8, 9),
+            (1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
             run_migrations(self.session.engine),
         )
         with self.session.engine.begin() as connection:

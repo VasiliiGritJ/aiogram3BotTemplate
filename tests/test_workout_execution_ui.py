@@ -17,6 +17,7 @@ from services.workout_execution import (
     WorkoutSetResultView,
     WorkoutSessionExerciseView,
     WorkoutSessionView,
+    WorkoutSessionBlockView,
     WorkoutStartResult,
     WorkoutStateError,
 )
@@ -178,6 +179,20 @@ def _workout(
     )
 
 
+def _format_block(workout_format: str = "amrap") -> WorkoutSessionBlockView:
+    return WorkoutSessionBlockView(
+        id=71, block_order=1, title="Функциональный тренинг",
+        workout_format=workout_format, duration_seconds=360, target_rounds=None,
+        started_at=None, finished_at=None, completed_rounds=0,
+        partial_station_order=None, partial_reps=0, completed_minutes=0,
+        missed_minutes=0, elapsed_seconds=None, final_score=None,
+        exercises=(replace(
+            _exercise(name="Приседания"), session_block_id=71,
+            selected_format_reps=8, selected_station_order=1,
+        ),),
+    )
+
+
 def _step(*, ready: bool = False, set_number: int = 1) -> CurrentWorkoutStep:
     return CurrentWorkoutStep(
         kind="ready_to_complete" if ready else "record_set",
@@ -209,6 +224,25 @@ def _recommendation(
 
 
 class WorkoutExecutionUiTests(unittest.TestCase):
+    def test_format_step_and_markup_show_guided_amrap_actions(self) -> None:
+        block = _format_block("amrap")
+        workout = replace(_workout(), blocks=(block,))
+        step = CurrentWorkoutStep(
+            kind="format_block", workout_id=workout.id, exercise=None,
+            set_number=None, format_block=block,
+        )
+        text = workout_ui._format_step(workout, step)
+        self.assertIn("AMRAP", text)
+        self.assertIn("Приседания", text)
+        state = python_types.SimpleNamespace(
+            block_id=block.id, started_at=None, finished_at=None,
+            workout_format=python_types.SimpleNamespace(value="amrap"),
+            completed_rounds=0, current_minute=None,
+        )
+        markup = workout_ui.workout_format_mkp(state)
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        self.assertIn("workout:format:start:71", callbacks)
+
     def run_async(self, coroutine) -> None:
         asyncio.run(coroutine)
 

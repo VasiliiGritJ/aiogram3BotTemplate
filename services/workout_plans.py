@@ -15,6 +15,7 @@ from db.models import (
     FitnessProfile,
     UserWorkoutPlan,
     UserWorkoutPlanDay,
+    UserWorkoutPlanBlock,
     UserWorkoutPlanExercise,
     WorkoutTemplate,
     WorkoutTemplateDay,
@@ -30,11 +31,11 @@ from services.exercise_catalog import (
 from services.workout_progression import ProgressionStrategy
 
 
-CATALOG_VERSION = 3
+CATALOG_VERSION = 4
 DEFAULT_GOAL = "muscle_gain"
 DEFAULT_EXPERIENCE = "beginner"
 DEFAULT_EQUIPMENT = "gym"
-ADAPTIVE_TEMPLATE_CODE = "v3_adaptive_rule_based"
+ADAPTIVE_TEMPLATE_CODE = "v4_adaptive_formats"
 # Legacy controlled templates are retained for existing assigned-plan references.
 # New Stage 7C assignments use the adaptive rule-based program below.
 MAX_TEMPLATE_WORKOUTS_PER_WEEK = 4
@@ -128,6 +129,19 @@ class PlanExerciseView:
     rest_seconds: int
     hint: str
     progression_strategy: str | None = None
+    workout_format: str = "standard_sets"
+    format_reps: int | None = None
+    station_order: int | None = None
+
+
+@dataclass(frozen=True)
+class PlanBlockView:
+    order: int
+    title: str
+    workout_format: str
+    duration_seconds: int | None
+    target_rounds: int | None
+    exercises: tuple[PlanExerciseView, ...]
 
 
 @dataclass(frozen=True)
@@ -135,6 +149,7 @@ class PlanDayView:
     day_number: int
     title: str
     exercises: tuple[PlanExerciseView, ...]
+    blocks: tuple[PlanBlockView, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -174,6 +189,22 @@ class GeneratedDayDefinition:
     day_number: int
     title: str
     exercises: tuple[GeneratedExerciseDefinition, ...]
+    blocks: tuple["GeneratedBlockDefinition", ...] = ()
+
+
+@dataclass(frozen=True)
+class GeneratedFormatExerciseDefinition:
+    exercise_code: str
+    reps: int
+
+
+@dataclass(frozen=True)
+class GeneratedBlockDefinition:
+    title: str
+    workout_format: str
+    duration_seconds: int | None
+    target_rounds: int | None
+    exercises: tuple[GeneratedFormatExerciseDefinition, ...]
 
 
 @dataclass(frozen=True)
@@ -616,6 +647,79 @@ def _progression_strategy(
     return ProgressionStrategy.HYPERTROPHY_LOAD_REPS
 
 
+def _functional_block(profile: NormalizedProfile, day_number: int) -> GeneratedBlockDefinition | None:
+    """Route a conservative conditioning block without replacing resistance work."""
+    environment = profile.training_environment
+    if environment not in {"functional_gym", "street"}:
+        return None
+    if environment == "street":
+        frequency = {"strength": 0, "muscle_gain": 1, "fat_loss": 2}[profile.goal]
+        if frequency == 0 or day_number > min(profile.workouts_per_week, frequency):
+            return None
+        workout_format = "circuit_rounds"
+    else:
+        frequency = {"strength": 1, "muscle_gain": 1, "fat_loss": 3}[profile.goal]
+        if day_number > min(profile.workouts_per_week, frequency):
+            return None
+        formats = {
+            "strength": ("emom",),
+            "muscle_gain": ("amrap",),
+            "fat_loss": ("amrap", "emom", "for_time"),
+        }[profile.goal]
+        workout_format = formats[(day_number - 1) % len(formats)]
+
+    candidates = [
+        item for item in EXERCISE_DEFINITIONS
+        if environment in item.environments
+        and profile.experience_level in item.experience_levels
+        and item.equipment in (
+            {"bodyweight", "pullup_dip_station"}
+            if environment == "street"
+            else {"bodyweight", "functional_equipment"}
+        )
+        and item.progression_type in {"bodyweight_reps", "timed_conditioning"}
+        and item.movement_pattern in {
+            "squat", "hinge", "horizontal_push", "horizontal_pull", "vertical_pull",
+            "core", "locomotion_conditioning",
+        }
+        and item.code not in {"barbell_back_squat", "barbell_bench_press", "barbell_deadlift"}
+    ]
+    candidates.sort(key=lambda item: (
+        1 if item.progression_type == "timed_conditioning" else 0,
+        item.movement_pattern,
+        item.code,
+    ))
+    selected: list[ExerciseDefinition] = []
+    patterns: set[str] = set()
+    for item in candidates:
+        if item.movement_pattern in patterns:
+            continue
+        selected.append(item)
+        patterns.add(item.movement_pattern)
+        if len(selected) == (2 if profile.experience_level == "beginner" else 3):
+            break
+    if not selected:
+        raise WorkoutCatalogError("Functional block has no compatible exercises.")
+
+    duration_minutes = {30: 6, 45: 8, 60: 10, 90: 12}[profile.session_duration_minutes]
+    if profile.experience_level == "beginner":
+        duration_minutes = max(5, duration_minutes - 2)
+    target_rounds = None
+    if workout_format in {"for_time", "circuit_rounds"}:
+        target_rounds = {30: 2, 45: 3, 60: 3, 90: 4}[profile.session_duration_minutes]
+    reps = 6 if profile.experience_level == "beginner" else 8
+    return GeneratedBlockDefinition(
+        title="Функциональный тренинг" if environment == "functional_gym" else "Круговая тренировка",
+        workout_format=workout_format,
+        duration_seconds=duration_minutes * 60 if workout_format in {"amrap", "emom"} else None,
+        target_rounds=target_rounds,
+        exercises=tuple(
+            GeneratedFormatExerciseDefinition(item.code, reps + index * 2)
+            for index, item in enumerate(selected)
+        ),
+    )
+
+
 def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
     """Build a deterministic, taxonomy-filtered prescription for one profile."""
     days: list[GeneratedDayDefinition] = []
@@ -648,6 +752,10 @@ def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
                 day_number=day_number,
                 title=f"Тренировка {day_number}",
                 exercises=tuple(exercises),
+                blocks=tuple(
+                    block for block in (_functional_block(profile, day_number),)
+                    if block is not None
+                ),
             )
         )
     return GeneratedProgramDefinition(
@@ -816,27 +924,55 @@ def _load_plan_view(session: Session, plan: UserWorkoutPlan) -> WorkoutPlanView:
             .where(UserWorkoutPlanExercise.plan_day_id == day.id)
             .order_by(UserWorkoutPlanExercise.exercise_order)
         ).all()
+        plan_blocks = session.scalars(
+            select(UserWorkoutPlanBlock)
+            .where(UserWorkoutPlanBlock.plan_day_id == day.id)
+            .order_by(UserWorkoutPlanBlock.block_order)
+        ).all()
+        exercise_views = {
+            item.id: PlanExerciseView(
+                order=item.exercise_order,
+                name=item.exercise_name,
+                primary_muscle_group=(
+                    item.primary_muscle_group
+                    if item.primary_muscle_group != "other"
+                    else exercise.primary_muscle_group
+                ),
+                sets=item.sets,
+                reps_min=item.reps_min,
+                reps_max=item.reps_max,
+                rest_seconds=item.rest_seconds,
+                hint=item.hint,
+                progression_strategy=item.progression_strategy,
+                workout_format=(
+                    next(
+                        (block.workout_format for block in plan_blocks if block.id == item.plan_block_id),
+                        "standard_sets",
+                    )
+                ),
+                format_reps=item.format_reps,
+                station_order=item.station_order,
+            )
+            for item, exercise in items
+        }
         days.append(
             PlanDayView(
                 day_number=day.day_number,
                 title=day.title,
-                exercises=tuple(
-                    PlanExerciseView(
-                        order=item.exercise_order,
-                        name=item.exercise_name,
-                        primary_muscle_group=(
-                            item.primary_muscle_group
-                            if item.primary_muscle_group != "other"
-                            else exercise.primary_muscle_group
+                exercises=tuple(exercise_views[item.id] for item, _ in items),
+                blocks=tuple(
+                    PlanBlockView(
+                        order=block.block_order,
+                        title=block.title,
+                        workout_format=block.workout_format,
+                        duration_seconds=block.duration_seconds,
+                        target_rounds=block.target_rounds,
+                        exercises=tuple(
+                            exercise_views[item.id]
+                            for item, _ in items if item.plan_block_id == block.id
                         ),
-                        sets=item.sets,
-                        reps_min=item.reps_min,
-                        reps_max=item.reps_max,
-                        rest_seconds=item.rest_seconds,
-                        hint=item.hint,
-                        progression_strategy=item.progression_strategy,
                     )
-                    for item, exercise in items
+                    for block in plan_blocks
                 ),
             )
         )
@@ -908,6 +1044,12 @@ def assign_workout_plan(
                 for day in generated.days
                 for item in day.exercises
             }
+            codes.update(
+                item.exercise_code
+                for day in generated.days
+                for block in day.blocks
+                for item in block.exercises
+            )
             exercises_by_code = {
                 exercise.code: exercise
                 for exercise in session.scalars(
@@ -959,6 +1101,37 @@ def assign_workout_plan(
                             progression_strategy=item.progression_strategy,
                         )
                     )
+                next_order = len(generated_day.exercises) + 1
+                for block_order, generated_block in enumerate(generated_day.blocks, start=1):
+                    plan_block = UserWorkoutPlanBlock(
+                        plan_day_id=plan_day.id,
+                        block_order=block_order,
+                        title=generated_block.title,
+                        workout_format=generated_block.workout_format,
+                        duration_seconds=generated_block.duration_seconds,
+                        target_rounds=generated_block.target_rounds,
+                    )
+                    session.add(plan_block)
+                    session.flush()
+                    for station_order, item in enumerate(generated_block.exercises, start=1):
+                        exercise = exercises_by_code[item.exercise_code]
+                        session.add(UserWorkoutPlanExercise(
+                            plan_day_id=plan_day.id,
+                            plan_block_id=plan_block.id,
+                            exercise_id=exercise.id,
+                            exercise_order=next_order,
+                            exercise_name=exercise.name,
+                            primary_muscle_group=exercise.primary_muscle_group,
+                            sets=1,
+                            reps_min=item.reps,
+                            reps_max=item.reps,
+                            rest_seconds=0,
+                            hint=exercise.hint,
+                            progression_strategy=None,
+                            format_reps=item.reps,
+                            station_order=station_order,
+                        ))
+                        next_order += 1
             session.flush()
             return PlanAssignmentResult(
                 plan=_load_plan_view(session, plan),
@@ -985,6 +1158,8 @@ def format_workout_plan(
         groups = ", ".join(day_primary_muscle_groups(day))
         lines.append(f"{day.day_number}. {escape(day.title)} — {escape(groups)}")
         for exercise in day.exercises:
+            if exercise.workout_format != "standard_sets":
+                continue
             lines.append(
                 f"{exercise.order}) {escape(exercise.name)} — "
                 f"{exercise.sets}×{exercise.reps_min}–{exercise.reps_max}, "
@@ -992,6 +1167,18 @@ def format_workout_plan(
             )
             lines.append(f"Группа мышц: {escape(exercise.primary_muscle_group)}")
             lines.append(f"Подсказка: {escape(exercise.hint)}")
+        for block in day.blocks:
+            details = []
+            if block.duration_seconds:
+                details.append(f"{block.duration_seconds // 60} мин")
+            if block.target_rounds:
+                details.append(f"{block.target_rounds} круга")
+            suffix = f" — {', '.join(details)}" if details else ""
+            lines.append(f"{escape(block.title)}{suffix}")
+            for exercise in block.exercises:
+                lines.append(
+                    f"• {escape(exercise.name)} — {exercise.format_reps} повторений"
+                )
     return "\n".join(lines)
 
 
