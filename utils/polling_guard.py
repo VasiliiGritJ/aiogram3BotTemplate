@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import BinaryIO
+
+
+_PROCESS_OWNER_LOCK = threading.Lock()
 
 
 class PollingInstanceAlreadyRunning(RuntimeError):
@@ -24,6 +28,7 @@ class PollingInstanceGuard:
             Path(tempfile.gettempdir()) / "fitness-coach-telegram-polling.lock"
         )
         self._handle: BinaryIO | None = None
+        self._owns_process_lock = False
 
     def __enter__(self) -> "PollingInstanceGuard":
         return self.acquire()
@@ -35,6 +40,12 @@ class PollingInstanceGuard:
         if self._handle is not None:
             return self
 
+        if not _PROCESS_OWNER_LOCK.acquire(blocking=False):
+            raise PollingInstanceAlreadyRunning(
+                "Another polling lifecycle already owns this process."
+            )
+        self._owns_process_lock = True
+
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = self._lock_path.open("a+b")
         try:
@@ -42,6 +53,7 @@ class PollingInstanceGuard:
             self._lock(handle)
         except OSError as error:
             handle.close()
+            self._release_process_lock()
             raise PollingInstanceAlreadyRunning(
                 "Another local bot polling process is already running."
             ) from error
@@ -52,11 +64,18 @@ class PollingInstanceGuard:
     def release(self) -> None:
         handle, self._handle = self._handle, None
         if handle is None:
+            self._release_process_lock()
             return
         try:
             self._unlock(handle)
         finally:
             handle.close()
+            self._release_process_lock()
+
+    def _release_process_lock(self) -> None:
+        if self._owns_process_lock:
+            self._owns_process_lock = False
+            _PROCESS_OWNER_LOCK.release()
 
     @staticmethod
     def _prepare_lock_byte(handle: BinaryIO) -> None:

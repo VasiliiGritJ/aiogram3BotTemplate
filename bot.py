@@ -1,9 +1,11 @@
 import asyncio
+import logging
 
 from storage.config import dp, bot
 from managers.reminds import remindsManager
 import utils.custom_logger as cl
-from utils.polling_guard import PollingInstanceAlreadyRunning, PollingInstanceGuard
+from utils.polling_guard import PollingInstanceAlreadyRunning
+from utils.polling_lifecycle import PollingConflictDetected, run_polling_lifecycle
 
 import admin_panel.admin.admin
 import admin_panel.mailing.mailing
@@ -25,16 +27,22 @@ async def bot_started():
 
 async def main():
     try:
-        with PollingInstanceGuard():
-            tasks = [
-                dp.start_polling(bot),
-                remindsManager(),
-            ]
-            dp.shutdown.register(bot_stopped)
-            dp.startup.register(bot_started)
-            await asyncio.gather(*tasks)
+        dp.shutdown.register(bot_stopped)
+        dp.startup.register(bot_started)
+        await run_polling_lifecycle(
+            dp,
+            bot,
+            companion_factories=(remindsManager,),
+        )
     except PollingInstanceAlreadyRunning:
         cl.log("Bot", "warning", "Local polling instance is already running")
+    except PollingConflictDetected:
+        logging.getLogger("polling.lifecycle").error(
+            "Polling stopped after a typed TelegramConflictError"
+        )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

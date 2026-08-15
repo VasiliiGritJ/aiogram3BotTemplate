@@ -60,6 +60,14 @@ with PollingInstanceGuard(Path(sys.argv[1])):
         second.acquire()
         self._guards.append(second)
 
+    def test_second_owner_in_same_process_is_rejected(self) -> None:
+        first = PollingInstanceGuard(self.lock_path)
+        first.acquire()
+        self._guards.append(first)
+
+        with self.assertRaises(PollingInstanceAlreadyRunning):
+            PollingInstanceGuard(self.lock_path).acquire()
+
     def test_context_manager_releases_after_an_exception(self) -> None:
         with self.assertRaises(RuntimeError):
             with PollingInstanceGuard(self.lock_path):
