@@ -649,6 +649,12 @@ class WorkoutSession(Base):
             "adaptation_mode IN ('strict', 'replacements', 'adaptive')",
             name="ck_workout_sessions_adaptation_mode",
         ),
+        CheckConstraint(
+            "effective_training_environment IS NULL OR "
+            "effective_training_environment IN "
+            "('gym', 'functional_gym', 'street', 'home')",
+            name="ck_workout_sessions_effective_training_environment",
+        ),
         Index(
             "uq_workout_sessions_active_user",
             "user_id",
@@ -690,6 +696,9 @@ class WorkoutSession(Base):
     )
     plan_source: Mapped[str] = mapped_column(Text(), server_default="generated")
     adaptation_mode: Mapped[str] = mapped_column(Text(), server_default="adaptive")
+    effective_training_environment: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
 
     exercises: Mapped[list["WorkoutSessionExercise"]] = relationship(
         back_populates="workout_session",

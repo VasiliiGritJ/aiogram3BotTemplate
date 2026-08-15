@@ -184,6 +184,7 @@ def _workout(
         finished_at=finished_at,
         updated_at=started,
         exercises=exercises or (_exercise(),),
+        effective_training_environment="gym",
     )
 
 
@@ -432,9 +433,29 @@ class WorkoutExecutionUiTests(unittest.TestCase):
                     workout_ui.parse_workout_reps(value)
 
     def test_start_renders_persisted_step_and_activates_only_via_service(self) -> None:
-        call = _Call()
+        prepare = _Call(data="workout:start")
         state = _State()
         start = WorkoutStartResult(_workout(), created=True, trial_activated=True)
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_active_workout", return_value=None),
+            patch.object(
+                workout_ui,
+                "get_default_training_environment",
+                return_value="gym",
+            ),
+            patch.object(workout_ui, "get_or_start_workout") as service_start,
+        ):
+            self.run_async(workout_ui.workout_start_or_resume(prepare, state))
+
+        service_start.assert_not_called()
+        self.assertIn("Сегодня тренируемся: Тренажёрный зал", prepare.message.edits[-1][0])
+        self.assertIn(
+            "workout:environment:start:gym",
+            self.callback_values(prepare.message.edits[-1][1]),
+        )
+
+        call = _Call(data="workout:environment:start:gym")
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
             patch.object(workout_ui, "get_or_start_workout", return_value=start) as service_start,
@@ -446,11 +467,53 @@ class WorkoutExecutionUiTests(unittest.TestCase):
                 return_value=_recommendation(ProgressionReason.NO_HISTORY),
             ),
         ):
-            self.run_async(workout_ui.workout_start_or_resume(call, state))
+            self.run_async(workout_ui.workout_environment_action(call, state))
 
-        service_start.assert_called_once_with(7)
+        service_start.assert_called_once_with(7, training_environment="gym")
         self.assertIn("Подход: 1 из 2", call.message.edits[-1][0])
+        self.assertIn("Сегодня тренируемся: Тренажёрный зал", call.message.edits[-1][0])
         self.assertGreaterEqual(state.clear_count, 1)
+
+    def test_session_environment_change_uses_service_and_stale_change_is_blocked(self) -> None:
+        choose = _Call(data="workout:environment:choose:session")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_active_workout", return_value=_workout()),
+        ):
+            self.run_async(workout_ui.workout_environment_action(choose, _State()))
+        self.assertIn(
+            "workout:environment:set:session:home",
+            self.callback_values(choose.message.edits[-1][1]),
+        )
+
+        selected = _Call(data="workout:environment:set:session:home")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_active_workout", return_value=_workout()),
+            patch.object(workout_ui, "change_workout_environment") as change,
+            patch.object(
+                workout_ui, "show_current_workout", new_callable=AsyncMock
+            ) as current,
+        ):
+            self.run_async(workout_ui.workout_environment_action(selected, _State()))
+        change.assert_called_once_with(7, 21, "home")
+        current.assert_awaited_once_with(selected.message, 7, edit=True)
+
+        saved_exercise = replace(
+            _exercise(),
+            set_results=(WorkoutSetResultView(1, 1, 10, 10, datetime(2026, 8, 10, 12, 5)),),
+        )
+        blocked = _Call(data="workout:environment:choose:session")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "get_active_workout",
+                return_value=_workout(exercises=(saved_exercise,)),
+            ),
+        ):
+            self.run_async(workout_ui.workout_environment_action(blocked, _State()))
+        self.assertIn("только до первого", blocked.answers[-1][0][0])
 
     def test_record_flow_keeps_only_weight_and_session_in_fsm(self) -> None:
         state = _State()

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from db.migrations import run_migrations
 from db.models import (
-    Exercise, User, UserAccess, UserWorkoutPlan, UserWorkoutPlanBlock,
+    Exercise, FitnessProfile, User, UserAccess, UserWorkoutPlan, UserWorkoutPlanBlock,
     UserWorkoutPlanDay, UserWorkoutPlanExercise, WorkoutSession,
     WorkoutSessionBlock, WorkoutSessionExercise, WorkoutTemplate, SqliteSession,
 )
@@ -35,6 +35,13 @@ class WorkoutFormatExecutionTests(unittest.TestCase):
             session.add(user)
             session.flush()
             self.user_id = user.id
+            session.add(FitnessProfile(
+                user_id=user.id, age=30, sex="male", height_cm=180,
+                weight_kg=80, goal="fat_loss", experience_level="beginner",
+                training_environment="functional_gym", workouts_per_week=2,
+                session_duration_minutes=30, limitations=None,
+                completed_at=BASE, updated_at=BASE,
+            ))
             session.commit()
 
     def tearDown(self):

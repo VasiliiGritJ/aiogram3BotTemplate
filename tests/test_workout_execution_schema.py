@@ -124,7 +124,7 @@ class WorkoutExecutionSchemaTests(unittest.TestCase):
                 "id", "user_id", "source_plan_id", "source_plan_day_id",
                 "day_number", "day_title", "status", "started_at",
                 "finished_at", "updated_at", "plan_source",
-                "adaptation_mode",
+                "adaptation_mode", "effective_training_environment",
             },
             {column["name"] for column in inspector.get_columns("workout_sessions")},
         )
@@ -241,6 +241,16 @@ class WorkoutExecutionSchemaTests(unittest.TestCase):
         with self.assertRaises(IntegrityError):
             with self.database() as session:
                 session.add(self.make_workout_session(status="unknown"))
+                session.commit()
+
+        with self.assertRaises(IntegrityError):
+            with self.database() as session:
+                workout = self.make_workout_session(
+                    status="completed",
+                    finished_at=finished_at,
+                )
+                workout.effective_training_environment = "garage"
+                session.add(workout)
                 session.commit()
 
     def test_snapshot_keeps_planned_and_selected_values_separate(self) -> None:

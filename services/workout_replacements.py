@@ -259,18 +259,25 @@ def _source_definition(session: Session, snapshot: WorkoutSessionExercise) -> Ex
     return definition
 
 
-def _profile_context(session: Session, user_id: int) -> tuple[str, str]:
+def _profile_context(
+    session: Session,
+    user_id: int,
+    workout: WorkoutSession,
+) -> tuple[str, str]:
     profile = session.get(FitnessProfile, user_id)
+    environment = workout.effective_training_environment or (
+        None if profile is None else profile.training_environment
+    )
     if (
         profile is None
-        or profile.training_environment not in TRAINING_ENVIRONMENTS
+        or environment not in TRAINING_ENVIRONMENTS
         or profile.experience_level not in EXPERIENCE_LEVELS
     ):
         raise ReplacementNotAllowedError(
             ReplacementReason.UNAVAILABLE,
             "Training profile is insufficient for a safe replacement.",
         )
-    return profile.training_environment, profile.experience_level
+    return environment, profile.experience_level
 
 
 def _candidate_models(
@@ -325,7 +332,7 @@ def get_replacement_options(
             )
         _assert_current_and_unstarted(session, workout, snapshot)
         source = _source_definition(session, snapshot)
-        environment, experience = _profile_context(session, user_id)
+        environment, experience = _profile_context(session, user_id, workout)
         candidates = _candidate_models(
             session,
             source,
@@ -382,7 +389,7 @@ def apply_replacement(
                 )
             _assert_current_and_unstarted(session, workout, snapshot)
             source = _source_definition(session, snapshot)
-            environment, experience = _profile_context(session, user_id)
+            environment, experience = _profile_context(session, user_id, workout)
             candidates = _candidate_models(
                 session,
                 source,

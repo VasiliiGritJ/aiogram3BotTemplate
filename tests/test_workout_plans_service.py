@@ -12,6 +12,7 @@ from db.models import (
     SqliteSession,
     User,
     UserWorkoutPlan,
+    UserWorkoutPlanDay,
     UserWorkoutPlanExercise,
     WorkoutTemplate,
     WorkoutTemplateDay,
@@ -104,6 +105,35 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         self.assertFalse(repeated.created)
         self.assertEqual(first.plan, repeated.plan)
         self.assertEqual(1, plan_count)
+
+    def test_catalog_version_signature_rebuilds_future_generated_plan_names(self) -> None:
+        first = assign_workout_plan(self.user_id, self.database)
+        with self.database() as session:
+            plan = session.get(UserWorkoutPlan, first.plan.id)
+            plan.profile_signature = "legacy-catalog-v4"
+            first_item = session.scalar(
+                select(UserWorkoutPlanExercise)
+                .join(
+                    UserWorkoutPlanDay,
+                    UserWorkoutPlanDay.id
+                    == UserWorkoutPlanExercise.plan_day_id,
+                )
+                .where(UserWorkoutPlanDay.plan_id == plan.id)
+                .order_by(UserWorkoutPlanExercise.id)
+            )
+            first_item.exercise_name = "Старое имя из snapshot"
+            session.commit()
+
+        refreshed = assign_workout_plan(self.user_id, self.database)
+        names = {
+            item.name
+            for day in refreshed.plan.days
+            for item in day.exercises
+        }
+
+        self.assertTrue(refreshed.created)
+        self.assertNotEqual(first.plan.id, refreshed.plan.id)
+        self.assertNotIn("Старое имя из snapshot", names)
 
     def test_supported_profile_selects_exact_template(self) -> None:
         with self.database() as session:
@@ -202,22 +232,96 @@ class WorkoutPlanServiceTests(unittest.TestCase):
                     first = generate_program(profile)
                     second = generate_program(profile)
                     self.assertEqual(first, second)
+                    all_definitions = []
                     for day in first.days:
                         definitions = [
                             exercise_definition_by_code(item.exercise_code)
                             for item in day.exercises
                         ]
-                        machine_cable = sum(
-                            item.equipment in {"machine", "cable"}
-                            for item in definitions
-                        )
-                        self.assertGreaterEqual(
-                            machine_cable * 5,
-                            len(definitions) * 3,
-                        )
+                        all_definitions.extend(definitions)
                         self.assertFalse(any(
                             item.equipment == "barbell" for item in definitions
                         ))
+                        self.assertNotIn(
+                            "bodyweight_squat",
+                            {item.code for item in definitions},
+                        )
+                    machine_cable = sum(
+                        item.equipment in {"machine", "cable"}
+                        for item in all_definitions
+                    )
+                    self.assertGreaterEqual(
+                        machine_cable * 10,
+                        len(all_definitions) * 7,
+                    )
+
+    def test_beginner_three_day_hypertrophy_has_balanced_weekly_coverage(self) -> None:
+        profile = normalize_profile(self.make_profile(
+            self.user_id,
+            goal="muscle_gain",
+            experience_level="beginner",
+            training_environment="gym",
+            workouts_per_week=3,
+            session_duration_minutes=60,
+        ))
+        first = generate_program(profile)
+        second = generate_program(profile)
+        definitions = [
+            exercise_definition_by_code(item.exercise_code)
+            for day in first.days
+            for item in day.exercises
+        ]
+        codes = [item.code for item in definitions]
+        muscles = {item.primary_muscle_group for item in definitions}
+        core_count = sum(item.primary_muscle_group == "core" for item in definitions)
+
+        self.assertEqual(first, second)
+        self.assertTrue({
+            "chest", "back", "quads", "hamstrings", "glutes", "shoulders",
+            "biceps", "triceps",
+        }.issubset(muscles))
+        self.assertGreaterEqual(core_count, 1)
+        self.assertLessEqual(core_count, 2)
+        self.assertEqual(len(codes), len(set(codes)))
+        self.assertTrue(any(
+            item.primary_muscle_group == "biceps"
+            and item.movement_pattern == "isolation"
+            for item in definitions
+        ))
+        self.assertTrue(any(
+            item.primary_muscle_group == "triceps"
+            and item.movement_pattern == "isolation"
+            for item in definitions
+        ))
+
+    def test_weekly_quality_matrix_bounds_core_and_repeated_exercises(self) -> None:
+        for days in range(2, 7):
+            for duration in (30, 60, 90):
+                with self.subTest(days=days, duration=duration):
+                    profile = normalize_profile(self.make_profile(
+                        self.user_id,
+                        goal="muscle_gain",
+                        experience_level="beginner",
+                        training_environment="gym",
+                        workouts_per_week=days,
+                        session_duration_minutes=duration,
+                    ))
+                    program = generate_program(profile)
+                    definitions = [
+                        exercise_definition_by_code(item.exercise_code)
+                        for day in program.days
+                        for item in day.exercises
+                    ]
+                    core_count = sum(
+                        item.primary_muscle_group == "core"
+                        for item in definitions
+                    )
+                    counts = {
+                        item.code: sum(other.code == item.code for other in definitions)
+                        for item in definitions
+                    }
+                    self.assertLessEqual(core_count, 2)
+                    self.assertLessEqual(max(counts.values()), 3)
 
     def test_advanced_gym_still_selects_free_weight_compounds(self) -> None:
         profile = normalize_profile(self.make_profile(

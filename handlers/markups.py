@@ -175,6 +175,7 @@ def workout_current_mkp(
     *,
     ready_to_complete: bool = False,
     show_replacement: bool = False,
+    show_environment_change: bool = False,
 ):
     buttons = []
     if ready_to_complete:
@@ -210,6 +211,15 @@ def workout_current_mkp(
                     )
                 ]
             )
+        if show_environment_change:
+            buttons.append(
+                [
+                    types.InlineKeyboardButton(
+                        text="🔄 Сменить место на сегодня",
+                        callback_data="workout:environment:choose:session",
+                    )
+                ]
+            )
     buttons.append(
         [
             types.InlineKeyboardButton(
@@ -234,7 +244,12 @@ def workout_technique_mkp():
     ])
 
 
-def workout_format_mkp(state, *, show_replacements: bool = False):
+def workout_format_mkp(
+    state,
+    *,
+    show_replacements: bool = False,
+    show_environment_change: bool = False,
+):
     """Render only durable format actions; callback data contains no user data."""
     buttons = []
     if state.started_at is None:
@@ -251,6 +266,11 @@ def workout_format_mkp(state, *, show_replacements: bool = False):
                         text=f"🔄 Заменить: {exercise.name}",
                         callback_data=f"workout:replace:{exercise.exercise_id}",
                     )])
+        if show_environment_change:
+            buttons.append([types.InlineKeyboardButton(
+                text="🔄 Сменить место на сегодня",
+                callback_data="workout:environment:choose:session",
+            )])
     elif state.finished_at is None:
         if state.workout_format.value == "emom":
             minute = state.current_minute or 1
@@ -278,6 +298,36 @@ def workout_format_mkp(state, *, show_replacements: bool = False):
         text="❌ Отменить тренировку", callback_data="workout:cancel"
     )])
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def workout_environment_start_mkp(training_environment: str):
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="▶️ Начать тренировку",
+            callback_data=f"workout:environment:start:{training_environment}",
+        )],
+        [types.InlineKeyboardButton(
+            text="🔄 Сменить место на сегодня",
+            callback_data="workout:environment:choose:start",
+        )],
+        [types.InlineKeyboardButton(text="⬅️ Главное меню", callback_data="start")],
+    ])
+
+
+def workout_environment_choices_mkp(context: str):
+    labels = (
+        ("Тренажёрный зал", "gym"),
+        ("Функциональный зал", "functional_gym"),
+        ("Улица", "street"),
+        ("Дом", "home"),
+    )
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text=label,
+            callback_data=f"workout:environment:set:{context}:{value}",
+        )]
+        for label, value in labels
+    ])
 
 
 def workout_replacement_mkp(options):

@@ -18,6 +18,8 @@ from handlers.markups import (
     workout_history_detail_mkp,
     workout_history_mkp,
     workout_input_mkp,
+    workout_environment_choices_mkp,
+    workout_environment_start_mkp,
     workout_format_mkp,
     workout_replacement_mkp,
     workout_technique_mkp,
@@ -27,13 +29,18 @@ from services.workout_execution import (
     CurrentWorkoutStep,
     WorkoutAccessDeniedError,
     WorkoutExecutionError,
+    WorkoutEnvironmentChangeBlockedError,
+    WorkoutEnvironmentError,
+    WorkoutEnvironmentIncompatibleError,
     WorkoutPlanRequiredError,
     WorkoutSessionView,
     cancel_workout,
+    change_workout_environment,
     complete_workout,
     get_active_workout,
     get_completed_workout_detail,
     get_current_step,
+    get_default_training_environment,
     get_or_start_workout,
     get_workout_exercise_technique,
     get_workout_history_page,
@@ -45,6 +52,7 @@ from services.workout_progression import (
     ProgressionStrategy,
 )
 from services.exercise_catalog import exercise_definition_by_code
+from services.onboarding import TRAINING_ENVIRONMENT_LABELS
 from services.workout_progression_history import (
     ProgressionHistoryError,
     get_progression_recommendation,
@@ -81,6 +89,7 @@ WORKOUT_FORMAT_PREFIX = "workout:format:"
 WORKOUT_REPLACEMENT_PREFIX = "workout:replace:"
 WORKOUT_TECHNIQUE_CALLBACK = "workout:technique"
 WORKOUT_TECHNIQUE_BACK_CALLBACK = "workout:technique:back"
+WORKOUT_ENVIRONMENT_PREFIX = "workout:environment:"
 
 MAX_WEIGHT_INPUT_LENGTH = 32
 MAX_REPS_INPUT_LENGTH = 9
@@ -134,9 +143,15 @@ def _format_step(
     step: CurrentWorkoutStep,
     recommendation: ProgressionRecommendation | None = None,
 ) -> str:
+    environment = TRAINING_ENVIRONMENT_LABELS.get(
+        workout.effective_training_environment,
+        "не указано",
+    )
+    environment_line = f"Сегодня тренируемся: {escape(environment)}\n"
     if step.ready_to_complete:
         return (
             f"🏋️ День {workout.day_number} — {escape(workout.day_title)}\n\n"
+            f"{environment_line}\n"
             "✅ Все упражнения и подходы выполнены."
         )
 
@@ -162,6 +177,7 @@ def _format_step(
                 )
         return (
             f"🏋️ День {workout.day_number} — {escape(workout.day_title)}\n\n"
+            f"{environment_line}\n"
             f"<b>{escape(block.title)}</b>\n"
             f"Формат: {_format_name(block.workout_format)}\n"
             f"{' · '.join(details)}\n\n{exercises}{status}"
@@ -181,6 +197,7 @@ def _format_step(
     )
     return (
         f"🏋️ День {workout.day_number} — {escape(workout.day_title)}\n\n"
+        f"{environment_line}\n"
         f"Упражнение {exercise.exercise_order} из {len(workout.exercises)}\n"
         f"<b>{escape(exercise.selected_exercise_name)}</b>\n\n"
         f"Группа мышц: {escape(exercise.selected_primary_muscle_group)}\n"
@@ -276,6 +293,20 @@ def format_progression_recommendation(
     return f"Прошлый раз: {previous} — {previous_reps}\n{today}"
 
 
+def _workout_environment_can_change(workout: WorkoutSessionView) -> bool:
+    return (
+        workout.status == "in_progress"
+        and not any(
+            exercise.set_results
+            for exercise in workout.exercises
+        )
+        and not any(
+            block.started_at is not None or block.finished_at is not None
+            for block in workout.blocks
+        )
+    )
+
+
 async def show_current_workout(
     message: types.Message,
     user_id: int,
@@ -317,6 +348,7 @@ async def show_current_workout(
                         and workout.adaptation_mode == "strict"
                     )
                 ),
+                show_environment_change=_workout_environment_can_change(workout),
             )
         else:
             markup = workout_current_mkp(
@@ -330,6 +362,10 @@ async def show_current_workout(
                         workout.plan_source == "user_defined"
                         and workout.adaptation_mode == "strict"
                     )
+                ),
+                show_environment_change=(
+                    not step.ready_to_complete
+                    and _workout_environment_can_change(workout)
                 ),
             )
 
@@ -379,6 +415,32 @@ async def workout_start_or_resume(
         await call.answer()
         return
 
+    if call.data == WORKOUT_START_CALLBACK:
+        try:
+            active = get_active_workout(user.id)
+            if active is not None:
+                await state.clear()
+                await show_current_workout(call.message, user.id, edit=True)
+                await call.answer()
+                return
+            environment = get_default_training_environment(user.id)
+        except (WorkoutEnvironmentError, SQLAlchemyError):
+            await state.clear()
+            await call.message.edit_text(
+                "Сначала укажите место тренировки в профиле.",
+                reply_markup=workout_menu_markup(user.id),
+            )
+        else:
+            await state.clear()
+            await call.message.edit_text(
+                "🏋️ Подготовка тренировки\n\n"
+                f"Сегодня тренируемся: "
+                f"{escape(TRAINING_ENVIRONMENT_LABELS[environment])}",
+                reply_markup=workout_environment_start_mkp(environment),
+            )
+        await call.answer()
+        return
+
     try:
         get_or_start_workout(user.id)
     except WorkoutAccessDeniedError:
@@ -403,6 +465,127 @@ async def workout_start_or_resume(
         await state.clear()
         await show_current_workout(call.message, user.id, edit=True)
     await call.answer()
+
+
+@dp.callback_query(F.data.startswith(WORKOUT_ENVIRONMENT_PREFIX))
+async def workout_environment_action(
+    call: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    user = User.get(tg_id=call.from_user.id)
+    parts = (call.data or "").split(":")
+    if user is None:
+        await call.answer("Отправьте /start, чтобы начать.", show_alert=True)
+        return
+
+    if parts == ["workout", "environment", "choose", "start"]:
+        await state.clear()
+        await call.message.edit_text(
+            "Где тренируемся сегодня?\n\n"
+            "Выбор действует только для этой тренировки.",
+            reply_markup=workout_environment_choices_mkp("start"),
+        )
+        await call.answer()
+        return
+    if parts == ["workout", "environment", "choose", "session"]:
+        try:
+            workout = get_active_workout(user.id)
+            if workout is None or not _workout_environment_can_change(workout):
+                raise WorkoutEnvironmentChangeBlockedError("Workout already started.")
+        except (WorkoutExecutionError, SQLAlchemyError):
+            await call.answer(
+                "Место можно сменить только до первого выполненного подхода.",
+                show_alert=True,
+            )
+            return
+        await state.clear()
+        await call.message.edit_text(
+            "Где тренируемся сегодня?\n\n"
+            "Изменится только текущая тренировка.",
+            reply_markup=workout_environment_choices_mkp("session"),
+        )
+        await call.answer()
+        return
+    if (
+        len(parts) == 5
+        and parts[:3] == ["workout", "environment", "set"]
+        and parts[3] in {"start", "session"}
+        and parts[4] in TRAINING_ENVIRONMENT_LABELS
+    ):
+        context, environment = parts[3], parts[4]
+        if context == "start":
+            await state.clear()
+            await call.message.edit_text(
+                "🏋️ Подготовка тренировки\n\n"
+                f"Сегодня тренируемся: "
+                f"{escape(TRAINING_ENVIRONMENT_LABELS[environment])}",
+                reply_markup=workout_environment_start_mkp(environment),
+            )
+            await call.answer()
+            return
+        try:
+            workout = get_active_workout(user.id)
+            if workout is None:
+                raise WorkoutExecutionError("No active workout.")
+            change_workout_environment(user.id, workout.id, environment)
+        except WorkoutEnvironmentChangeBlockedError:
+            await call.answer(
+                "Место можно сменить только до первого выполненного подхода.",
+                show_alert=True,
+            )
+            return
+        except WorkoutEnvironmentIncompatibleError:
+            await call.answer(
+                "Эту тренировку нельзя безопасно перенести в выбранное место.",
+                show_alert=True,
+            )
+            return
+        except (WorkoutExecutionError, SQLAlchemyError):
+            await call.answer("Не удалось сменить место тренировки.", show_alert=True)
+            return
+        await state.clear()
+        await show_current_workout(call.message, user.id, edit=True)
+        await call.answer("Место для этой тренировки изменено.")
+        return
+    if (
+        len(parts) == 4
+        and parts[:3] == ["workout", "environment", "start"]
+        and parts[3] in TRAINING_ENVIRONMENT_LABELS
+    ):
+        try:
+            get_or_start_workout(user.id, training_environment=parts[3])
+        except WorkoutAccessDeniedError:
+            await state.clear()
+            await call.message.edit_text(
+                "Для начала новой тренировки нужен активный доступ.",
+                reply_markup=workout_menu_markup(user.id),
+            )
+        except WorkoutPlanRequiredError:
+            await state.clear()
+            await call.message.edit_text(
+                "Сначала откройте «Мой план», чтобы подготовить тренировку.",
+                reply_markup=workout_menu_markup(user.id),
+            )
+        except WorkoutEnvironmentIncompatibleError:
+            await state.clear()
+            await call.message.edit_text(
+                "Текущий день нельзя безопасно адаптировать к выбранному месту. "
+                "Выберите другое место.",
+                reply_markup=workout_environment_choices_mkp("start"),
+            )
+        except (WorkoutExecutionError, SQLAlchemyError):
+            await state.clear()
+            await call.message.edit_text(
+                "Не удалось открыть тренировку. Попробуйте ещё раз.",
+                reply_markup=workout_menu_markup(user.id),
+            )
+        else:
+            await state.clear()
+            await show_current_workout(call.message, user.id, edit=True)
+        await call.answer()
+        return
+
+    await call.answer("Это действие устарело.", show_alert=True)
 
 
 @dp.callback_query(F.data == WORKOUT_RECORD_SET_CALLBACK)

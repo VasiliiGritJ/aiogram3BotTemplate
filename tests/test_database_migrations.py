@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), applied)
         self.assertTrue(
             {
                 "users",
@@ -67,9 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11), first_run)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(11, applied_count)
+        self.assertEqual(12, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -113,7 +113,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3, 4, 5, 6, 7, 8, 9, 10, 11), applied)
+        self.assertEqual((3, 4, 5, 6, 7, 8, 9, 10, 11, 12), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
@@ -428,7 +428,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM user_access ORDER BY user_id"
             ).fetchall()
 
-        self.assertEqual((8, 9, 10, 11), run_migrations(session.engine))
+        self.assertEqual((8, 9, 10, 11, 12), run_migrations(session.engine))
         self.assertEqual((), run_migrations(session.engine, target_version=9))
 
         with session.engine.connect() as connection:
@@ -559,8 +559,8 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "VALUES (1, 1, 1, 'Legacy', 'in_progress', '2026-08-13')"
             )
 
-        self.assertEqual((11,), run_migrations(session.engine))
-        self.assertEqual((), run_migrations(session.engine))
+        self.assertEqual((11,), run_migrations(session.engine, target_version=11))
+        self.assertEqual((), run_migrations(session.engine, target_version=11))
         with session.engine.connect() as connection:
             plan = connection.exec_driver_sql(
                 "SELECT plan_source, adaptation_mode FROM user_workout_plans"
@@ -570,6 +570,45 @@ class DatabaseMigrationTests(unittest.TestCase):
             ).one()
         self.assertEqual(("generated", "adaptive"), tuple(plan))
         self.assertEqual(("generated", "adaptive"), tuple(workout))
+
+    def test_migration_twelve_snapshots_environment_without_backfilling_history(self) -> None:
+        session = self.make_session("stage-seven-session-environment.db")
+        run_migrations(session.engine, target_version=11)
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO users (id, tg_id, fullname, username, inviter_id) "
+                "VALUES (1, 9300, 'Environment User', 'environment', 0)"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO workout_sessions "
+                "(id, user_id, day_number, day_title, status, started_at) "
+                "VALUES (1, 1, 1, 'Legacy', 'in_progress', '2026-08-14')"
+            )
+
+        self.assertEqual((12,), run_migrations(session.engine))
+        self.assertEqual((), run_migrations(session.engine))
+        columns = {
+            column["name"]
+            for column in inspect(session.engine).get_columns("workout_sessions")
+        }
+        with session.engine.connect() as connection:
+            legacy_value = connection.exec_driver_sql(
+                "SELECT effective_training_environment FROM workout_sessions WHERE id = 1"
+            ).scalar_one()
+        self.assertIn("effective_training_environment", columns)
+        self.assertIsNone(legacy_value)
+
+        with self.assertRaises(IntegrityError):
+            with session.engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "UPDATE workout_sessions "
+                    "SET effective_training_environment = 'garage' WHERE id = 1"
+                )
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE workout_sessions SET effective_training_environment = 'home' "
+                "WHERE id = 1"
+            )
 
     def test_fitness_profile_and_access_schema(self) -> None:
         session = self.make_session()
@@ -738,7 +777,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

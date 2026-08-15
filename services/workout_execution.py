@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from db.models import (
     Exercise,
+    FitnessProfile,
     UserAccess,
     UserWorkoutPlan,
     UserWorkoutPlanDay,
@@ -29,7 +30,14 @@ from services.access import (
     evaluate_access,
     utc_now,
 )
-from services.exercise_catalog import ExerciseTechnique, exercise_definition_by_code
+from services.exercise_catalog import (
+    EXERCISE_DEFINITIONS,
+    EXPERIENCE_LEVELS,
+    TRAINING_ENVIRONMENTS,
+    ExerciseDefinition,
+    ExerciseTechnique,
+    exercise_definition_by_code,
+)
 
 
 class WorkoutExecutionError(RuntimeError):
@@ -62,6 +70,18 @@ class WorkoutStepError(WorkoutExecutionError):
 
 class WorkoutResultConflictError(WorkoutExecutionError):
     """Raised when a duplicate set has conflicting actual values."""
+
+
+class WorkoutEnvironmentError(WorkoutExecutionError):
+    """Raised when a per-session training environment cannot be applied safely."""
+
+
+class WorkoutEnvironmentChangeBlockedError(WorkoutEnvironmentError):
+    """Raised after the first durable workout result has been recorded."""
+
+
+class WorkoutEnvironmentIncompatibleError(WorkoutEnvironmentError):
+    """Raised when the current plan cannot be safely used in an environment."""
 
 
 @dataclass(frozen=True)
@@ -139,6 +159,7 @@ class WorkoutSessionView:
     blocks: tuple[WorkoutSessionBlockView, ...] = ()
     plan_source: str = "generated"
     adaptation_mode: str = "adaptive"
+    effective_training_environment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -306,6 +327,7 @@ def _load_workout_view(
         blocks=tuple(_block_view(session, block) for block in blocks),
         plan_source=workout.plan_source,
         adaptation_mode=workout.adaptation_mode,
+        effective_training_environment=workout.effective_training_environment,
     )
 
 
@@ -413,6 +435,175 @@ def _selected_plan_day(
     return selected_day, exercises
 
 
+_DEFINITIONS_BY_CODE = {item.code: item for item in EXERCISE_DEFINITIONS}
+
+
+def _controlled_exercise_definition(
+    session: Session,
+    exercise_id: int | None,
+) -> tuple[ExerciseDefinition, Exercise] | None:
+    if exercise_id is None:
+        return None
+    exercise = session.get(Exercise, exercise_id)
+    if exercise is None:
+        return None
+    definition = _DEFINITIONS_BY_CODE.get(exercise.code)
+    return None if definition is None else (definition, exercise)
+
+
+def _environment_candidate(
+    session: Session,
+    exercise_id: int | None,
+    *,
+    training_environment: str,
+    experience_level: str,
+    used_exercise_ids: set[int],
+    strict: bool,
+) -> Exercise:
+    source = _controlled_exercise_definition(session, exercise_id)
+    if source is None:
+        source_model = None if exercise_id is None else session.get(Exercise, exercise_id)
+        if source_model is None:
+            raise WorkoutEnvironmentIncompatibleError(
+                "Exercise has no controlled environment metadata."
+            )
+        stored_environments = {
+            value.strip()
+            for value in (source_model.training_environments or "").split(",")
+            if value.strip()
+        }
+        stored_levels = {
+            value.strip()
+            for value in (source_model.experience_levels or "").split(",")
+            if value.strip()
+        }
+        if (
+            training_environment in stored_environments
+            and experience_level in stored_levels
+        ):
+            return source_model
+        raise WorkoutEnvironmentIncompatibleError(
+            "Exercise has no controlled alternative for this environment."
+        )
+    source_definition, source_model = source
+    if (
+        training_environment in source_definition.environments
+        and experience_level in source_definition.experience_levels
+    ):
+        return source_model
+    if strict:
+        raise WorkoutEnvironmentIncompatibleError(
+            "Strict user program is incompatible with this environment."
+        )
+
+    definitions = [
+        item
+        for item in EXERCISE_DEFINITIONS
+        if training_environment in item.environments
+        and experience_level in item.experience_levels
+        and item.primary_muscle_group == source_definition.primary_muscle_group
+        and item.movement_pattern == source_definition.movement_pattern
+        and item.progression_type in {"external_load_reps", "bodyweight_reps"}
+        and not (
+            training_environment == "home" and item.equipment != "bodyweight"
+        )
+    ]
+    if not definitions and source_definition.primary_muscle_group in {"biceps", "triceps"}:
+        substitute_muscle = (
+            "back" if source_definition.primary_muscle_group == "biceps" else "chest"
+        )
+        substitute_movements = (
+            {"horizontal_pull", "vertical_pull"}
+            if substitute_muscle == "back"
+            else {"horizontal_push", "vertical_push"}
+        )
+        definitions = [
+            item
+            for item in EXERCISE_DEFINITIONS
+            if training_environment in item.environments
+            and experience_level in item.experience_levels
+            and item.primary_muscle_group == substitute_muscle
+            and item.movement_pattern in substitute_movements
+            and item.progression_type in {"external_load_reps", "bodyweight_reps"}
+            and not (
+                training_environment == "home" and item.equipment != "bodyweight"
+            )
+        ]
+    if not definitions:
+        raise WorkoutEnvironmentIncompatibleError(
+            "No controlled alternative is available for this environment."
+        )
+    rows = session.scalars(
+        select(Exercise).where(Exercise.code.in_([item.code for item in definitions]))
+    ).all()
+    by_code = {row.code: row for row in rows}
+    candidates = [
+        (definition, by_code[definition.code])
+        for definition in definitions
+        if definition.code in by_code
+    ]
+    if not candidates:
+        raise WorkoutEnvironmentIncompatibleError(
+            "Controlled alternatives are not synchronized to the database."
+        )
+    candidates.sort(
+        key=lambda pair: (
+            0
+            if pair[0].equivalence_group == source_definition.equivalence_group
+            else 1,
+            0
+            if pair[0].progression_type == source_definition.progression_type
+            else 1,
+            1 if pair[1].id in used_exercise_ids else 0,
+            0
+            if pair[0].equipment == source_definition.equipment
+            else 1,
+            pair[0].code,
+        )
+    )
+    return candidates[0][1]
+
+
+def _selected_environment_exercises(
+    session: Session,
+    plan: UserWorkoutPlan,
+    plan_exercises: list[UserWorkoutPlanExercise],
+    training_environment: str,
+    experience_level: str,
+) -> dict[int, Exercise]:
+    strict = plan.plan_source == "user_defined" and plan.adaptation_mode == "strict"
+    selected: dict[int, Exercise] = {}
+    used_ids: set[int] = set()
+    for plan_exercise in plan_exercises:
+        exercise = _environment_candidate(
+            session,
+            plan_exercise.exercise_id,
+            training_environment=training_environment,
+            experience_level=experience_level,
+            used_exercise_ids=used_ids,
+            strict=strict,
+        )
+        selected[plan_exercise.id] = exercise
+        used_ids.add(exercise.id)
+    return selected
+
+
+def _environment_progression_strategy(
+    planned_strategy: str | None,
+    selected: Exercise,
+) -> str | None:
+    definition = _DEFINITIONS_BY_CODE.get(selected.code)
+    if definition is not None and definition.progression_type == "bodyweight_reps":
+        return "bodyweight_reps"
+    if (
+        definition is not None
+        and definition.progression_type == "external_load_reps"
+        and planned_strategy == "bodyweight_reps"
+    ):
+        return "hypertrophy_load_reps"
+    return planned_strategy
+
+
 def _create_workout_session(
     session: Session,
     user_id: int,
@@ -420,6 +611,8 @@ def _create_workout_session(
     plan_day: UserWorkoutPlanDay,
     plan_exercises: list[UserWorkoutPlanExercise],
     started_at: datetime,
+    effective_training_environment: str,
+    experience_level: str,
 ) -> WorkoutSession:
     workout = WorkoutSession(
         user_id=user_id,
@@ -433,6 +626,7 @@ def _create_workout_session(
         updated_at=started_at,
         plan_source=plan.plan_source,
         adaptation_mode=plan.adaptation_mode,
+        effective_training_environment=effective_training_environment,
     )
     session.add(workout)
     session.flush()
@@ -456,7 +650,16 @@ def _create_workout_session(
         session.add(snapshot)
         session.flush()
         block_map[plan_block.id] = snapshot
+    selected_by_plan_id = _selected_environment_exercises(
+        session,
+        plan,
+        plan_exercises,
+        effective_training_environment,
+        experience_level,
+    )
     for plan_exercise in plan_exercises:
+        selected = selected_by_plan_id[plan_exercise.id]
+        replaced = selected.id != plan_exercise.exercise_id
         session.add(
             WorkoutSessionExercise(
                 session_id=workout.id,
@@ -477,21 +680,143 @@ def _create_workout_session(
                 planned_progression_strategy=plan_exercise.progression_strategy,
                 planned_format_reps=plan_exercise.format_reps,
                 planned_station_order=plan_exercise.station_order,
-                selected_exercise_id=plan_exercise.exercise_id,
-                selected_exercise_name=plan_exercise.exercise_name,
-                selected_primary_muscle_group=plan_exercise.primary_muscle_group,
+                selected_exercise_id=selected.id,
+                selected_exercise_name=(
+                    selected.name if replaced else plan_exercise.exercise_name
+                ),
+                selected_primary_muscle_group=(
+                    selected.primary_muscle_group
+                    if replaced else plan_exercise.primary_muscle_group
+                ),
                 selected_target_sets=plan_exercise.sets,
                 selected_target_reps_min=plan_exercise.reps_min,
                 selected_target_reps_max=plan_exercise.reps_max,
                 selected_rest_seconds=plan_exercise.rest_seconds,
-                selected_hint=plan_exercise.hint,
-                selected_progression_strategy=plan_exercise.progression_strategy,
+                selected_hint=selected.hint if replaced else plan_exercise.hint,
+                selected_progression_strategy=_environment_progression_strategy(
+                    plan_exercise.progression_strategy,
+                    selected,
+                ),
                 selected_format_reps=plan_exercise.format_reps,
                 selected_station_order=plan_exercise.station_order,
             )
         )
     session.flush()
     return workout
+
+
+def get_default_training_environment(
+    user_id: int,
+    session_factory: Callable[[], Session] = dbSession,
+) -> str:
+    """Return the validated profile default without mutating profile or workout."""
+    with session_factory() as session:
+        profile = session.get(FitnessProfile, user_id)
+        if profile is None or profile.training_environment not in TRAINING_ENVIRONMENTS:
+            raise WorkoutEnvironmentIncompatibleError(
+                "A training environment is required in the profile."
+            )
+        return profile.training_environment
+
+
+def change_workout_environment(
+    user_id: int,
+    workout_id: int,
+    training_environment: str,
+    session_factory: Callable[[], Session] = dbSession,
+) -> WorkoutSessionView:
+    """Adapt only unstarted selected snapshots and persist one session override."""
+    if training_environment not in TRAINING_ENVIRONMENTS:
+        raise WorkoutEnvironmentIncompatibleError(
+            "Unsupported training environment."
+        )
+    with session_factory() as session:
+        with session.begin():
+            workout = _require_owned_workout(session, user_id, workout_id)
+            if workout.status != "in_progress":
+                raise WorkoutStateError("Workout session is not in progress.")
+            saved_result = session.scalar(
+                select(WorkoutSetResult.id)
+                .join(
+                    WorkoutSessionExercise,
+                    WorkoutSessionExercise.id == WorkoutSetResult.session_exercise_id,
+                )
+                .where(WorkoutSessionExercise.session_id == workout.id)
+                .limit(1)
+            )
+            started_block = session.scalar(
+                select(WorkoutSessionBlock.id)
+                .where(
+                    WorkoutSessionBlock.session_id == workout.id,
+                    (
+                        WorkoutSessionBlock.started_at.is_not(None)
+                        | WorkoutSessionBlock.finished_at.is_not(None)
+                    ),
+                )
+                .limit(1)
+            )
+            if saved_result is not None or started_block is not None:
+                raise WorkoutEnvironmentChangeBlockedError(
+                    "Training environment cannot change after work is recorded."
+                )
+
+            profile = session.get(FitnessProfile, user_id)
+            if profile is None or profile.experience_level not in EXPERIENCE_LEVELS:
+                raise WorkoutEnvironmentIncompatibleError(
+                    "A complete training profile is required."
+                )
+            snapshots = session.scalars(
+                select(WorkoutSessionExercise)
+                .where(WorkoutSessionExercise.session_id == workout.id)
+                .order_by(WorkoutSessionExercise.exercise_order)
+            ).all()
+            strict = (
+                workout.plan_source == "user_defined"
+                and workout.adaptation_mode == "strict"
+            )
+            replacements: list[tuple[WorkoutSessionExercise, Exercise]] = []
+            used_ids: set[int] = set()
+            for snapshot in snapshots:
+                replacement = _environment_candidate(
+                    session,
+                    snapshot.planned_exercise_id,
+                    training_environment=training_environment,
+                    experience_level=profile.experience_level,
+                    used_exercise_ids=used_ids,
+                    strict=strict,
+                )
+                replacements.append((snapshot, replacement))
+                used_ids.add(replacement.id)
+
+            for snapshot, replacement in replacements:
+                planned = replacement.id == snapshot.planned_exercise_id
+                snapshot.selected_exercise_id = replacement.id
+                snapshot.selected_exercise_name = (
+                    snapshot.planned_exercise_name if planned else replacement.name
+                )
+                snapshot.selected_primary_muscle_group = (
+                    snapshot.planned_primary_muscle_group
+                    if planned else replacement.primary_muscle_group
+                )
+                snapshot.selected_hint = (
+                    snapshot.planned_hint if planned else replacement.hint
+                )
+                snapshot.selected_target_sets = snapshot.planned_target_sets
+                snapshot.selected_target_reps_min = snapshot.planned_target_reps_min
+                snapshot.selected_target_reps_max = snapshot.planned_target_reps_max
+                snapshot.selected_rest_seconds = snapshot.planned_rest_seconds
+                snapshot.selected_progression_strategy = (
+                    _environment_progression_strategy(
+                        snapshot.planned_progression_strategy,
+                        replacement,
+                    )
+                )
+                snapshot.selected_format_reps = snapshot.planned_format_reps
+                snapshot.selected_station_order = snapshot.planned_station_order
+            workout.effective_training_environment = training_environment
+            workout.updated_at = utc_now()
+            session.flush()
+            return _load_workout_view(session, workout)
 
 
 def get_active_workout(
@@ -508,6 +833,8 @@ def get_or_start_workout(
     user_id: int,
     now: datetime | None = None,
     session_factory: Callable[[], Session] = dbSession,
+    *,
+    training_environment: str | None = None,
 ) -> WorkoutStartResult:
     """Resume one active workout or atomically start a new authorized workout."""
     started_at = _event_time(now)
@@ -532,6 +859,24 @@ def get_or_start_workout(
                         "Assign a workout plan before starting a workout."
                     )
                 plan_day, plan_exercises = _selected_plan_day(session, user_id, plan)
+                profile = session.get(FitnessProfile, user_id)
+                if (
+                    profile is None
+                    or profile.experience_level not in EXPERIENCE_LEVELS
+                    or profile.training_environment not in TRAINING_ENVIRONMENTS
+                ):
+                    raise WorkoutEnvironmentIncompatibleError(
+                        "A complete training profile is required."
+                    )
+                effective_environment = (
+                    profile.training_environment
+                    if training_environment is None
+                    else training_environment
+                )
+                if effective_environment not in TRAINING_ENVIRONMENTS:
+                    raise WorkoutEnvironmentIncompatibleError(
+                        "Unsupported training environment."
+                    )
 
                 access = session.get(UserAccess, user_id)
                 decision = evaluate_access(access, started_at)
@@ -555,6 +900,8 @@ def get_or_start_workout(
                     plan_day,
                     plan_exercises,
                     started_at,
+                    effective_environment,
+                    profile.experience_level,
                 )
                 return WorkoutStartResult(
                     workout=_load_workout_view(session, workout),

@@ -811,6 +811,19 @@ def _add_user_program_metadata(connection: Connection) -> None:
             "DEFAULT 'adaptive' CHECK (adaptation_mode IN "
             "('strict', 'replacements', 'adaptive'))"
         )
+
+
+def _add_effective_training_environment(connection: Connection) -> None:
+    """Persist the environment selected for one workout without inventing legacy data."""
+    connection.exec_driver_sql(
+        "ALTER TABLE workout_sessions "
+        "ADD COLUMN effective_training_environment TEXT "
+        "CHECK (effective_training_environment IS NULL OR "
+        "effective_training_environment IN "
+        "('gym', 'functional_gym', 'street', 'home'))"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -823,6 +836,11 @@ MIGRATIONS = (
     Migration(9, "workout_progression_strategies", _add_progression_strategies),
     Migration(10, "workout_formats", _add_workout_formats),
     Migration(11, "user_program_metadata", _add_user_program_metadata),
+    Migration(
+        12,
+        "workout_session_effective_training_environment",
+        _add_effective_training_environment,
+    ),
 )
 
 

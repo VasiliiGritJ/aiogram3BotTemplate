@@ -23,10 +23,13 @@ from services.access import AccessStatus, get_access_decision
 from services.workout_execution import (
     WorkoutAccessDeniedError,
     WorkoutExecutionError,
+    WorkoutEnvironmentChangeBlockedError,
+    WorkoutEnvironmentIncompatibleError,
     WorkoutResultConflictError,
     WorkoutStateError,
     WorkoutStepError,
     cancel_workout,
+    change_workout_environment,
     complete_workout,
     get_active_workout,
     get_completed_workout_detail,
@@ -80,6 +83,7 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
                     weight_kg=80.0,
                     goal="muscle_gain",
                     experience_level="beginner",
+                    training_environment="gym",
                     workouts_per_week=3,
                     session_duration_minutes=60,
                     limitations="Бывший дискомфорт в колене",
@@ -276,6 +280,85 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
                 1,
                 session.scalar(select(func.count(UserWorkoutPlan.id))),
             )
+
+    def test_session_environment_override_persists_without_changing_profile_default(self) -> None:
+        activated = activate_generated_plan_for_profile(
+            self.user_id,
+            self.database,
+        )
+        started = get_or_start_workout(
+            self.user_id,
+            BASE_TIME,
+            self.database,
+            training_environment="home",
+        )
+        resumed = get_active_workout(self.user_id, self.database)
+
+        self.assertEqual(activated.plan.id, started.workout.source_plan_id)
+        self.assertEqual("home", started.workout.effective_training_environment)
+        self.assertEqual("home", resumed.effective_training_environment)
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+            selected_ids = [item.selected_exercise_id for item in resumed.exercises]
+            selected = session.scalars(
+                select(Exercise).where(Exercise.id.in_(selected_ids))
+            ).all()
+        self.assertEqual("gym", profile.training_environment)
+        self.assertTrue(all(
+            "home" in exercise.training_environments.split(",")
+            for exercise in selected
+        ))
+
+        cancel_workout(
+            self.user_id,
+            started.workout.id,
+            BASE_TIME + timedelta(minutes=1),
+            self.database,
+        )
+        next_workout = get_or_start_workout(
+            self.user_id,
+            BASE_TIME + timedelta(minutes=2),
+            self.database,
+        )
+        self.assertEqual("gym", next_workout.workout.effective_training_environment)
+
+    def test_environment_change_is_blocked_after_first_recorded_set(self) -> None:
+        started = get_or_start_workout(self.user_id, BASE_TIME, self.database)
+        step = get_current_step(self.user_id, started.workout.id, self.database)
+        record_set_result(
+            self.user_id,
+            started.workout.id,
+            step.exercise.id,
+            step.set_number,
+            10,
+            10,
+            BASE_TIME,
+            self.database,
+        )
+
+        with self.assertRaises(WorkoutEnvironmentChangeBlockedError):
+            change_workout_environment(
+                self.user_id,
+                started.workout.id,
+                "home",
+                self.database,
+            )
+
+    def test_strict_user_program_refuses_incompatible_environment(self) -> None:
+        with self.database() as session:
+            plan = session.get(UserWorkoutPlan, self.plan_id)
+            plan.plan_source = "user_defined"
+            plan.adaptation_mode = "strict"
+            session.commit()
+
+        with self.assertRaises(WorkoutEnvironmentIncompatibleError):
+            get_or_start_workout(
+                self.user_id,
+                BASE_TIME,
+                self.database,
+                training_environment="home",
+            )
+        self.assertIsNone(get_active_workout(self.user_id, self.database))
 
     def test_technique_requires_owned_controlled_snapshot(self) -> None:
         with self.database() as session:

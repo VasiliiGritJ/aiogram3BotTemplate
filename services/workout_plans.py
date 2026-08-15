@@ -31,7 +31,7 @@ from services.exercise_catalog import (
 from services.workout_progression import ProgressionStrategy
 
 
-CATALOG_VERSION = 4
+CATALOG_VERSION = 5
 DEFAULT_GOAL = "muscle_gain"
 DEFAULT_EXPERIENCE = "beginner"
 DEFAULT_EQUIPMENT = "gym"
@@ -504,30 +504,116 @@ def _day_slots(goal: str, workouts_per_week: int, day_number: int) -> tuple[str,
     return (push, pull, legs, push, pull, legs)[day_number - 1]
 
 
+def _weekly_day_slots(
+    profile: NormalizedProfile,
+    day_number: int,
+) -> tuple[str, ...]:
+    """Return a deterministic whole-week hypertrophy layout.
+
+    ``movement:muscle`` requests keep the taxonomy as the source of truth while
+    making weekly coverage measurable.  The first three positions remain useful
+    for a 30-minute session; longer sessions add balanced accessories.
+    """
+    if profile.goal != "muscle_gain":
+        return _day_slots(profile.goal, profile.workouts_per_week, day_number)
+
+    if profile.workouts_per_week == 2:
+        days = (
+            (
+                "squat:quads", "horizontal_push:chest", "horizontal_pull:back",
+                "hinge:glutes", "isolation:biceps", "core:core",
+            ),
+            (
+                "hinge:hamstrings", "vertical_push:shoulders", "vertical_pull:back",
+                "isolation:triceps", "squat:quads", "horizontal_push:chest",
+            ),
+        )
+        return days[day_number - 1]
+
+    days = (
+        (
+            "squat:quads", "horizontal_push:chest", "horizontal_pull:back",
+            "hinge:glutes", "isolation:biceps", "isolation:calves",
+        ),
+        (
+            "hinge:hamstrings", "vertical_push:shoulders", "isolation:biceps",
+            "squat:quads", "horizontal_push:chest", "vertical_pull:back",
+        ),
+        (
+            "vertical_pull:back", "isolation:triceps", "core:core",
+            "squat:quads", "horizontal_push:chest", "hinge:glutes",
+        ),
+        (
+            "squat:quads", "horizontal_push:chest", "horizontal_pull:back",
+            "core:core", "hinge:hamstrings", "vertical_push:shoulders",
+        ),
+        (
+            "hinge:hamstrings", "vertical_push:shoulders", "vertical_pull:back",
+            "isolation:biceps", "squat:quads", "horizontal_push:chest",
+        ),
+        (
+            "squat:quads", "horizontal_push:chest", "horizontal_pull:back",
+            "isolation:triceps", "hinge:glutes", "isolation:calves",
+        ),
+    )
+    return days[day_number - 1]
+
+
+def _slot_parts(slot: str) -> tuple[str, str | None]:
+    movement, separator, muscle = slot.partition(":")
+    return movement, muscle if separator else None
+
+
 def _exercise_priority(
     definition: ExerciseDefinition,
     profile: NormalizedProfile,
     slot: str,
+    *,
+    used_today: bool = False,
+    used_this_week: bool = False,
 ) -> tuple[int, int, str]:
     """Sort candidates by product policy, then stable catalog code."""
+    movement, _ = _slot_parts(slot)
     equipment = definition.equipment
     score = 0
     if profile.training_environment == "home" and equipment != "bodyweight":
         return (99, 99, definition.code)
     if profile.experience_level == "beginner":
-        score += 0 if equipment in {"machine", "cable", "bodyweight"} else 3
-        if equipment == "barbell" and slot in {"squat", "hinge"}:
+        if profile.training_environment == "gym":
+            score += {
+                "machine": 0,
+                "cable": 0,
+                "smith": 2,
+                "dumbbell": 5,
+                "bodyweight": 6,
+                "pullup_dip_station": 6,
+                "functional_equipment": 7,
+                "barbell": 20,
+            }[equipment]
+        else:
+            score += 0 if equipment in {"machine", "cable", "bodyweight"} else 3
+        if equipment == "barbell" and movement in {"squat", "hinge"}:
             score += 10
+        if (
+            profile.training_environment == "gym"
+            and movement == "squat"
+            and definition.code == "bodyweight_squat"
+        ):
+            score += 20
     elif profile.experience_level == "advanced":
         score += 0 if equipment in {"barbell", "dumbbell", "bodyweight"} else 2
     else:
         score += 0 if equipment in {"dumbbell", "barbell", "cable", "bodyweight"} else 1
-    if profile.goal == "strength" and slot in {
+    if profile.goal == "strength" and movement in {
         "squat", "hinge", "horizontal_push",
     }:
         score += 0 if equipment == "barbell" and profile.experience_level != "beginner" else 2
     if definition.movement_pattern == "locomotion_conditioning":
         score += 8
+    if used_this_week:
+        score += 4
+    if used_today:
+        score += 100
     return (score, 0 if definition.primary_muscle_group not in {"biceps", "triceps"} else 1, definition.code)
 
 
@@ -535,50 +621,47 @@ def _choose_exercise(
     profile: NormalizedProfile,
     slot: str,
     used_codes: set[str],
+    weekly_used_codes: set[str] | None = None,
 ) -> ExerciseDefinition:
+    movement, primary_muscle = _slot_parts(slot)
+    weekly_used_codes = weekly_used_codes or set()
+
+    def compatible(definition: ExerciseDefinition, requested_movement: str) -> bool:
+        return (
+            profile.training_environment in definition.environments
+            and profile.experience_level in definition.experience_levels
+            and definition.movement_pattern == requested_movement
+            and (
+                primary_muscle is None
+                or definition.primary_muscle_group == primary_muscle
+            )
+            and definition.progression_type
+            in {"external_load_reps", "bodyweight_reps"}
+            and not (
+                profile.training_environment == "home"
+                and definition.equipment != "bodyweight"
+            )
+        )
+
     candidates = [
         definition
         for definition in EXERCISE_DEFINITIONS
-        if profile.training_environment in definition.environments
-        and profile.experience_level in definition.experience_levels
-        and definition.movement_pattern == slot
+        if compatible(definition, movement)
         and definition.code not in used_codes
-        and definition.progression_type
-        in {"external_load_reps", "bodyweight_reps"}
-        and not (
-            profile.training_environment == "home"
-            and definition.equipment != "bodyweight"
-        )
     ]
-    if not candidates and slot == "vertical_pull":
+    if not candidates and movement == "vertical_pull":
         candidates = [
             definition
             for definition in EXERCISE_DEFINITIONS
-            if profile.training_environment in definition.environments
-            and profile.experience_level in definition.experience_levels
-            and definition.movement_pattern == "horizontal_pull"
+            if compatible(definition, "horizontal_pull")
             and definition.code not in used_codes
-            and definition.progression_type
-            in {"external_load_reps", "bodyweight_reps"}
-            and not (
-                profile.training_environment == "home"
-                and definition.equipment != "bodyweight"
-            )
         ]
-    if not candidates and slot == "vertical_push":
+    if not candidates and movement == "vertical_push":
         candidates = [
             definition
             for definition in EXERCISE_DEFINITIONS
-            if profile.training_environment in definition.environments
-            and profile.experience_level in definition.experience_levels
-            and definition.movement_pattern == "horizontal_push"
+            if compatible(definition, "horizontal_push")
             and definition.code not in used_codes
-            and definition.progression_type
-            in {"external_load_reps", "bodyweight_reps"}
-            and not (
-                profile.training_environment == "home"
-                and definition.equipment != "bodyweight"
-            )
         ]
     if not candidates:
         candidates = [
@@ -603,7 +686,16 @@ def _choose_exercise(
         raise WorkoutCatalogError(
             f"No compatible exercise for {profile.training_environment}/{slot}"
         )
-    return min(candidates, key=lambda definition: _exercise_priority(definition, profile, slot))
+    return min(
+        candidates,
+        key=lambda definition: _exercise_priority(
+            definition,
+            profile,
+            slot,
+            used_today=definition.code in used_codes,
+            used_this_week=definition.code in weekly_used_codes,
+        ),
+    )
 
 
 def _prescription(
@@ -724,14 +816,21 @@ def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
     """Build a deterministic, taxonomy-filtered prescription for one profile."""
     days: list[GeneratedDayDefinition] = []
     budget = DURATION_EXERCISE_BUDGETS[profile.session_duration_minutes]
+    weekly_used_codes: set[str] = set()
     for day_number in range(1, profile.workouts_per_week + 1):
         used_codes: set[str] = set()
         exercises: list[GeneratedExerciseDefinition] = []
-        for slot in _day_slots(profile.goal, profile.workouts_per_week, day_number):
+        for slot in _weekly_day_slots(profile, day_number):
             if len(exercises) >= budget:
                 break
-            definition = _choose_exercise(profile, slot, used_codes)
+            definition = _choose_exercise(
+                profile,
+                slot,
+                used_codes,
+                weekly_used_codes,
+            )
             used_codes.add(definition.code)
+            weekly_used_codes.add(definition.code)
             sets, reps_min, reps_max, rest_seconds = _prescription(
                 profile, definition, len(exercises)
             )

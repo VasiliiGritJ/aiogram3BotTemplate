@@ -50,6 +50,7 @@ class ExerciseCatalogQualityTests(unittest.TestCase):
 
         self.assertGreaterEqual(len(EXERCISE_DEFINITIONS), 100)
         self.assertLessEqual(len(EXERCISE_DEFINITIONS), 120)
+        self.assertEqual(113, len(EXERCISE_DEFINITIONS))
         self.assertEqual(len(codes), len(set(codes)))
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(tuple(EXPECTED_LEGACY_IDS), LEGACY_EXERCISE_CODES)
@@ -59,6 +60,8 @@ class ExerciseCatalogQualityTests(unittest.TestCase):
             with self.subTest(code=definition.code):
                 validate_exercise_definition(definition)
                 self.assertTrue(definition.name.strip())
+                self.assertNotIn("_", definition.name)
+                self.assertNotEqual(definition.code.casefold(), definition.name.casefold())
                 self.assertTrue(definition.hint.strip())
                 self.assertTrue(definition.technique.start_position.strip())
                 self.assertTrue(definition.technique.action.strip())
