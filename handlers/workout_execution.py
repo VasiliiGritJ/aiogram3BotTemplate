@@ -20,6 +20,7 @@ from handlers.markups import (
     workout_input_mkp,
     workout_environment_choices_mkp,
     workout_environment_start_mkp,
+    workout_preview_mkp,
     workout_format_mkp,
     workout_replacement_mkp,
     workout_technique_mkp,
@@ -90,6 +91,8 @@ WORKOUT_REPLACEMENT_PREFIX = "workout:replace:"
 WORKOUT_TECHNIQUE_CALLBACK = "workout:technique"
 WORKOUT_TECHNIQUE_BACK_CALLBACK = "workout:technique:back"
 WORKOUT_ENVIRONMENT_PREFIX = "workout:environment:"
+WORKOUT_PREVIEW_START_CALLBACK = "workout:preview:start"
+WORKOUT_PREVIEW_BACK_CALLBACK = "workout:preview:back"
 
 MAX_WEIGHT_INPUT_LENGTH = 32
 MAX_REPS_INPUT_LENGTH = 9
@@ -307,6 +310,82 @@ def _workout_environment_can_change(workout: WorkoutSessionView) -> bool:
     )
 
 
+def _rep_range(reps_min: int, reps_max: int) -> str:
+    if reps_min == reps_max:
+        return str(reps_min)
+    return f"{reps_min}–{reps_max}"
+
+
+def _format_block_prescription(block) -> str:
+    details = [f"Формат: {_format_name(block.workout_format)}"]
+    if block.duration_seconds:
+        details.append(f"Длительность: {block.duration_seconds // 60} мин")
+    if block.target_rounds:
+        details.append(f"Цель: {block.target_rounds} круга")
+    return " · ".join(details)
+
+
+def format_workout_preview(workout: WorkoutSessionView) -> str:
+    """Render every persisted snapshot exercise before guided execution begins."""
+    environment = TRAINING_ENVIRONMENT_LABELS.get(
+        workout.effective_training_environment,
+        "не указано",
+    )
+    lines = [
+        f"🏋️ День {workout.day_number} — {escape(workout.day_title)}",
+        "",
+        f"Сегодня тренируемся: {escape(environment)}",
+        "",
+        "<b>План тренировки</b>",
+    ]
+    standard_exercises = [
+        item for item in workout.exercises if item.session_block_id is None
+    ]
+    for position, exercise in enumerate(standard_exercises, start=1):
+        lines.append(
+            f"{position}. {escape(exercise.selected_exercise_name)} — "
+            f"{exercise.selected_target_sets} × "
+            f"{_rep_range(exercise.selected_target_reps_min, exercise.selected_target_reps_max)}"
+        )
+
+    for block in workout.blocks:
+        lines.extend(("", f"<b>{escape(block.title)}</b>", _format_block_prescription(block)))
+        for position, exercise in enumerate(block.exercises, start=1):
+            repetitions = exercise.selected_format_reps or exercise.selected_target_reps_min
+            lines.append(
+                f"{position}. {escape(exercise.selected_exercise_name)} — {repetitions} повт."
+            )
+
+    return "\n".join(lines)
+
+
+async def show_workout_preview(
+    message: types.Message,
+    user_id: int,
+    *,
+    edit: bool,
+) -> bool:
+    """Show the durable, adapted snapshot without advancing execution."""
+    try:
+        workout = get_active_workout(user_id)
+        if workout is None or not _workout_environment_can_change(workout):
+            raise WorkoutExecutionError("Workout preview is no longer available.")
+    except (WorkoutExecutionError, SQLAlchemyError):
+        text = "Нет тренировки, которую можно подготовить. Выберите действие в меню."
+        markup = to_menu_mpk()
+        available = False
+    else:
+        text = format_workout_preview(workout)
+        markup = workout_preview_mkp()
+        available = True
+
+    if edit:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
+    return available
+
+
 async def show_current_workout(
     message: types.Message,
     user_id: int,
@@ -420,7 +499,10 @@ async def workout_start_or_resume(
             active = get_active_workout(user.id)
             if active is not None:
                 await state.clear()
-                await show_current_workout(call.message, user.id, edit=True)
+                if _workout_environment_can_change(active):
+                    await show_workout_preview(call.message, user.id, edit=True)
+                else:
+                    await show_current_workout(call.message, user.id, edit=True)
                 await call.answer()
                 return
             environment = get_default_training_environment(user.id)
@@ -463,7 +545,11 @@ async def workout_start_or_resume(
         )
     else:
         await state.clear()
-        await show_current_workout(call.message, user.id, edit=True)
+        active = get_active_workout(user.id)
+        if active is not None and _workout_environment_can_change(active):
+            await show_workout_preview(call.message, user.id, edit=True)
+        else:
+            await show_current_workout(call.message, user.id, edit=True)
     await call.answer()
 
 
@@ -544,7 +630,7 @@ async def workout_environment_action(
             await call.answer("Не удалось сменить место тренировки.", show_alert=True)
             return
         await state.clear()
-        await show_current_workout(call.message, user.id, edit=True)
+        await show_workout_preview(call.message, user.id, edit=True)
         await call.answer("Место для этой тренировки изменено.")
         return
     if (
@@ -581,11 +667,57 @@ async def workout_environment_action(
             )
         else:
             await state.clear()
-            await show_current_workout(call.message, user.id, edit=True)
+            await show_workout_preview(call.message, user.id, edit=True)
         await call.answer()
         return
 
     await call.answer("Это действие устарело.", show_alert=True)
+
+
+@dp.callback_query(F.data == WORKOUT_PREVIEW_START_CALLBACK)
+async def workout_preview_start(
+    call: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    user = User.get(tg_id=call.from_user.id)
+    if user is None:
+        await call.answer("Отправьте /start, чтобы начать.", show_alert=True)
+        return
+    try:
+        workout = get_active_workout(user.id)
+        if workout is None or not _workout_environment_can_change(workout):
+            raise WorkoutExecutionError("Workout preview is unavailable.")
+    except (WorkoutExecutionError, SQLAlchemyError):
+        await state.clear()
+        await call.answer("Этот preview уже устарел. Откройте тренировку снова.", show_alert=True)
+        return
+    await state.clear()
+    await show_current_workout(call.message, user.id, edit=True)
+    await call.answer()
+
+
+@dp.callback_query(F.data == WORKOUT_PREVIEW_BACK_CALLBACK)
+async def workout_preview_back(
+    call: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    user = User.get(tg_id=call.from_user.id)
+    if user is None:
+        await call.answer("Отправьте /start, чтобы начать.", show_alert=True)
+        return
+    try:
+        workout = get_active_workout(user.id)
+        if workout is None or not _workout_environment_can_change(workout):
+            raise WorkoutExecutionError("Workout preview is unavailable.")
+    except (WorkoutExecutionError, SQLAlchemyError):
+        await call.answer("Этот preview уже устарел. Откройте тренировку снова.", show_alert=True)
+        return
+    await state.clear()
+    await call.message.edit_text(
+        "Где тренируемся сегодня?\n\nИзменится только текущая тренировка.",
+        reply_markup=workout_environment_choices_mkp("session"),
+    )
+    await call.answer()
 
 
 @dp.callback_query(F.data == WORKOUT_RECORD_SET_CALLBACK)

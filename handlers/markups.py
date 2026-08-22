@@ -303,7 +303,7 @@ def workout_format_mkp(
 def workout_environment_start_mkp(training_environment: str):
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(
-            text="▶️ Начать тренировку",
+            text="👀 Показать тренировку",
             callback_data=f"workout:environment:start:{training_environment}",
         )],
         [types.InlineKeyboardButton(
@@ -311,6 +311,24 @@ def workout_environment_start_mkp(training_environment: str):
             callback_data="workout:environment:choose:start",
         )],
         [types.InlineKeyboardButton(text="⬅️ Главное меню", callback_data="start")],
+    ])
+
+
+def workout_preview_mkp():
+    """Actions available before a persisted workout starts execution."""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="▶️ Начать тренировку",
+            callback_data="workout:preview:start",
+        )],
+        [types.InlineKeyboardButton(
+            text="🔄 Сменить место",
+            callback_data="workout:environment:choose:session",
+        )],
+        [types.InlineKeyboardButton(
+            text="↩️ Назад",
+            callback_data="workout:preview:back",
+        )],
     ])
 
 

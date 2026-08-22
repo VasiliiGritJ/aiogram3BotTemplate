@@ -170,6 +170,8 @@ def _workout(
     day_number: int = 1,
     finished_at: datetime | None = None,
     exercises: tuple[WorkoutSessionExerciseView, ...] | None = None,
+    blocks: tuple[WorkoutSessionBlockView, ...] = (),
+    environment: str = "gym",
 ) -> WorkoutSessionView:
     started = datetime(2026, 8, 10, 12, 0)
     return WorkoutSessionView(
@@ -184,7 +186,8 @@ def _workout(
         finished_at=finished_at,
         updated_at=started,
         exercises=exercises or (_exercise(),),
-        effective_training_environment="gym",
+        blocks=blocks,
+        effective_training_environment=environment,
     )
 
 
@@ -432,7 +435,7 @@ class WorkoutExecutionUiTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     workout_ui.parse_workout_reps(value)
 
-    def test_start_renders_persisted_step_and_activates_only_via_service(self) -> None:
+    def test_start_renders_full_persisted_preview_before_execution(self) -> None:
         prepare = _Call(data="workout:start")
         state = _State()
         start = WorkoutStartResult(_workout(), created=True, trial_activated=True)
@@ -454,24 +457,29 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             "workout:environment:start:gym",
             self.callback_values(prepare.message.edits[-1][1]),
         )
+        self.assertIn("Показать тренировку", prepare.message.edits[-1][1].inline_keyboard[0][0].text)
 
         call = _Call(data="workout:environment:start:gym")
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
             patch.object(workout_ui, "get_or_start_workout", return_value=start) as service_start,
             patch.object(workout_ui, "get_active_workout", return_value=_workout()),
-            patch.object(workout_ui, "get_current_step", return_value=_step()),
-            patch.object(
-                workout_ui,
-                "get_progression_recommendation",
-                return_value=_recommendation(ProgressionReason.NO_HISTORY),
-            ),
         ):
             self.run_async(workout_ui.workout_environment_action(call, state))
 
         service_start.assert_called_once_with(7, training_environment="gym")
-        self.assertIn("Подход: 1 из 2", call.message.edits[-1][0])
+        self.assertIn("План тренировки", call.message.edits[-1][0])
+        self.assertIn("Жим — 2 × 8–12", call.message.edits[-1][0])
         self.assertIn("Сегодня тренируемся: Тренажёрный зал", call.message.edits[-1][0])
+        callbacks = self.callback_values(call.message.edits[-1][1])
+        self.assertEqual(
+            [
+                "workout:preview:start",
+                "workout:environment:choose:session",
+                "workout:preview:back",
+            ],
+            callbacks,
+        )
         self.assertGreaterEqual(state.clear_count, 1)
 
     def test_session_environment_change_uses_service_and_stale_change_is_blocked(self) -> None:
@@ -492,12 +500,12 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             patch.object(workout_ui, "get_active_workout", return_value=_workout()),
             patch.object(workout_ui, "change_workout_environment") as change,
             patch.object(
-                workout_ui, "show_current_workout", new_callable=AsyncMock
-            ) as current,
+                workout_ui, "show_workout_preview", new_callable=AsyncMock
+            ) as preview,
         ):
             self.run_async(workout_ui.workout_environment_action(selected, _State()))
         change.assert_called_once_with(7, 21, "home")
-        current.assert_awaited_once_with(selected.message, 7, edit=True)
+        preview.assert_awaited_once_with(selected.message, 7, edit=True)
 
         saved_exercise = replace(
             _exercise(),
@@ -514,6 +522,68 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         ):
             self.run_async(workout_ui.workout_environment_action(blocked, _State()))
         self.assertIn("только до первого", blocked.answers[-1][0][0])
+
+    def test_preview_contains_full_snapshot_and_start_uses_the_same_snapshot(self) -> None:
+        standard = (
+            _exercise(name="Первое упражнение", order=1),
+            _exercise(exercise_id=32, name="Второе упражнение", order=2),
+        )
+        block = _format_block("emom")
+        workout = _workout(
+            exercises=standard + block.exercises,
+            blocks=(block,),
+            environment="street",
+        )
+        preview = workout_ui.format_workout_preview(workout)
+
+        self.assertIn("Сегодня тренируемся: Улица", preview)
+        self.assertIn("Первое упражнение — 2 × 8–12", preview)
+        self.assertIn("Второе упражнение — 2 × 8–12", preview)
+        self.assertIn("Формат: EMOM", preview)
+        self.assertIn("Длительность: 6 мин", preview)
+        self.assertIn("Приседания — 8 повт.", preview)
+        preview_names = [
+            exercise.selected_exercise_name
+            for exercise in workout.exercises
+            if exercise.selected_exercise_name in preview
+        ]
+        self.assertEqual(
+            [
+                "Первое упражнение",
+                "Второе упражнение",
+                "Приседания",
+            ],
+            preview_names,
+        )
+
+        call = _Call(data="workout:preview:start")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_active_workout", return_value=workout),
+            patch.object(
+                workout_ui, "show_current_workout", new_callable=AsyncMock
+            ) as current,
+            patch.object(workout_ui, "record_set_result") as record,
+        ):
+            self.run_async(workout_ui.workout_preview_start(call, _State()))
+        current.assert_awaited_once_with(call.message, 7, edit=True)
+        record.assert_not_called()
+
+    def test_preview_allows_second_environment_change_and_preserves_profile_default(self) -> None:
+        call = _Call(data="workout:environment:set:session:street")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_active_workout", return_value=_workout()),
+            patch.object(workout_ui, "change_workout_environment") as change,
+            patch.object(
+                workout_ui, "show_workout_preview", new_callable=AsyncMock
+            ) as preview,
+            patch.object(workout_ui, "get_default_training_environment") as profile_default,
+        ):
+            self.run_async(workout_ui.workout_environment_action(call, _State()))
+        change.assert_called_once_with(7, 21, "street")
+        preview.assert_awaited_once_with(call.message, 7, edit=True)
+        profile_default.assert_not_called()
 
     def test_record_flow_keeps_only_weight_and_session_in_fsm(self) -> None:
         state = _State()

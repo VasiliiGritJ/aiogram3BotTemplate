@@ -739,7 +739,12 @@ def _progression_strategy(
     return ProgressionStrategy.HYPERTROPHY_LOAD_REPS
 
 
-def _functional_block(profile: NormalizedProfile, day_number: int) -> GeneratedBlockDefinition | None:
+def _functional_block(
+    profile: NormalizedProfile,
+    day_number: int,
+    *,
+    excluded_codes: set[str] | None = None,
+) -> GeneratedBlockDefinition | None:
     """Route a conservative conditioning block without replacing resistance work."""
     environment = profile.training_environment
     if environment not in {"functional_gym", "street"}:
@@ -760,6 +765,7 @@ def _functional_block(profile: NormalizedProfile, day_number: int) -> GeneratedB
         }[profile.goal]
         workout_format = formats[(day_number - 1) % len(formats)]
 
+    excluded_codes = excluded_codes or set()
     candidates = [
         item for item in EXERCISE_DEFINITIONS
         if environment in item.environments
@@ -774,7 +780,10 @@ def _functional_block(profile: NormalizedProfile, day_number: int) -> GeneratedB
             "squat", "hinge", "horizontal_push", "horizontal_pull", "vertical_pull",
             "core", "locomotion_conditioning",
         }
-        and item.code not in {"barbell_back_squat", "barbell_bench_press", "barbell_deadlift"}
+        and item.code not in {
+            "barbell_back_squat", "barbell_bench_press", "barbell_deadlift",
+        }
+        and item.code not in excluded_codes
     ]
     candidates.sort(key=lambda item: (
         1 if item.progression_type == "timed_conditioning" else 0,
@@ -852,7 +861,11 @@ def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
                 title=f"Тренировка {day_number}",
                 exercises=tuple(exercises),
                 blocks=tuple(
-                    block for block in (_functional_block(profile, day_number),)
+                    block for block in (_functional_block(
+                        profile,
+                        day_number,
+                        excluded_codes=used_codes,
+                    ),)
                     if block is not None
                 ),
             )
