@@ -121,6 +121,9 @@ class WorkoutSessionExerciseView:
     selected_format_reps: int | None = None
     planned_station_order: int | None = None
     selected_station_order: int | None = None
+    # Catalog code is read-only metadata used for deterministic UI preparation.
+    # The selected exercise ID and the stored snapshot remain the source of truth.
+    selected_exercise_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -250,6 +253,13 @@ def _exercise_view(
         .where(WorkoutSetResult.session_exercise_id == exercise.id)
         .order_by(WorkoutSetResult.set_number)
     ).all()
+    selected_code = (
+        None
+        if exercise.selected_exercise_id is None
+        else session.scalar(
+            select(Exercise.code).where(Exercise.id == exercise.selected_exercise_id)
+        )
+    )
     return WorkoutSessionExerciseView(
         id=exercise.id,
         exercise_order=exercise.exercise_order,
@@ -277,6 +287,7 @@ def _exercise_view(
         selected_format_reps=exercise.selected_format_reps,
         planned_station_order=exercise.planned_station_order,
         selected_station_order=exercise.selected_station_order,
+        selected_exercise_code=selected_code,
     )
 
 

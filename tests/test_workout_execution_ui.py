@@ -468,7 +468,7 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             self.run_async(workout_ui.workout_environment_action(call, state))
 
         service_start.assert_called_once_with(7, training_environment="gym")
-        self.assertIn("План тренировки", call.message.edits[-1][0])
+        self.assertIn("Основная тренировка", call.message.edits[-1][0])
         self.assertIn("Жим — 2 × 8–12", call.message.edits[-1][0])
         self.assertIn("Сегодня тренируемся: Тренажёрный зал", call.message.edits[-1][0])
         callbacks = self.callback_values(call.message.edits[-1][1])
@@ -568,6 +568,40 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             self.run_async(workout_ui.workout_preview_start(call, _State()))
         current.assert_awaited_once_with(call.message, 7, edit=True)
         record.assert_not_called()
+
+    def test_preview_and_current_step_separate_warmup_ramp_and_working_sets(self) -> None:
+        workout = _workout(exercises=(replace(
+            _exercise(name="Жим ногами"), selected_exercise_code="leg_press",
+        ),))
+        preview = workout_ui.format_workout_preview(workout)
+        step_text = workout_ui._format_step(workout, _step())
+
+        self.assertIn("🔥 <b>Разминка", preview)
+        self.assertIn("🏋️ <b>Основная тренировка</b>", preview)
+        self.assertIn("🧘 <b>Заминка — по желанию</b>", preview)
+        self.assertIn("Подводящие подходы", preview)
+        self.assertIn("Разминочные подходы", step_text)
+        self.assertIn("Рабочие подходы", step_text)
+
+    def test_optional_cooldown_keeps_completion_explicit_and_writes_no_results(self) -> None:
+        markup = workout_ui.workout_current_mkp(
+            ready_to_complete=True, show_cooldown=True
+        )
+        self.assertEqual(
+            ["workout:cooldown", "workout:complete", "workout:cancel"],
+            self.callback_values(markup),
+        )
+        call = _Call(data="workout:cooldown")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_active_workout", return_value=_workout()),
+            patch.object(workout_ui, "get_current_step", return_value=_step(ready=True)),
+            patch.object(workout_ui, "record_set_result") as record,
+        ):
+            self.run_async(workout_ui.workout_cooldown(call, _State()))
+        record.assert_not_called()
+        self.assertIn("не обязательна", call.message.edits[-1][0])
+        self.assertIn("workout:complete", self.callback_values(call.message.edits[-1][1]))
 
     def test_preview_allows_second_environment_change_and_preserves_profile_default(self) -> None:
         call = _Call(data="workout:environment:set:session:street")

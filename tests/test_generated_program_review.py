@@ -25,6 +25,23 @@ class GeneratedProgramReviewTests(unittest.TestCase):
         self.assertEqual(0, self.review.audit_metrics["environment_violations"])
         self.assertEqual(0, self.review.audit_metrics["fake_pull_claims"])
         self.assertEqual(0, self.review.audit_metrics["identical_cross_level_programs"])
+        self.assertEqual(0, self.review.audit_metrics["warmup_working_volume_leaks"])
+        self.assertEqual(0, self.review.audit_metrics["warmup_progression_leaks"])
+        self.assertEqual(
+            {30, 45, 60, 90},
+            set(self.review.audit_metrics["average_warmup_minutes_by_duration"]),
+        )
+        self.assertEqual(
+            {30, 45, 60, 90},
+            set(self.review.audit_metrics["duration_p10_p50_p90"]),
+        )
+        duration_metrics = self.review.audit_metrics["duration_p10_p50_p90"]
+        averages = self.review.audit_metrics[
+            "average_estimated_session_minutes_by_duration"
+        ]
+        self.assertLessEqual(duration_metrics[30]["p90"], 35)
+        self.assertGreaterEqual(averages[60], 45)
+        self.assertGreaterEqual(averages[90], averages[60] + 15)
         self.assertIsInstance(
             self.review.audit_metrics["profiles_with_exact_repeat_all_six_days"], int,
         )

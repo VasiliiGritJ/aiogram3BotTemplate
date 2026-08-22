@@ -14,6 +14,7 @@ from handlers.markups import (
     start_mkp,
     to_menu_mpk,
     workout_cancel_confirmation_mkp,
+    workout_cooldown_mkp,
     workout_current_mkp,
     workout_history_detail_mkp,
     workout_history_mkp,
@@ -64,6 +65,7 @@ from services.workout_replacements import (
     apply_replacement,
     get_replacement_options,
 )
+from services.workout_warmup import build_session_warmup
 from services.workout_formats import (
     WorkoutFormatError,
     finish_format_block,
@@ -93,6 +95,7 @@ WORKOUT_TECHNIQUE_BACK_CALLBACK = "workout:technique:back"
 WORKOUT_ENVIRONMENT_PREFIX = "workout:environment:"
 WORKOUT_PREVIEW_START_CALLBACK = "workout:preview:start"
 WORKOUT_PREVIEW_BACK_CALLBACK = "workout:preview:back"
+WORKOUT_COOLDOWN_CALLBACK = "workout:cooldown"
 
 MAX_WEIGHT_INPUT_LENGTH = 32
 MAX_REPS_INPUT_LENGTH = 9
@@ -155,7 +158,8 @@ def _format_step(
         return (
             f"🏋️ День {workout.day_number} — {escape(workout.day_title)}\n\n"
             f"{environment_line}\n"
-            "✅ Все упражнения и подходы выполнены."
+            "✅ Все упражнения и подходы выполнены.\n\n"
+            "Заминка — по желанию. Можно пропустить её и завершить тренировку."
         )
 
     if step.kind == "format_block" and step.format_block is not None:
@@ -188,6 +192,15 @@ def _format_step(
 
     exercise = step.exercise
     assert exercise is not None and step.set_number is not None
+    ramp = build_session_warmup(workout).ramp_for(exercise.id)
+    ramp_text = ""
+    if ramp is not None:
+        ramp_lines = "\n".join(f"• {escape(item)}" for item in ramp.instructions)
+        ramp_text = (
+            "\n\n🔥 <b>Разминочные подходы</b>\n"
+            f"{ramp_lines}\n"
+            "Они не считаются рабочими подходами."
+        )
     hint = (
         f"\n\n💡 {escape(exercise.selected_hint)}"
         if exercise.selected_hint
@@ -204,9 +217,11 @@ def _format_step(
         f"Упражнение {exercise.exercise_order} из {len(workout.exercises)}\n"
         f"<b>{escape(exercise.selected_exercise_name)}</b>\n\n"
         f"Группа мышц: {escape(exercise.selected_primary_muscle_group)}\n"
+        f"<b>🏋️ Рабочие подходы</b>\n"
         f"Подход: {step.set_number} из {exercise.selected_target_sets}\n"
         f"Цель: {exercise.selected_target_reps_min}–{exercise.selected_target_reps_max} повторений\n"
         f"Отдых: {exercise.selected_rest_seconds} сек"
+        f"{ramp_text}"
         f"{hint}"
         f"{progression_hint}"
     )
@@ -331,13 +346,28 @@ def format_workout_preview(workout: WorkoutSessionView) -> str:
         workout.effective_training_environment,
         "не указано",
     )
+    warmup = build_session_warmup(workout)
     lines = [
         f"🏋️ День {workout.day_number} — {escape(workout.day_title)}",
         "",
         f"Сегодня тренируемся: {escape(environment)}",
         "",
-        "<b>План тренировки</b>",
+        f"🔥 <b>Разминка · ~{warmup.estimated_minutes} мин</b>",
     ]
+    for position, action in enumerate(
+        warmup.general_preparation + warmup.movement_preparation,
+        start=1,
+    ):
+        lines.append(f"{position}. <b>{escape(action.title)}</b> — {escape(action.instruction)}")
+    if warmup.ramp_up_sets:
+        lines.append("Подводящие подходы:")
+        for ramp in warmup.ramp_up_sets:
+            lines.append(
+                f"• {escape(ramp.exercise_name)} — {ramp.set_count} "
+                f"лёгк. подх. ({escape(ramp.instructions[0])})"
+            )
+
+    lines.extend(("", "🏋️ <b>Основная тренировка</b>"))
     standard_exercises = [
         item for item in workout.exercises if item.session_block_id is None
     ]
@@ -355,7 +385,11 @@ def format_workout_preview(workout: WorkoutSessionView) -> str:
             lines.append(
                 f"{position}. {escape(exercise.selected_exercise_name)} — {repetitions} повт."
             )
-
+    lines.extend((
+        "",
+        "🧘 <b>Заминка — по желанию</b>",
+        "3–5 мин спокойного дыхания, ходьбы или комфортных движений без боли.",
+    ))
     return "\n".join(lines)
 
 
@@ -432,6 +466,7 @@ async def show_current_workout(
         else:
             markup = workout_current_mkp(
                 ready_to_complete=step.ready_to_complete,
+                show_cooldown=step.ready_to_complete,
                 show_replacement=(
                     not step.ready_to_complete
                     and step.exercise is not None
@@ -1024,6 +1059,33 @@ async def workout_complete(call: types.CallbackQuery, state: FSMContext) -> None
     else:
         await state.clear()
         await call.message.edit_text(_workout_summary(workout), reply_markup=to_menu_mpk())
+    await call.answer()
+
+
+@dp.callback_query(F.data == WORKOUT_COOLDOWN_CALLBACK)
+async def workout_cooldown(call: types.CallbackQuery, state: FSMContext) -> None:
+    """Offer optional calm recovery guidance without changing workout state."""
+    user = User.get(tg_id=call.from_user.id)
+    if user is None:
+        await call.answer("Отправьте /start, чтобы начать.", show_alert=True)
+        return
+    try:
+        active = get_active_workout(user.id)
+        if active is None or not get_current_step(user.id, active.id).ready_to_complete:
+            raise WorkoutExecutionError("Cooldown is only available after the workout.")
+    except (WorkoutExecutionError, SQLAlchemyError):
+        await state.clear()
+        await call.answer("Это действие устарело. Показываю актуальное состояние.", show_alert=True)
+        await show_current_workout(call.message, user.id, edit=True)
+        return
+    await state.clear()
+    await call.message.edit_text(
+        "🧘 <b>Заминка — по желанию</b>\n\n"
+        "3–5 минут спокойно походите, восстановите дыхание или сделайте "
+        "комфортные движения в доступной амплитуде.\n\n"
+        "Она не обязательна: можно завершить тренировку сразу.",
+        reply_markup=workout_cooldown_mkp(),
+    )
     await call.answer()
 
 

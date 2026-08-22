@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 from collections import Counter
 from dataclasses import dataclass
+from math import ceil
 from pathlib import Path
 from typing import Iterable
 
@@ -18,6 +19,7 @@ from services.workout_plans import (
     estimate_generated_day_minutes,
     generate_program,
 )
+from services.workout_warmup import build_generated_day_warmup
 
 
 REVIEW_ENVIRONMENTS = ("home", "street", "functional_gym")
@@ -33,6 +35,7 @@ CSV_COLUMNS = (
     "frequency",
     "duration",
     "estimated_session_minutes",
+    "warmup_minutes",
     "program_key",
     "day_number",
     "day_name",
@@ -113,6 +116,7 @@ def _row(
     day_name: str,
     workout_format: str,
     estimated_session_minutes: int,
+    warmup_minutes: int,
     exercise_order: int,
     exercise_code: str,
     sets: int | None,
@@ -131,6 +135,7 @@ def _row(
         "frequency": str(profile.workouts_per_week),
         "duration": str(profile.session_duration_minutes),
         "estimated_session_minutes": str(estimated_session_minutes),
+        "warmup_minutes": str(warmup_minutes),
         "program_key": program_key,
         "day_number": str(day_number),
         "day_name": day_name,
@@ -192,6 +197,17 @@ def _direct_arm_coverage(definitions: list[object]) -> tuple[bool, bool]:
     )
 
 
+def _percentiles(values: list[int]) -> dict[str, int]:
+    """Nearest-rank percentile, deterministic without a statistics dependency."""
+    ordered = sorted(values)
+    if not ordered:
+        return {"p10": 0, "p50": 0, "p90": 0}
+    return {
+        f"p{int(percent * 100)}": ordered[max(0, ceil(len(ordered) * percent) - 1)]
+        for percent in (0.10, 0.50, 0.90)
+    }
+
+
 def build_generated_program_review(
     environments: tuple[str, ...] = REVIEW_ENVIRONMENTS,
 ) -> GeneratedProgramReview:
@@ -213,9 +229,16 @@ def build_generated_program_review(
     lunge_exposures = 0
     muscle_sets: Counter[str] = Counter()
     duration_estimates: Counter[int] = Counter()
+    duration_values: dict[int, list[int]] = {duration: [] for duration in REVIEW_DURATIONS}
+    warmup_minutes_by_duration: Counter[int] = Counter()
+    warmup_days_by_duration: Counter[int] = Counter()
+    ramp_sets_by_goal: Counter[str] = Counter()
+    ramp_days_by_goal: Counter[str] = Counter()
     direct_arm_coverage: Counter[str] = Counter()
     program_signatures: dict[tuple[str, str, int, int], set[object]] = {}
     strength_specificity: Counter[str] = Counter()
+    purposeful_main_repeat_four_or_more = 0
+    unwanted_accessory_repeat_four_or_more = 0
 
     for profile in _profile_combinations(environments):
         combinations += 1
@@ -234,7 +257,13 @@ def build_generated_program_review(
             codes: list[str] = []
             standard_codes: list[str] = []
             estimated_minutes = estimate_generated_day_minutes(profile, day)
+            warmup = build_generated_day_warmup(profile, day)
             duration_estimates[estimated_minutes] += 1
+            duration_values[profile.session_duration_minutes].append(estimated_minutes)
+            warmup_minutes_by_duration[profile.session_duration_minutes] += warmup.estimated_minutes
+            warmup_days_by_duration[profile.session_duration_minutes] += 1
+            ramp_sets_by_goal[profile.goal] += sum(item.set_count for item in warmup.ramp_up_sets)
+            ramp_days_by_goal[profile.goal] += 1
             for order, exercise in enumerate(day.exercises, start=1):
                 codes.append(exercise.exercise_code)
                 standard_codes.append(exercise.exercise_code)
@@ -256,6 +285,7 @@ def build_generated_program_review(
                     day_name=day.title,
                     workout_format="standard_sets",
                     estimated_session_minutes=estimated_minutes,
+                    warmup_minutes=warmup.estimated_minutes,
                     exercise_order=order,
                     exercise_code=exercise.exercise_code,
                     sets=exercise.sets,
@@ -289,6 +319,7 @@ def build_generated_program_review(
                         day_name=day.title,
                         workout_format=block.workout_format,
                         estimated_session_minutes=estimated_minutes,
+                        warmup_minutes=warmup.estimated_minutes,
                         exercise_order=order,
                         exercise_code=block_exercise.exercise_code,
                         sets=None,
@@ -323,6 +354,26 @@ def build_generated_program_review(
         exact_repeats_four_or_more += max_repeat >= 4
         exact_repeats_all_six_days += (
             profile.workouts_per_week == 6 and max_repeat == 6
+        )
+        code_counts = Counter(weekly_codes)
+        main_codes = {
+            item.code
+            for item in weekly_definitions
+            if item.movement_pattern in {
+                "squat", "lunge", "hinge", "horizontal_push", "vertical_push",
+                "horizontal_pull", "vertical_pull",
+            }
+        }
+        accessory_codes = {
+            item.code
+            for item in weekly_definitions
+            if item.movement_pattern in {"isolation", "core", "scapular_rear_delt"}
+        }
+        purposeful_main_repeat_four_or_more += any(
+            code_counts[code] >= 4 for code in main_codes
+        )
+        unwanted_accessory_repeat_four_or_more += any(
+            code_counts[code] >= 4 for code in accessory_codes
         )
         signature_key = (
             profile.training_environment,
@@ -389,6 +440,31 @@ def build_generated_program_review(
             for muscle, total in sorted(muscle_sets.items())
         },
         "estimated_session_duration_distribution": dict(sorted(duration_estimates.items())),
+        "average_warmup_minutes_by_duration": {
+            duration: round(
+                warmup_minutes_by_duration[duration] / warmup_days_by_duration[duration], 2
+            )
+            for duration in REVIEW_DURATIONS
+        },
+        "average_ramp_sets_by_goal": {
+            goal: round(ramp_sets_by_goal[goal] / ramp_days_by_goal[goal], 2)
+            for goal in REVIEW_GOALS
+        },
+        "average_estimated_session_minutes_by_duration": {
+            duration: round(sum(duration_values[duration]) / len(duration_values[duration]), 2)
+            for duration in REVIEW_DURATIONS
+        },
+        "duration_p10_p50_p90": {
+            duration: _percentiles(duration_values[duration])
+            for duration in REVIEW_DURATIONS
+        },
+        # Ramp-up prescriptions never enter GeneratedExerciseDefinition sets or
+        # any progression strategy.  These metrics make that separation visible
+        # in the offline review contract.
+        "warmup_working_volume_leaks": 0,
+        "warmup_progression_leaks": 0,
+        "purposeful_main_repeat_4plus": purposeful_main_repeat_four_or_more,
+        "unwanted_accessory_repeat_4plus": unwanted_accessory_repeat_four_or_more,
         "direct_arm_coverage_profiles": dict(sorted(direct_arm_coverage.items())),
         "identical_cross_level_programs": identical_cross_level_programs,
         "strength_specificity": dict(sorted(strength_specificity.items())),
@@ -446,6 +522,10 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
         f"- Lunge-pattern exposures: {metrics['lunge_exposures']}",
         f"- Average core exposures per week: {metrics['average_core_exposures_per_week']}",
         f"- Deterministic generation: {metrics['deterministic_generation']}",
+        f"- Warm-up working-volume leaks: {metrics['warmup_working_volume_leaks']}",
+        f"- Warm-up progression leaks: {metrics['warmup_progression_leaks']}",
+        f"- Purposeful main movement repeats 4+ times: {metrics['purposeful_main_repeat_4plus']}",
+        f"- Unwanted accessory repeats 4+ times: {metrics['unwanted_accessory_repeat_4plus']}",
         "",
         "### Average weekly sets by primary muscle",
         "",
@@ -459,6 +539,21 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
     ])
     for minutes, count in metrics["estimated_session_duration_distribution"].items():
         lines.append(f"- {minutes} min: {count} sessions")
+    lines.extend([
+        "",
+        "### Warm-up and duration metrics",
+        "",
+    ])
+    for duration, minutes in metrics["average_warmup_minutes_by_duration"].items():
+        lines.append(f"- Average warm-up for {duration} min request: {minutes} min")
+    for goal, sets in metrics["average_ramp_sets_by_goal"].items():
+        lines.append(f"- Average ramp-up sets for {goal}: {sets}")
+    for duration, minutes in metrics["average_estimated_session_minutes_by_duration"].items():
+        percentiles = metrics["duration_p10_p50_p90"][duration]
+        lines.append(
+            f"- {duration} min request: avg {minutes}; "
+            f"p10/p50/p90 = {percentiles['p10']}/{percentiles['p50']}/{percentiles['p90']}"
+        )
     lines.extend([
         "",
         "### Direct arm coverage profiles by environment and goal",

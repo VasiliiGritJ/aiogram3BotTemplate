@@ -176,13 +176,23 @@ def workout_current_mkp(
     ready_to_complete: bool = False,
     show_replacement: bool = False,
     show_environment_change: bool = False,
+    show_cooldown: bool = False,
 ):
     buttons = []
     if ready_to_complete:
+        if show_cooldown:
+            buttons.append(
+                [
+                    types.InlineKeyboardButton(
+                        text="🧘 Заминка 5 мин",
+                        callback_data="workout:cooldown",
+                    )
+                ]
+            )
         buttons.append(
             [
                 types.InlineKeyboardButton(
-                    text="🏁 Завершить тренировку",
+                    text="✅ Завершить",
                     callback_data="workout:complete",
                 )
             ]
@@ -229,6 +239,20 @@ def workout_current_mkp(
         ]
     )
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def workout_cooldown_mkp():
+    """Optional recovery guidance never becomes a recorded workout result."""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="✅ Завершить",
+            callback_data="workout:complete",
+        )],
+        [types.InlineKeyboardButton(
+            text="❌ Отменить тренировку",
+            callback_data="workout:cancel",
+        )],
+    ])
 
 
 def workout_technique_mkp():

@@ -31,6 +31,7 @@ from services.exercise_catalog import (
     validate_exercise_definition,
 )
 from services.workout_progression import ProgressionStrategy
+from services.workout_warmup import build_generated_day_warmup
 
 
 CATALOG_VERSION = 6
@@ -54,6 +55,8 @@ LEGACY_TEMPLATE_EXPERIENCE = {"beginner", "some_experience"}
 SUPPORTED_ENVIRONMENTS = {"gym", "functional_gym", "street", "home"}
 SUPPORTED_FREQUENCIES = {2, 3, 4, 5, 6}
 SUPPORTED_DURATIONS = {30, 45, 60, 90}
+# Thirty minutes retain three complementary priority movements, but their
+# prescriptions are compact so required preparation is not squeezed out.
 DURATION_EXERCISE_BUDGETS = {30: 3, 45: 4, 60: 5, 90: 6}
 
 GOAL_NAMES = {
@@ -720,6 +723,47 @@ def _prescription(
     main = is_main
     bodyweight = definition.progression_type == "bodyweight_reps"
     duration = profile.session_duration_minutes
+    if duration == 30:
+        # Required warm-up is inside the requested time.  A short session
+        # therefore keeps its movement coverage but uses only priority volume.
+        if profile.goal == "strength":
+            if profile.training_environment in {"home", "street"}:
+                level = profile.experience_level
+                return (
+                    2,
+                    {"beginner": 6, "intermediate": 6, "advanced": 8}[level],
+                    {"beginner": 12, "intermediate": 14, "advanced": 15}[level],
+                    75 if main else 45,
+                )
+            if main and definition.movement_pattern in {"squat", "hinge", "horizontal_push"}:
+                reps = {
+                    "beginner": (5, 8), "intermediate": (4, 6), "advanced": (3, 5),
+                }[profile.experience_level]
+                return (2 if profile.experience_level == "beginner" else 3), reps[0], reps[1], 105
+            return (2, 8, 12, 45)
+        if profile.goal == "fat_loss":
+            level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
+            return (
+                2,
+                8 if main else 10 + level_bonus,
+                12 + level_bonus if main else 15 + level_bonus,
+                60 if main else 45,
+            )
+        if bodyweight:
+            level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
+            return (
+                2,
+                8 if main else 10 + level_bonus,
+                15 + level_bonus if main else 18 + level_bonus,
+                60 if main else 45,
+            )
+        level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
+        return (
+            2,
+            6 if main else 8 + level_bonus,
+            12 + level_bonus if main else 15 + level_bonus,
+            75 if main else 45,
+        )
     if profile.goal == "strength":
         if profile.training_environment in {"home", "street"}:
             level = profile.experience_level
@@ -988,8 +1032,13 @@ def estimate_generated_day_minutes(
     profile: NormalizedProfile,
     day: GeneratedDayDefinition,
 ) -> int:
-    """Conservative planning estimate: setup, work, rest, transitions and blocks."""
-    minutes = {30: 6, 45: 8, 60: 14, 90: 25}[profile.session_duration_minutes]
+    """Estimate required preparation and quality work without optional cooldown."""
+    warmup = build_generated_day_warmup(profile, day)
+    # Longer sessions deliberately reserve time for calm equipment changes,
+    # technique checks and the longer rests already prescribed for quality work.
+    # It is not extra exercise volume and optional cooldown is excluded.
+    quality_pacing_minutes = {30: 1, 45: 1, 60: 7, 90: 17}
+    minutes = float(warmup.estimated_minutes + quality_pacing_minutes[profile.session_duration_minutes])
     for position, exercise in enumerate(day.exercises):
         working_minutes = exercise.sets * (1.5 if position == 0 else 1.2)
         rest_minutes = max(0, exercise.sets - 1) * exercise.rest_seconds / 60
