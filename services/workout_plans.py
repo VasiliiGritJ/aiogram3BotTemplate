@@ -673,6 +673,11 @@ def _choose_exercise(
             and definition.progression_type
             in {"external_load_reps", "bodyweight_reps"}
             and not (
+                profile.goal == "strength"
+                and profile.training_environment in {"home", "street"}
+                and definition.progression_type != "bodyweight_reps"
+            )
+            and not (
                 profile.training_environment == "home"
                 and definition.equipment != "bodyweight"
             )
@@ -936,8 +941,8 @@ def _strength_blueprints(profile: NormalizedProfile) -> tuple[ProgramDayBlueprin
     if profile.training_environment in {"home", "street"}:
         relative = (
             ProgramDayBlueprint("Относительная сила A", ("squat:quads", "horizontal_push:chest", "vertical_pull:back", "lunge:quads", "core:core")),
-            ProgramDayBlueprint("Относительная сила B", ("hinge:glutes", "horizontal_push:chest", "horizontal_pull:back", "lunge:quads", "core:core")),
-            ProgramDayBlueprint("Относительная сила C", ("lunge:quads", "vertical_push:shoulders", "vertical_pull:back", "hinge:hamstrings", "core:core")),
+            ProgramDayBlueprint("Относительная сила B", ("hinge:glutes", "horizontal_push:chest", "horizontal_pull:back", "lunge:quads", "isolation:calves")),
+            ProgramDayBlueprint("Относительная сила C", ("squat:quads", "vertical_push:shoulders", "vertical_pull:back", "hinge:hamstrings", "scapular_rear_delt:shoulders")),
         )
         return tuple(relative[index % len(relative)] for index in range(profile.workouts_per_week))
 

@@ -80,6 +80,17 @@ class ProgramArchitectureTests(unittest.TestCase):
         ]
         self.assertTrue(accessory_codes)
         self.assertLess(max(accessory_codes.count(code) for code in accessory_codes), 6)
+        relative_strength = generate_program(profile(
+            goal="strength", environment="street", experience="advanced",
+            frequency=6, duration=90,
+        ))
+        self.assertLessEqual(
+            sum(
+                exercise_definition_by_code(item.exercise_code).primary_muscle_group == "core"
+                for day in relative_strength.days for item in day.exercises
+            ),
+            4,
+        )
 
     def test_home_does_not_claim_scapular_work_as_true_pull(self) -> None:
         generated = generate_program(profile(environment="home", frequency=3, duration=90))

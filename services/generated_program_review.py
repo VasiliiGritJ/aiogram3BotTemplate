@@ -225,20 +225,24 @@ def build_generated_program_review(
             failures.append(f"{program_key}: non-deterministic generation")
 
         weekly_definitions = []
+        standard_definitions = []
         weekly_codes: list[str] = []
         core_days = 0
         has_true_pull = False
         for day in program.days:
             days_count += 1
             codes: list[str] = []
+            standard_codes: list[str] = []
             estimated_minutes = estimate_generated_day_minutes(profile, day)
             duration_estimates[estimated_minutes] += 1
             for order, exercise in enumerate(day.exercises, start=1):
                 codes.append(exercise.exercise_code)
+                standard_codes.append(exercise.exercise_code)
                 weekly_codes.append(exercise.exercise_code)
                 definition = exercise_definition_by_code(exercise.exercise_code)
                 if definition is not None:
                     weekly_definitions.append(definition)
+                    standard_definitions.append(definition)
                     usage[profile.training_environment][definition.code] += 1
                     muscle_sets[definition.primary_muscle_group] += exercise.sets
                     has_true_pull = has_true_pull or definition.movement_pattern in {
@@ -296,12 +300,12 @@ def build_generated_program_review(
             _validate_day(profile, program_key, day.day_number, codes, failures, duplicate_warnings)
             if any(
                 exercise_definition_by_code(code).primary_muscle_group == "core"
-                for code in codes
+                for code in standard_codes
                 if exercise_definition_by_code(code) is not None
             ):
                 core_days += 1
 
-        core_count = sum(item.primary_muscle_group == "core" for item in weekly_definitions)
+        core_count = sum(item.primary_muscle_group == "core" for item in standard_definitions)
         core_exposures += core_count
         if core_count > 2:
             core_warnings.append(f"{program_key}: core appears {core_count} times")
