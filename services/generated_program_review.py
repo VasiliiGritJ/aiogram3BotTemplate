@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Iterable
 
 from services.exercise_catalog import exercise_definition_by_code
-from services.workout_plans import NormalizedProfile, generate_program
+from services.workout_plans import (
+    NormalizedProfile,
+    estimate_generated_day_minutes,
+    generate_program,
+)
 
 
 REVIEW_ENVIRONMENTS = ("home", "street", "functional_gym")
@@ -28,6 +32,7 @@ CSV_COLUMNS = (
     "experience",
     "frequency",
     "duration",
+    "estimated_session_minutes",
     "program_key",
     "day_number",
     "day_name",
@@ -56,6 +61,7 @@ class GeneratedProgramReview:
     core_frequency_warnings: tuple[str, ...]
     direct_arm_coverage_warnings: tuple[str, ...]
     top_exercises_by_environment: dict[str, tuple[tuple[str, int], ...]]
+    audit_metrics: dict[str, object]
 
 
 def _profile_key(profile: NormalizedProfile) -> str:
@@ -65,8 +71,10 @@ def _profile_key(profile: NormalizedProfile) -> str:
     )
 
 
-def _profile_combinations() -> Iterable[NormalizedProfile]:
-    for environment in REVIEW_ENVIRONMENTS:
+def _profile_combinations(
+    environments: tuple[str, ...] = REVIEW_ENVIRONMENTS,
+) -> Iterable[NormalizedProfile]:
+    for environment in environments:
         for goal in REVIEW_GOALS:
             for experience in REVIEW_EXPERIENCE:
                 for frequency in REVIEW_FREQUENCIES:
@@ -104,6 +112,7 @@ def _row(
     day_number: int,
     day_name: str,
     workout_format: str,
+    estimated_session_minutes: int,
     exercise_order: int,
     exercise_code: str,
     sets: int | None,
@@ -121,6 +130,7 @@ def _row(
         "experience": profile.experience_level,
         "frequency": str(profile.workouts_per_week),
         "duration": str(profile.session_duration_minutes),
+        "estimated_session_minutes": str(estimated_session_minutes),
         "program_key": program_key,
         "day_number": str(day_number),
         "day_name": day_name,
@@ -170,18 +180,40 @@ def _validate_day(
             failures.append(f"{program_key}/day-{day_number}: experience incompatible {code}")
 
 
-def build_generated_program_review() -> GeneratedProgramReview:
-    """Generate and validate all 540 specified profiles deterministically."""
+def _direct_arm_coverage(definitions: list[object]) -> tuple[bool, bool]:
+    """Return direct biceps/triceps coverage without treating pull work as arms."""
+    return (
+        any(getattr(item, "primary_muscle_group", None) == "biceps" for item in definitions),
+        any(getattr(item, "primary_muscle_group", None) == "triceps" for item in definitions),
+    )
+
+
+def build_generated_program_review(
+    environments: tuple[str, ...] = REVIEW_ENVIRONMENTS,
+) -> GeneratedProgramReview:
+    """Generate and validate a deterministic profile matrix without opening a DB."""
     rows: list[dict[str, str]] = []
     failures: list[str] = []
     duplicate_warnings: list[str] = []
     core_warnings: list[str] = []
     arm_warnings: list[str] = []
-    usage: dict[str, Counter[str]] = {environment: Counter() for environment in REVIEW_ENVIRONMENTS}
+    usage: dict[str, Counter[str]] = {environment: Counter() for environment in environments}
     combinations = 0
     days_count = 0
+    exact_repeats_four_or_more = 0
+    exact_repeats_all_days = 0
+    core_every_day_profiles = 0
+    core_exposures = 0
+    true_pull_profiles = 0
+    fake_pull_claims = 0
+    lunge_exposures = 0
+    muscle_sets: Counter[str] = Counter()
+    duration_estimates: Counter[int] = Counter()
+    direct_arm_coverage: Counter[str] = Counter()
+    program_signatures: dict[tuple[str, str, int, int], set[object]] = {}
+    strength_specificity: Counter[str] = Counter()
 
-    for profile in _profile_combinations():
+    for profile in _profile_combinations(environments):
         combinations += 1
         program_key = _profile_key(profile)
         program = generate_program(profile)
@@ -189,21 +221,33 @@ def build_generated_program_review() -> GeneratedProgramReview:
             failures.append(f"{program_key}: non-deterministic generation")
 
         weekly_definitions = []
+        weekly_codes: list[str] = []
+        core_days = 0
+        has_true_pull = False
         for day in program.days:
             days_count += 1
             codes: list[str] = []
+            estimated_minutes = estimate_generated_day_minutes(profile, day)
+            duration_estimates[estimated_minutes] += 1
             for order, exercise in enumerate(day.exercises, start=1):
                 codes.append(exercise.exercise_code)
+                weekly_codes.append(exercise.exercise_code)
                 definition = exercise_definition_by_code(exercise.exercise_code)
                 if definition is not None:
                     weekly_definitions.append(definition)
                     usage[profile.training_environment][definition.code] += 1
+                    muscle_sets[definition.primary_muscle_group] += exercise.sets
+                    has_true_pull = has_true_pull or definition.movement_pattern in {
+                        "horizontal_pull", "vertical_pull",
+                    }
+                    lunge_exposures += definition.movement_pattern == "lunge"
                 rows.append(_row(
                     profile,
                     program_key=program_key,
                     day_number=day.day_number,
                     day_name=day.title,
                     workout_format="standard_sets",
+                    estimated_session_minutes=estimated_minutes,
                     exercise_order=order,
                     exercise_code=exercise.exercise_code,
                     sets=exercise.sets,
@@ -221,16 +265,22 @@ def build_generated_program_review() -> GeneratedProgramReview:
                 for block_exercise in block.exercises:
                     order += 1
                     codes.append(block_exercise.exercise_code)
+                    weekly_codes.append(block_exercise.exercise_code)
                     definition = exercise_definition_by_code(block_exercise.exercise_code)
                     if definition is not None:
                         weekly_definitions.append(definition)
                         usage[profile.training_environment][definition.code] += 1
+                        has_true_pull = has_true_pull or definition.movement_pattern in {
+                            "horizontal_pull", "vertical_pull",
+                        }
+                        lunge_exposures += definition.movement_pattern == "lunge"
                     rows.append(_row(
                         profile,
                         program_key=program_key,
                         day_number=day.day_number,
                         day_name=day.title,
                         workout_format=block.workout_format,
+                        estimated_session_minutes=estimated_minutes,
                         exercise_order=order,
                         exercise_code=block_exercise.exercise_code,
                         sets=None,
@@ -240,10 +290,37 @@ def build_generated_program_review() -> GeneratedProgramReview:
                         progression_strategy="timed_conditioning",
                     ))
             _validate_day(profile, program_key, day.day_number, codes, failures, duplicate_warnings)
+            if any(
+                exercise_definition_by_code(code).primary_muscle_group == "core"
+                for code in codes
+                if exercise_definition_by_code(code) is not None
+            ):
+                core_days += 1
 
         core_count = sum(item.primary_muscle_group == "core" for item in weekly_definitions)
+        core_exposures += core_count
         if core_count > 2:
             core_warnings.append(f"{program_key}: core appears {core_count} times")
+        if core_days == len(program.days):
+            core_every_day_profiles += 1
+        if has_true_pull:
+            true_pull_profiles += 1
+        if any(
+            item.code in {"prone_y_raise", "prone_reverse_snow_angel"}
+            and item.movement_pattern in {"horizontal_pull", "vertical_pull"}
+            for item in weekly_definitions
+        ):
+            fake_pull_claims += 1
+        max_repeat = max(Counter(weekly_codes).values())
+        exact_repeats_four_or_more += max_repeat >= 4
+        exact_repeats_all_days += max_repeat == profile.workouts_per_week
+        signature_key = (
+            profile.training_environment,
+            profile.goal,
+            profile.workouts_per_week,
+            profile.session_duration_minutes,
+        )
+        program_signatures.setdefault(signature_key, set()).add(program.days)
         if (
             profile.goal == "muscle_gain"
             and profile.workouts_per_week >= 3
@@ -259,10 +336,53 @@ def build_generated_program_review() -> GeneratedProgramReview:
                 arm_warnings.append(
                     f"{program_key}: missing direct {', '.join(sorted(missing))}"
                 )
+        has_biceps, has_triceps = _direct_arm_coverage(weekly_definitions)
+        arm_prefix = f"{profile.training_environment}:{profile.goal}"
+        direct_arm_coverage[f"{arm_prefix}:biceps"] += has_biceps
+        direct_arm_coverage[f"{arm_prefix}:triceps"] += has_triceps
+        if profile.goal == "strength":
+            codes = set(weekly_codes)
+            if profile.training_environment in {"gym", "functional_gym"}:
+                strength_specificity["SBD profiles"] += {
+                    "barbell_back_squat", "barbell_bench_press", "barbell_deadlift",
+                }.issubset(codes)
+            else:
+                strength_specificity["relative-strength profiles"] += all(
+                    item.progression_type == "bodyweight_reps"
+                    for item in weekly_definitions
+                )
 
     top_usage = {
         environment: tuple(counter.most_common(10))
         for environment, counter in usage.items()
+    }
+    identical_cross_level_programs = sum(
+        len(signatures) < len(REVIEW_EXPERIENCE)
+        for signatures in program_signatures.values()
+    )
+    audit_metrics: dict[str, object] = {
+        "environment_violations": sum(
+            "environment incompatible" in item or "home requires gym" in item
+            for item in failures
+        ),
+        "empty_workouts": sum("empty workout" in item for item in failures),
+        "duplicate_same_day": len(duplicate_warnings),
+        "profiles_with_exact_repeat_ge_4": exact_repeats_four_or_more,
+        "profiles_with_exact_repeat_all_days": exact_repeats_all_days,
+        "core_every_day_profiles": core_every_day_profiles,
+        "average_core_exposures_per_week": round(core_exposures / combinations, 2),
+        "profiles_with_true_pull": true_pull_profiles,
+        "fake_pull_claims": fake_pull_claims,
+        "lunge_exposures": lunge_exposures,
+        "average_weekly_sets_by_primary_muscle": {
+            muscle: round(total / combinations, 2)
+            for muscle, total in sorted(muscle_sets.items())
+        },
+        "estimated_session_duration_distribution": dict(sorted(duration_estimates.items())),
+        "direct_arm_coverage_profiles": dict(sorted(direct_arm_coverage.items())),
+        "identical_cross_level_programs": identical_cross_level_programs,
+        "strength_specificity": dict(sorted(strength_specificity.items())),
+        "deterministic_generation": not any("non-deterministic" in item for item in failures),
     }
     return GeneratedProgramReview(
         rows=tuple(rows),
@@ -273,6 +393,7 @@ def build_generated_program_review() -> GeneratedProgramReview:
         core_frequency_warnings=tuple(core_warnings),
         direct_arm_coverage_warnings=tuple(arm_warnings),
         top_exercises_by_environment=top_usage,
+        audit_metrics=audit_metrics,
     )
 
 
@@ -289,6 +410,7 @@ def _warning_section(title: str, warnings: tuple[str, ...]) -> list[str]:
 
 
 def format_review_summary(review: GeneratedProgramReview) -> str:
+    metrics = review.audit_metrics
     lines = [
         "# Stage 7 generated-program review",
         "",
@@ -297,10 +419,56 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
         f"- Exercise rows: {len(review.rows)}",
         f"- Validation failures: {len(review.validation_failures)}",
         "",
-        "## Top exercise usage by environment",
+        "## Architecture audit metrics",
+        "",
+        "- Baseline exact cross-level programs before Stage 7I: 11",
+        "- Baseline core-every-day profiles before Stage 7I: 218",
+        "- Baseline profiles with exact exercise repeated 4+ times: 170",
+        f"- Exact cross-level programs after Stage 7I: {metrics['identical_cross_level_programs']}",
+        f"- Core-every-day profiles after Stage 7I: {metrics['core_every_day_profiles']}",
+        f"- Profiles with exact exercise repeated 4+ times: {metrics['profiles_with_exact_repeat_ge_4']}",
+        f"- Profiles with an exercise repeated every workout day: {metrics['profiles_with_exact_repeat_all_days']}",
+        f"- Environment violations: {metrics['environment_violations']}",
+        f"- Empty workouts: {metrics['empty_workouts']}",
+        f"- Same-day duplicate warnings: {metrics['duplicate_same_day']}",
+        f"- Fake pull claims: {metrics['fake_pull_claims']}",
+        f"- Profiles with genuine pull patterns: {metrics['profiles_with_true_pull']}",
+        f"- Lunge-pattern exposures: {metrics['lunge_exposures']}",
+        f"- Average core exposures per week: {metrics['average_core_exposures_per_week']}",
+        f"- Deterministic generation: {metrics['deterministic_generation']}",
+        "",
+        "### Average weekly sets by primary muscle",
         "",
     ]
-    for environment in REVIEW_ENVIRONMENTS:
+    for muscle, average_sets in metrics["average_weekly_sets_by_primary_muscle"].items():
+        lines.append(f"- {muscle}: {average_sets}")
+    lines.extend([
+        "",
+        "### Estimated session-duration distribution",
+        "",
+    ])
+    for minutes, count in metrics["estimated_session_duration_distribution"].items():
+        lines.append(f"- {minutes} min: {count} sessions")
+    lines.extend([
+        "",
+        "### Direct arm coverage profiles by environment and goal",
+        "",
+    ])
+    for label, count in metrics["direct_arm_coverage_profiles"].items():
+        lines.append(f"- {label}: {count}")
+    lines.extend([
+        "",
+        "### Strength specificity",
+        "",
+    ])
+    for label, count in metrics["strength_specificity"].items():
+        lines.append(f"- {label}: {count}")
+    lines.extend([
+        "",
+        "## Top exercise usage by environment",
+        "",
+    ])
+    for environment in review.top_exercises_by_environment:
         lines.append(f"### {environment}")
         for code, count in review.top_exercises_by_environment[environment]:
             definition = exercise_definition_by_code(code)
@@ -330,17 +498,28 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
     return "\n".join(lines)
 
 
+def _write_csv(path: Path, review: GeneratedProgramReview) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(review.rows)
+
+
 def write_generated_program_review(output_directory: Path) -> tuple[Path, Path, GeneratedProgramReview]:
     """Write deterministic review artefacts under ``output_directory``."""
     output_directory.mkdir(parents=True, exist_ok=True)
     review = build_generated_program_review()
     csv_path = output_directory / "stage7_generated_program_review.csv"
     summary_path = output_directory / "stage7_generated_program_review_summary.md"
-    with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
-        writer.writeheader()
-        writer.writerows(review.rows)
+    _write_csv(csv_path, review)
     summary_path.write_text(format_review_summary(review), encoding="utf-8")
+    # Gym is intentionally a separate representative matrix: the requested
+    # 540-row profile audit remains limited to home/street/functional gym.
+    gym_review = build_generated_program_review(("gym",))
+    _write_csv(output_directory / "stage7_gym_program_review.csv", gym_review)
+    (output_directory / "stage7_gym_program_review_summary.md").write_text(
+        format_review_summary(gym_review), encoding="utf-8",
+    )
     return csv_path, summary_path, review
 
 

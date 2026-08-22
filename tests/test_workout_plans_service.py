@@ -282,7 +282,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         }.issubset(muscles))
         self.assertGreaterEqual(core_count, 1)
         self.assertLessEqual(core_count, 2)
-        self.assertEqual(len(codes), len(set(codes)))
+        self.assertLessEqual(max(codes.count(code) for code in codes), 2)
         self.assertTrue(any(
             item.primary_muscle_group == "biceps"
             and item.movement_pattern == "isolation"
@@ -366,12 +366,12 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         text = format_workout_plan(result.plan, result.fallback_notes)
 
         self.assertIn("Ваш недельный план", text)
-        self.assertIn("1. Тренировка 1", text)
+        self.assertIn("1. Full Body A", text)
         self.assertIn("×", text)
         self.assertIn("отдых", text)
         self.assertIn("Подсказка:", text)
         self.assertIn("Группа мышц:", text)
-        self.assertIn("1. Тренировка 1 —", text)
+        self.assertIn("1. Full Body A —", text)
 
     def test_day_title_uses_ordered_unique_groups_from_its_exercises(self) -> None:
         result = assign_workout_plan(self.user_id, self.database)
@@ -380,7 +380,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         groups = [item.primary_muscle_group for item in first_day.exercises]
 
         self.assertIn(
-            f"1. Тренировка 1 — {', '.join(dict.fromkeys(groups))}",
+            f"1. {first_day.title} — {', '.join(dict.fromkeys(groups))}",
             text,
         )
 
@@ -572,7 +572,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
                         for item in day.exercises
                     }
                     self.assertTrue(
-                        patterns & {"squat", "hinge", "horizontal_push", "horizontal_pull"}
+                        patterns & {"squat", "lunge", "hinge", "horizontal_push", "horizontal_pull"}
                     )
                     for item in day.exercises:
                         definition = lookup[item.exercise_code]

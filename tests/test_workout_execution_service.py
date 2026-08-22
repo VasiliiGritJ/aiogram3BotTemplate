@@ -290,13 +290,13 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             self.user_id,
             BASE_TIME,
             self.database,
-            training_environment="home",
+            training_environment="street",
         )
         resumed = get_active_workout(self.user_id, self.database)
 
         self.assertEqual(activated.plan.id, started.workout.source_plan_id)
-        self.assertEqual("home", started.workout.effective_training_environment)
-        self.assertEqual("home", resumed.effective_training_environment)
+        self.assertEqual("street", started.workout.effective_training_environment)
+        self.assertEqual("street", resumed.effective_training_environment)
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             selected_ids = [item.selected_exercise_id for item in resumed.exercises]
@@ -305,7 +305,7 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             ).all()
         self.assertEqual("gym", profile.training_environment)
         self.assertTrue(all(
-            "home" in exercise.training_environments.split(",")
+            "street" in exercise.training_environments.split(",")
             for exercise in selected
         ))
 
@@ -321,6 +321,18 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             self.database,
         )
         self.assertEqual("gym", next_workout.workout.effective_training_environment)
+
+    def test_generated_gym_plan_refuses_home_override_without_a_true_pull_substitute(self) -> None:
+        activate_generated_plan_for_profile(self.user_id, self.database)
+
+        with self.assertRaises(WorkoutEnvironmentIncompatibleError):
+            get_or_start_workout(
+                self.user_id,
+                BASE_TIME,
+                self.database,
+                training_environment="home",
+            )
+        self.assertIsNone(get_active_workout(self.user_id, self.database))
 
     def test_environment_change_is_blocked_after_first_recorded_set(self) -> None:
         started = get_or_start_workout(self.user_id, BASE_TIME, self.database)

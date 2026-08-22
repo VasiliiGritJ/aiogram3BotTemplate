@@ -21,6 +21,10 @@ class GeneratedProgramReviewTests(unittest.TestCase):
         self.assertEqual(self.review.rows, repeated.rows)
         self.assertEqual(self.review.validation_failures, repeated.validation_failures)
         self.assertFalse(self.review.validation_failures)
+        self.assertTrue(self.review.audit_metrics["deterministic_generation"])
+        self.assertEqual(0, self.review.audit_metrics["environment_violations"])
+        self.assertEqual(0, self.review.audit_metrics["fake_pull_claims"])
+        self.assertEqual(0, self.review.audit_metrics["identical_cross_level_programs"])
 
     def test_rows_contain_only_environment_compatible_beginner_safe_snapshots(self) -> None:
         self.assertTrue(self.review.rows)
@@ -36,6 +40,8 @@ class GeneratedProgramReviewTests(unittest.TestCase):
             csv_path, summary_path, review = write_generated_program_review(Path(directory))
             self.assertTrue(csv_path.is_file())
             self.assertTrue(summary_path.is_file())
+            self.assertTrue((Path(directory) / "stage7_gym_program_review.csv").is_file())
+            self.assertTrue((Path(directory) / "stage7_gym_program_review_summary.md").is_file())
             self.assertEqual(540, review.combinations_count)
             self.assertIn("Profile combinations: 540", summary_path.read_text(encoding="utf-8"))
             self.assertIn("Validation failures: 0", format_review_summary(review))
