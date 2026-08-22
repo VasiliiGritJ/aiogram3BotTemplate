@@ -25,6 +25,9 @@ class GeneratedProgramReviewTests(unittest.TestCase):
         self.assertEqual(0, self.review.audit_metrics["environment_violations"])
         self.assertEqual(0, self.review.audit_metrics["fake_pull_claims"])
         self.assertEqual(0, self.review.audit_metrics["identical_cross_level_programs"])
+        self.assertIsInstance(
+            self.review.audit_metrics["profiles_with_exact_repeat_all_six_days"], int,
+        )
         arms = self.review.audit_metrics["direct_arm_coverage_profiles"]
         self.assertGreater(arms["street:muscle_gain:biceps"], 0)
         self.assertEqual(0, arms["home:muscle_gain:biceps"])

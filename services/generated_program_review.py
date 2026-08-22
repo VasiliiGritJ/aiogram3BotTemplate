@@ -205,7 +205,7 @@ def build_generated_program_review(
     combinations = 0
     days_count = 0
     exact_repeats_four_or_more = 0
-    exact_repeats_all_days = 0
+    exact_repeats_all_six_days = 0
     core_every_day_profiles = 0
     core_exposures = 0
     true_pull_profiles = 0
@@ -317,7 +317,9 @@ def build_generated_program_review(
             fake_pull_claims += 1
         max_repeat = max(Counter(weekly_codes).values())
         exact_repeats_four_or_more += max_repeat >= 4
-        exact_repeats_all_days += max_repeat == profile.workouts_per_week
+        exact_repeats_all_six_days += (
+            profile.workouts_per_week == 6 and max_repeat == 6
+        )
         signature_key = (
             profile.training_environment,
             profile.goal,
@@ -372,7 +374,7 @@ def build_generated_program_review(
         "empty_workouts": sum("empty workout" in item for item in failures),
         "duplicate_same_day": len(duplicate_warnings),
         "profiles_with_exact_repeat_ge_4": exact_repeats_four_or_more,
-        "profiles_with_exact_repeat_all_days": exact_repeats_all_days,
+        "profiles_with_exact_repeat_all_six_days": exact_repeats_all_six_days,
         "core_every_day_profiles": core_every_day_profiles,
         "average_core_exposures_per_week": round(core_exposures / combinations, 2),
         "profiles_with_true_pull": true_pull_profiles,
@@ -431,7 +433,7 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
         f"- Exact cross-level programs after Stage 7I: {metrics['identical_cross_level_programs']}",
         f"- Core-every-day profiles after Stage 7I: {metrics['core_every_day_profiles']}",
         f"- Profiles with exact exercise repeated 4+ times: {metrics['profiles_with_exact_repeat_ge_4']}",
-        f"- Profiles with an exercise repeated every workout day: {metrics['profiles_with_exact_repeat_all_days']}",
+        f"- Profiles with an exercise used all 6 days: {metrics['profiles_with_exact_repeat_all_six_days']}",
         f"- Environment violations: {metrics['environment_violations']}",
         f"- Empty workouts: {metrics['empty_workouts']}",
         f"- Same-day duplicate warnings: {metrics['duplicate_same_day']}",
