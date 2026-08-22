@@ -6,6 +6,7 @@ from hashlib import sha256
 from html import escape
 import json
 import math
+from functools import lru_cache
 from typing import Callable
 
 from sqlalchemy import func, select
@@ -58,6 +59,8 @@ SUPPORTED_DURATIONS = {30, 45, 60, 90}
 # Thirty minutes retain three complementary priority movements, but their
 # prescriptions are compact so required preparation is not squeezed out.
 DURATION_EXERCISE_BUDGETS = {30: 3, 45: 4, 60: 5, 90: 6}
+DURATION_FIT_MIN_RATIO = 0.80
+DURATION_FIT_MAX_RATIO = 1.10
 
 GOAL_NAMES = {
     "muscle_gain": "Набор мышечной массы",
@@ -81,6 +84,10 @@ class FitnessProfileRequiredError(WorkoutPlanError):
 
 class WorkoutPlanNotReadyError(WorkoutPlanError):
     """Raised when Stage 7 profile choices need the Stage 7C generator."""
+
+
+class WorkoutDurationUnsupportedError(WorkoutPlanNotReadyError):
+    """The selected duration cannot be filled honestly for this profile."""
 
 
 class WorkoutCatalogError(WorkoutPlanError):
@@ -646,11 +653,17 @@ def _choose_exercise(
     slot: str,
     used_codes: set[str],
     weekly_use_counts: dict[str, int] | None = None,
+    *,
+    allow_conventional_deadlift: bool = False,
 ) -> ExerciseDefinition | None:
     if slot.startswith("code:"):
         definition = exercise_definition_by_code(slot.removeprefix("code:"))
         if (
             definition is None
+            or (
+                definition.code == "barbell_deadlift"
+                and not allow_conventional_deadlift
+            )
             or definition.code in used_codes
             or profile.training_environment not in definition.environments
             or profile.experience_level not in definition.experience_levels
@@ -684,6 +697,10 @@ def _choose_exercise(
                 profile.training_environment == "home"
                 and definition.equipment != "bodyweight"
             )
+            and (
+                allow_conventional_deadlift
+                or definition.code != "barbell_deadlift"
+            )
         )
 
     candidates = [
@@ -713,6 +730,19 @@ def _choose_exercise(
     )
 
 
+def _working_set_target(profile: NormalizedProfile, *, is_main: bool) -> int:
+    """Keep longer sessions useful without turning high frequency into junk volume."""
+    by_duration = {30: 2, 45: 3, 60: 3, 90: 4}
+    target = by_duration[profile.session_duration_minutes]
+    if profile.workouts_per_week >= 5:
+        target = min(target, 2)
+    elif profile.workouts_per_week == 4:
+        target = min(target, 3)
+    if not is_main and profile.session_duration_minutes != 90:
+        target = min(target, 3)
+    return target
+
+
 def _prescription(
     profile: NormalizedProfile,
     definition: ExerciseDefinition,
@@ -720,96 +750,68 @@ def _prescription(
     *,
     is_main: bool,
 ) -> tuple[int, int, int, int]:
-    main = is_main
     bodyweight = definition.progression_type == "bodyweight_reps"
-    duration = profile.session_duration_minutes
-    if duration == 30:
-        # Required warm-up is inside the requested time.  A short session
-        # therefore keeps its movement coverage but uses only priority volume.
-        if profile.goal == "strength":
-            if profile.training_environment in {"home", "street"}:
-                level = profile.experience_level
-                return (
-                    2,
-                    {"beginner": 6, "intermediate": 6, "advanced": 8}[level],
-                    {"beginner": 12, "intermediate": 14, "advanced": 15}[level],
-                    75 if main else 45,
-                )
-            if main and definition.movement_pattern in {"squat", "hinge", "horizontal_push"}:
-                reps = {
-                    "beginner": (5, 8), "intermediate": (4, 6), "advanced": (3, 5),
-                }[profile.experience_level]
-                return (2 if profile.experience_level == "beginner" else 3), reps[0], reps[1], 105
-            return (2, 8, 12, 45)
-        if profile.goal == "fat_loss":
-            level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
-            return (
-                2,
-                8 if main else 10 + level_bonus,
-                12 + level_bonus if main else 15 + level_bonus,
-                60 if main else 45,
-            )
-        if bodyweight:
-            level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
-            return (
-                2,
-                8 if main else 10 + level_bonus,
-                15 + level_bonus if main else 18 + level_bonus,
-                60 if main else 45,
-            )
-        level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
-        return (
-            2,
-            6 if main else 8 + level_bonus,
-            12 + level_bonus if main else 15 + level_bonus,
-            75 if main else 45,
-        )
     if profile.goal == "strength":
         if profile.training_environment in {"home", "street"}:
             level = profile.experience_level
             return (
-                ({"beginner": 3, "intermediate": 4, "advanced": 4}[level]
-                 if duration < 90 else {"beginner": 4, "intermediate": 5, "advanced": 5}[level]),
-                {"beginner": 6, "intermediate": 6, "advanced": 8}[level] if main else 8,
-                {"beginner": 12, "intermediate": 14, "advanced": 15}[level] if main else {
-                    "beginner": 15, "intermediate": 17, "advanced": 20,
-                }[level],
-                105 if main and duration == 90 else (90 if main else 60),
+                _working_set_target(profile, is_main=is_main),
+                {"beginner": 6, "intermediate": 5, "advanced": 5}[level]
+                if is_main else 7,
+                {"beginner": 12, "intermediate": 10, "advanced": 8}[level]
+                if is_main else {"beginner": 14, "intermediate": 12, "advanced": 10}[level],
+                90 if is_main else 60,
             )
-        if main and definition.movement_pattern in {"squat", "hinge", "horizontal_push"}:
+        if is_main and definition.movement_pattern in {"squat", "hinge", "horizontal_push"}:
+            main_sets = {
+                "beginner": 3,
+                "intermediate": 3,
+                "advanced": 4,
+            }[profile.experience_level]
+            if profile.session_duration_minutes == 30 or profile.workouts_per_week >= 5:
+                main_sets = min(main_sets, 3)
+            if profile.session_duration_minutes == 30 and profile.workouts_per_week >= 5:
+                main_sets = min(main_sets, 2)
             if profile.experience_level == "beginner":
-                return (3 if duration < 90 else 4), 5, 8, 120
+                return main_sets, 5, 8, 120
             if profile.experience_level == "advanced":
-                return (5 if duration < 90 else 6), 3, 5, 180
-            return (4 if duration < 90 else 5), 4, 6, 150
+                rest = {
+                    30: 120,
+                    45: 120,
+                    60: 150,
+                    90: 180,
+                }[profile.session_duration_minutes]
+                return main_sets, 3, 5, rest
+            return main_sets, 4, 6, 120 if profile.session_duration_minutes <= 45 else 150
         return (
-            4 if duration == 90 else (3 if duration >= 60 else 2),
-            6 if main else 8,
-            10 if main else 12,
-            90 if main else 60,
+            _working_set_target(profile, is_main=is_main),
+            6 if is_main else 8,
+            10 if is_main else 12,
+            90 if is_main else 60,
         )
+    sets = _working_set_target(profile, is_main=is_main)
     if profile.goal == "fat_loss":
         level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
         return (
-            4 if duration == 90 else (3 + (1 if level_bonus == 2 and main else 0) if main or duration >= 60 else 2),
-            8 if main else 10 + level_bonus,
-            12 + level_bonus if main else 15 + level_bonus,
-            75 if main else 45,
+            sets,
+            8 if is_main else 10 + level_bonus,
+            12 + level_bonus if is_main else 15 + level_bonus,
+            75 if is_main else 45,
         )
     if bodyweight:
         level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
         return (
-            4 if duration == 90 else (3 + (1 if level_bonus == 2 and main else 0) if main or duration >= 60 else 2),
-            8 if main else 10 + level_bonus,
-            15 + level_bonus if main else 20 + level_bonus,
-            75 if main else 45,
+            sets,
+            8 if is_main else 10 + level_bonus,
+            15 + level_bonus if is_main else 18 + level_bonus,
+            75 if is_main else 45,
         )
     level_bonus = {"beginner": 0, "intermediate": 1, "advanced": 2}[profile.experience_level]
     return (
-        4 if duration == 90 else (3 + (1 if level_bonus == 2 and main else 0) if main or duration >= 60 else 2),
-        6 if main else 8 + level_bonus,
-        12 + level_bonus if main else 15 + level_bonus,
-        90 if main else 60,
+        sets,
+        6 if is_main else 8 + level_bonus,
+        12 + level_bonus if is_main else 15 + level_bonus,
+        90 if is_main else 60,
     )
 
 
@@ -899,9 +901,9 @@ def _functional_block(
     if not selected:
         raise WorkoutCatalogError("Functional block has no compatible exercises.")
 
-    duration_minutes = {30: 6, 45: 8, 60: 10, 90: 12}[profile.session_duration_minutes]
+    duration_minutes = {30: 3, 45: 5, 60: 8, 90: 12}[profile.session_duration_minutes]
     if profile.experience_level == "beginner":
-        duration_minutes = max(5, duration_minutes - 2)
+        duration_minutes = max(3, duration_minutes - 2)
     target_rounds = None
     if workout_format in {"for_time", "circuit_rounds"}:
         target_rounds = {30: 2, 45: 3, 60: 3, 90: 4}[profile.session_duration_minutes]
@@ -922,11 +924,11 @@ def program_archetype(profile: NormalizedProfile) -> str:
     """Name the training logic before individual exercise selection begins."""
     if profile.goal == "muscle_gain":
         return {
-            2: "Full Body A/B",
-            3: "Full Body A/B/C",
-            4: "Upper/Lower A/B",
-            5: "Upper/Lower/Push/Pull/Legs",
-            6: "PPL A/B",
+            2: "Всё тело A/B",
+            3: "Всё тело A/B/C",
+            4: "Верх/низ тела A/B",
+            5: "Верх/низ/жим/тяга/ноги",
+            6: "Жим/тяга/ноги A/B",
         }[profile.workouts_per_week]
     if profile.goal == "strength":
         return (
@@ -940,15 +942,15 @@ def program_archetype(profile: NormalizedProfile) -> str:
 def _muscle_gain_blueprints(frequency: int) -> tuple[ProgramDayBlueprint, ...]:
     full_body = (
         ProgramDayBlueprint(
-            "Full Body A",
+            "Всё тело A",
             ("squat:quads", "horizontal_push:chest", "horizontal_pull:back", "hinge:glutes", "isolation:biceps", "core:core"),
         ),
         ProgramDayBlueprint(
-            "Full Body B",
+            "Всё тело B",
             ("hinge:hamstrings", "vertical_push:shoulders", "vertical_pull:back", "lunge:quads", "isolation:triceps", "isolation:calves"),
         ),
         ProgramDayBlueprint(
-            "Full Body C",
+            "Всё тело C",
             ("lunge:quads", "horizontal_push:chest", "vertical_pull:back", "isolation:triceps", "core:core", "isolation:biceps"),
         ),
     )
@@ -958,36 +960,45 @@ def _muscle_gain_blueprints(frequency: int) -> tuple[ProgramDayBlueprint, ...]:
         return full_body
     if frequency == 4:
         return (
-            ProgramDayBlueprint("Upper A", ("horizontal_push:chest", "horizontal_pull:back", "vertical_push:shoulders", "vertical_pull:back", "isolation:biceps", "isolation:triceps")),
-            ProgramDayBlueprint("Lower A", ("squat:quads", "hinge:hamstrings", "isolation:calves", "lunge:quads", "core:core")),
-            ProgramDayBlueprint("Upper B", ("horizontal_push:chest", "vertical_pull:back", "vertical_push:shoulders", "horizontal_pull:back", "isolation:triceps", "scapular_rear_delt:shoulders")),
-            ProgramDayBlueprint("Lower B", ("hinge:glutes", "squat:quads", "isolation:calves", "lunge:quads", "core:core")),
+            ProgramDayBlueprint("Верх тела A", ("horizontal_push:chest", "horizontal_pull:back", "vertical_push:shoulders", "vertical_pull:back", "isolation:biceps", "isolation:triceps")),
+            ProgramDayBlueprint("Низ тела A", ("squat:quads", "hinge:hamstrings", "isolation:calves", "lunge:quads", "core:core")),
+            ProgramDayBlueprint("Верх тела B", ("horizontal_push:chest", "vertical_pull:back", "vertical_push:shoulders", "horizontal_pull:back", "isolation:triceps", "scapular_rear_delt:shoulders")),
+            ProgramDayBlueprint("Низ тела B", ("hinge:glutes", "squat:quads", "isolation:calves", "lunge:quads", "core:core")),
         )
     if frequency == 5:
         return (
-            ProgramDayBlueprint("Upper", ("horizontal_push:chest", "horizontal_pull:back", "vertical_push:shoulders", "vertical_pull:back", "isolation:biceps", "isolation:triceps")),
-            ProgramDayBlueprint("Lower", ("squat:quads", "hinge:hamstrings", "isolation:calves", "lunge:quads", "core:core")),
-            ProgramDayBlueprint("Push", ("horizontal_push:chest", "vertical_push:shoulders", "isolation:triceps", "scapular_rear_delt:shoulders")),
-            ProgramDayBlueprint("Pull", ("vertical_pull:back", "horizontal_pull:back", "isolation:biceps", "hinge:glutes", "scapular_rear_delt:shoulders")),
-            ProgramDayBlueprint("Legs", ("squat:quads", "hinge:hamstrings", "isolation:calves", "lunge:quads", "core:core")),
+            ProgramDayBlueprint("Верх тела", ("horizontal_push:chest", "horizontal_pull:back", "vertical_push:shoulders", "vertical_pull:back", "isolation:biceps", "isolation:triceps")),
+            ProgramDayBlueprint("Низ тела", ("squat:quads", "hinge:hamstrings", "isolation:calves", "lunge:quads", "core:core")),
+            ProgramDayBlueprint("Жимовой день", ("horizontal_push:chest", "vertical_push:shoulders", "isolation:triceps", "scapular_rear_delt:shoulders")),
+            ProgramDayBlueprint("Тяговый день", ("vertical_pull:back", "horizontal_pull:back", "isolation:biceps", "hinge:glutes", "scapular_rear_delt:shoulders")),
+            ProgramDayBlueprint("Ноги", ("squat:quads", "hinge:hamstrings", "isolation:calves", "lunge:quads", "core:core")),
         )
     return (
-        ProgramDayBlueprint("Push A", ("horizontal_push:chest", "vertical_push:shoulders", "isolation:triceps", "scapular_rear_delt:shoulders")),
-        ProgramDayBlueprint("Pull A", ("vertical_pull:back", "horizontal_pull:back", "isolation:biceps", "hinge:glutes", "scapular_rear_delt:shoulders")),
-        ProgramDayBlueprint("Legs A", ("squat:quads", "hinge:hamstrings", "isolation:calves", "lunge:quads", "core:core")),
-        ProgramDayBlueprint("Push B", ("horizontal_push:chest", "vertical_push:shoulders", "isolation:triceps", "scapular_rear_delt:shoulders")),
-        ProgramDayBlueprint("Pull B", ("horizontal_pull:back", "vertical_pull:back", "isolation:biceps", "hinge:glutes", "core:core")),
-        ProgramDayBlueprint("Legs B", ("hinge:hamstrings", "squat:quads", "lunge:quads", "isolation:calves")),
+        ProgramDayBlueprint("Жимовой день A", ("horizontal_push:chest", "vertical_push:shoulders", "isolation:triceps", "scapular_rear_delt:shoulders")),
+        ProgramDayBlueprint("Тяговый день A", ("vertical_pull:back", "horizontal_pull:back", "isolation:biceps", "hinge:glutes", "scapular_rear_delt:shoulders")),
+        ProgramDayBlueprint("Ноги A", ("squat:quads", "hinge:hamstrings", "isolation:calves", "lunge:quads", "core:core")),
+        ProgramDayBlueprint("Жимовой день B", ("horizontal_push:chest", "vertical_push:shoulders", "isolation:triceps", "scapular_rear_delt:shoulders")),
+        ProgramDayBlueprint("Тяговый день B", ("horizontal_pull:back", "vertical_pull:back", "isolation:biceps", "hinge:glutes", "core:core")),
+        ProgramDayBlueprint("Ноги B", ("hinge:hamstrings", "squat:quads", "lunge:quads", "isolation:calves")),
     )
 
 
 def _strength_blueprints(profile: NormalizedProfile) -> tuple[ProgramDayBlueprint, ...]:
     if profile.training_environment in {"home", "street"}:
-        relative = (
-            ProgramDayBlueprint("Относительная сила A", ("squat:quads", "horizontal_push:chest", "vertical_pull:back", "lunge:quads", "core:core")),
-            ProgramDayBlueprint("Относительная сила B", ("hinge:glutes", "horizontal_push:chest", "horizontal_pull:back", "lunge:quads", "isolation:calves")),
-            ProgramDayBlueprint("Относительная сила C", ("squat:quads", "vertical_push:shoulders", "vertical_pull:back", "hinge:hamstrings", "scapular_rear_delt:shoulders")),
-        )
+        if profile.training_environment == "home":
+            # Home deliberately does not pretend that scapular drills are pull
+            # movements.  Each day remains a complete, equipment-free session.
+            relative = (
+                ProgramDayBlueprint("Относительная сила A", ("squat:quads", "horizontal_push:chest", "hinge:glutes", "lunge:quads", "core:core", "isolation:calves")),
+                ProgramDayBlueprint("Относительная сила B", ("lunge:quads", "horizontal_push:chest", "hinge:hamstrings", "scapular_rear_delt:shoulders", "core:core", "isolation:calves")),
+                ProgramDayBlueprint("Относительная сила C", ("squat:quads", "vertical_push:shoulders", "hinge:glutes", "lunge:quads", "scapular_rear_delt:shoulders", "core:core")),
+            )
+        else:
+            relative = (
+                ProgramDayBlueprint("Относительная сила A", ("squat:quads", "horizontal_push:chest", "vertical_pull:back", "lunge:quads", "core:core")),
+                ProgramDayBlueprint("Относительная сила B", ("hinge:glutes", "horizontal_push:chest", "horizontal_pull:back", "lunge:quads", "isolation:calves")),
+                ProgramDayBlueprint("Относительная сила C", ("squat:quads", "vertical_push:shoulders", "vertical_pull:back", "hinge:hamstrings", "scapular_rear_delt:shoulders")),
+            )
         return tuple(relative[index % len(relative)] for index in range(profile.workouts_per_week))
 
     if profile.experience_level == "beginner":
@@ -1004,20 +1015,60 @@ def _strength_blueprints(profile: NormalizedProfile) -> tuple[ProgramDayBlueprin
                 ProgramDayBlueprint("Ноги и техника", ("squat:quads", "hinge:hamstrings", "horizontal_pull:back", "core:core")),
             )
     else:
+        # S/B/D exposure is intentionally uneven: bench tolerates more useful
+        # practice, squat is moderate, and the conventional deadlift is kept to
+        # one heavy exposure per week.  It is never an accessory prescription.
         base = (
-            ProgramDayBlueprint("Присед", ("code:barbell_back_squat", "code:barbell_bench_press", "horizontal_pull:back", "core:core")),
-            ProgramDayBlueprint("Жим", ("code:barbell_bench_press", "code:barbell_deadlift", "vertical_pull:back", "isolation:triceps")),
-            ProgramDayBlueprint("Тяга", ("code:barbell_deadlift", "code:barbell_back_squat", "horizontal_push:chest", "horizontal_pull:back", "core:core")),
+            ProgramDayBlueprint("Присед и жим", ("code:barbell_back_squat", "code:barbell_bench_press", "horizontal_pull:back", "core:core", "isolation:calves")),
+            ProgramDayBlueprint("Тяга", ("code:barbell_deadlift", "vertical_pull:back", "horizontal_push:chest", "isolation:triceps", "core:core")),
+            ProgramDayBlueprint("Жим", ("code:barbell_bench_press", "horizontal_pull:back", "vertical_push:shoulders", "lunge:quads", "isolation:triceps")),
+            ProgramDayBlueprint("Присед и поддержка", ("code:barbell_back_squat", "vertical_pull:back", "horizontal_push:chest", "isolation:calves", "core:core")),
+            ProgramDayBlueprint("Жим и верх тела", ("code:barbell_bench_press", "horizontal_pull:back", "vertical_push:shoulders", "isolation:triceps", "scapular_rear_delt:shoulders")),
+            ProgramDayBlueprint("Восстановительная силовая база", ("lunge:quads", "horizontal_pull:back", "vertical_pull:back", "scapular_rear_delt:shoulders", "core:core")),
         )
-    return tuple(base[index % len(base)] for index in range(profile.workouts_per_week))
+    return tuple(
+        base[index] if len(base) == 6 else base[index % len(base)]
+        for index in range(profile.workouts_per_week)
+    )
+
+
+def _home_resistance_blueprints(frequency: int) -> tuple[ProgramDayBlueprint, ...]:
+    """Honest no-equipment home sessions, without a fictional pull substitute."""
+    base = (
+        ProgramDayBlueprint("Всё тело A", ("squat:quads", "horizontal_push:chest", "hinge:glutes", "lunge:quads", "isolation:calves", "core:core")),
+        ProgramDayBlueprint("Всё тело B", ("lunge:quads", "horizontal_push:chest", "hinge:hamstrings", "scapular_rear_delt:shoulders", "core:core", "isolation:calves")),
+        ProgramDayBlueprint("Всё тело C", ("squat:quads", "vertical_push:shoulders", "hinge:glutes", "lunge:quads", "scapular_rear_delt:shoulders", "core:core")),
+    )
+    return tuple(base[index % len(base)] for index in range(frequency))
+
+
+def _purposeful_fill_slots(profile: NormalizedProfile) -> tuple[str, ...]:
+    """Fill a genuinely missing movement slot, never a fake pull or junk set."""
+    if profile.training_environment == "home":
+        return (
+            "lunge:quads", "hinge:glutes", "core:core", "isolation:calves",
+            "scapular_rear_delt:shoulders", "horizontal_push:chest",
+        )
+    if profile.training_environment == "street":
+        return (
+            "lunge:quads", "hinge:glutes", "core:core", "isolation:calves",
+            "vertical_pull:back", "horizontal_push:chest",
+        )
+    return ()
 
 
 def _program_blueprints(profile: NormalizedProfile) -> tuple[ProgramDayBlueprint, ...]:
     if profile.goal == "muscle_gain":
+        if profile.training_environment == "home":
+            return _home_resistance_blueprints(profile.workouts_per_week)
         return _muscle_gain_blueprints(profile.workouts_per_week)
     if profile.goal == "strength":
         return _strength_blueprints(profile)
-    resistance = _muscle_gain_blueprints(profile.workouts_per_week)
+    resistance = (
+        _home_resistance_blueprints(profile.workouts_per_week)
+        if profile.training_environment == "home"
+        else _muscle_gain_blueprints(profile.workouts_per_week)
+    )
     return tuple(
         ProgramDayBlueprint(
             title=f"Силовая база — {day.title}",
@@ -1034,41 +1085,55 @@ def estimate_generated_day_minutes(
 ) -> int:
     """Estimate required preparation and quality work without optional cooldown."""
     warmup = build_generated_day_warmup(profile, day)
-    # Longer sessions deliberately reserve time for calm equipment changes,
-    # technique checks and the longer rests already prescribed for quality work.
-    # It is not extra exercise volume and optional cooldown is excluded.
-    quality_pacing_minutes = {30: 1, 45: 1, 60: 7, 90: 17}
-    minutes = float(warmup.estimated_minutes + quality_pacing_minutes[profile.session_duration_minutes])
+    # Only time attached to actual preparation, work, prescribed rest and
+    # equipment transitions is counted.  Optional cooldown is excluded.
+    minutes = float(warmup.estimated_minutes)
     for position, exercise in enumerate(day.exercises):
         working_minutes = exercise.sets * (1.5 if position == 0 else 1.2)
         rest_minutes = max(0, exercise.sets - 1) * exercise.rest_seconds / 60
-        setup_minutes = 4 if position == 0 else 2
+        # This is the actual station/load/technique transition, not a generic
+        # duration filler.  Free-weight and bodyweight set-up is still present.
+        setup_minutes = 4.5 if position == 0 else 2.25
         minutes += working_minutes + rest_minutes + setup_minutes
     for block in day.blocks:
         minutes += 2
         if block.duration_seconds:
             minutes += block.duration_seconds / 60
         elif block.target_rounds:
-            minutes += block.target_rounds * 3
+            # A round is a compact secondary conditioning component, not an
+            # invented three-minute filler after every resistance session.
+            minutes += block.target_rounds * 2.5
     return int(math.ceil(minutes))
 
 
-def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
-    """Build a deterministic program from an archetype, then select exercises."""
+def _generate_program_unchecked(profile: NormalizedProfile) -> GeneratedProgramDefinition:
+    """Build a deterministic program before duration/recovery quality gates."""
     days: list[GeneratedDayDefinition] = []
     budget = DURATION_EXERCISE_BUDGETS[profile.session_duration_minutes]
     weekly_use_counts: dict[str, int] = {}
+    # Core work is useful, but it is not a mandatory daily filler.  Keep it
+    # deliberately below the weekly training frequency so a two-day plan has
+    # one focused exposure and longer weeks have at most two.
+    core_day_limit = min(2, max(0, profile.workouts_per_week - 1))
+    core_days_assigned = 0
     for day_number, blueprint in enumerate(_program_blueprints(profile), start=1):
         used_codes: set[str] = set()
         exercises: list[GeneratedExerciseDefinition] = []
         for slot in blueprint.slots:
             if len(exercises) >= budget:
                 break
+            movement, _ = _slot_parts(slot)
+            if movement == "core" and core_days_assigned >= core_day_limit:
+                continue
+            is_main = not exercises
             definition = _choose_exercise(
                 profile,
                 slot,
                 used_codes,
                 weekly_use_counts,
+                allow_conventional_deadlift=(
+                    is_main and slot == "code:barbell_deadlift"
+                ),
             )
             # Home deliberately skips unavailable true pulling slots instead of
             # relabelling scapular accessories as a pull substitute.
@@ -1076,7 +1141,6 @@ def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
                 continue
             used_codes.add(definition.code)
             weekly_use_counts[definition.code] = weekly_use_counts.get(definition.code, 0) + 1
-            is_main = not exercises
             sets, reps_min, reps_max, rest_seconds = _prescription(
                 profile,
                 definition,
@@ -1098,6 +1162,50 @@ def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
                     ),
                 )
             )
+            if definition.primary_muscle_group == "core":
+                core_days_assigned += 1
+        # Street and home have intentionally fewer isolated exercise families.
+        # If an unavailable slot left a short day incomplete, add only a
+        # complementary controlled movement from the same real environment.
+        for slot in _purposeful_fill_slots(profile):
+            if len(exercises) >= budget:
+                break
+            movement, _ = _slot_parts(slot)
+            if movement == "core" and core_days_assigned >= core_day_limit:
+                continue
+            definition = _choose_exercise(
+                profile,
+                slot,
+                used_codes,
+                weekly_use_counts,
+            )
+            if definition is None:
+                continue
+            used_codes.add(definition.code)
+            weekly_use_counts[definition.code] = weekly_use_counts.get(definition.code, 0) + 1
+            sets, reps_min, reps_max, rest_seconds = _prescription(
+                profile,
+                definition,
+                len(exercises),
+                is_main=not exercises,
+            )
+            exercises.append(
+                GeneratedExerciseDefinition(
+                    definition.code,
+                    sets,
+                    reps_min,
+                    reps_max,
+                    rest_seconds,
+                    _progression_strategy(
+                        profile,
+                        definition,
+                        len(exercises),
+                        is_main=False,
+                    ),
+                )
+            )
+            if definition.primary_muscle_group == "core":
+                core_days_assigned += 1
         if not exercises:
             raise WorkoutCatalogError("Generated workout day is empty.")
         block = (
@@ -1123,6 +1231,148 @@ def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
         ),
         days=tuple(days),
     )
+
+
+def _weekly_working_set_limit(profile: NormalizedProfile) -> int:
+    """A conservative whole-week ceiling, not a claim of universal optimality."""
+    if profile.goal == "strength":
+        return {
+            "beginner": 36,
+            "intermediate": 50,
+            "advanced": 60,
+        }[profile.experience_level]
+    return {
+        "beginner": 48,
+        "intermediate": 60,
+        "advanced": 72,
+    }[profile.experience_level]
+
+
+def _duration_fits(profile: NormalizedProfile, day: GeneratedDayDefinition) -> bool:
+    minutes = estimate_generated_day_minutes(profile, day)
+    return (
+        math.ceil(profile.session_duration_minutes * DURATION_FIT_MIN_RATIO)
+        <= minutes
+        <= math.floor(profile.session_duration_minutes * DURATION_FIT_MAX_RATIO)
+    )
+
+
+def validate_generated_program_quality(
+    profile: NormalizedProfile,
+    program: GeneratedProgramDefinition,
+    *,
+    include_duration: bool = True,
+) -> tuple[str, ...]:
+    """Return deterministic quality-gate failures for a generated week."""
+    failures: list[str] = []
+    weekly_sets = 0
+    specific_exposure: dict[str, int] = {
+        "barbell_back_squat": 0,
+        "barbell_bench_press": 0,
+        "barbell_deadlift": 0,
+    }
+    high_stress_days: list[int] = []
+    for day in program.days:
+        standard_sets = sum(item.sets for item in day.exercises)
+        weekly_sets += standard_sets
+        has_timed_block = bool(day.blocks)
+        minimum_sets = {30: 5, 45: 6, 60: 8, 90: 10}[profile.session_duration_minutes]
+        minimum_exercises = 2 if profile.session_duration_minutes == 30 else 3
+        if profile.session_duration_minutes >= 90:
+            minimum_exercises = 4
+        if (not has_timed_block and len(day.exercises) < minimum_exercises) or (
+            standard_sets < minimum_sets
+        ):
+            failures.append(f"day-{day.day_number}: minimum viable session")
+        if include_duration and not _duration_fits(profile, day):
+            failures.append(f"day-{day.day_number}: duration outside truthful range")
+
+        deadlift_is_heavy = False
+        for position, item in enumerate(day.exercises):
+            if item.exercise_code in specific_exposure:
+                specific_exposure[item.exercise_code] += 1
+            if item.exercise_code == "barbell_deadlift":
+                if position != 0 or item.reps_max > 6:
+                    failures.append(
+                        f"day-{day.day_number}: conventional deadlift is not a heavy main lift"
+                    )
+                deadlift_is_heavy = item.reps_max <= 6
+        if deadlift_is_heavy:
+            high_stress_days.append(day.day_number)
+
+    if weekly_sets > _weekly_working_set_limit(profile):
+        failures.append("weekly working-set recovery limit")
+    if profile.goal == "strength" and profile.training_environment in {"gym", "functional_gym"}:
+        caps = {
+            "barbell_back_squat": 2,
+            "barbell_bench_press": 3,
+            "barbell_deadlift": 1,
+        }
+        for code, maximum in caps.items():
+            if specific_exposure[code] > maximum:
+                failures.append(f"weekly S/B/D exposure: {code}")
+    if any(
+        later == earlier + 1
+        for earlier, later in zip(high_stress_days, high_stress_days[1:])
+    ):
+        failures.append("consecutive high-stress hinge days")
+    return tuple(failures)
+
+
+@lru_cache(maxsize=None)
+def supported_session_durations(
+    *,
+    goal: str,
+    experience_level: str,
+    training_environment: str,
+    workouts_per_week: int,
+) -> tuple[int, ...]:
+    """Expose only durations that this exact profile can fill truthfully."""
+    supported: list[int] = []
+    for duration in sorted(SUPPORTED_DURATIONS):
+        # With no equipment, a 90-minute home session would require either
+        # fictional equipment or endurance-padding.  Keep that limitation
+        # explicit instead of silently altering the user's request.
+        if training_environment == "home" and duration == 90:
+            continue
+        candidate = NormalizedProfile(
+            goal=goal,
+            experience_level=experience_level,
+            training_environment=training_environment,
+            workouts_per_week=workouts_per_week,
+            session_duration_minutes=duration,
+            equipment=training_environment,
+            has_limitations=False,
+            fallback_notes=(),
+        )
+        try:
+            program = _generate_program_unchecked(candidate)
+        except WorkoutCatalogError:
+            continue
+        if not validate_generated_program_quality(candidate, program):
+            supported.append(duration)
+    return tuple(supported)
+
+
+def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
+    """Build a valid deterministic program or fail before a misleading plan exists."""
+    supported = supported_session_durations(
+        goal=profile.goal,
+        experience_level=profile.experience_level,
+        training_environment=profile.training_environment,
+        workouts_per_week=profile.workouts_per_week,
+    )
+    if profile.session_duration_minutes not in supported:
+        choices = ", ".join(f"{value} мин" for value in supported)
+        raise WorkoutDurationUnsupportedError(
+            "Для выбранных условий эта длительность не даёт качественную "
+            f"тренировку. Доступные варианты: {choices or 'нет'}."
+        )
+    program = _generate_program_unchecked(profile)
+    failures = validate_generated_program_quality(profile, program)
+    if failures:
+        raise WorkoutCatalogError("Generated program quality gate: " + "; ".join(failures))
+    return program
 
 
 def _ensure_catalog_in_session(session: Session) -> CatalogStats:

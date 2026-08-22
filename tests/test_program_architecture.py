@@ -4,9 +4,12 @@ from services.exercise_catalog import EXERCISE_DEFINITIONS, exercise_definition_
 from services.workout_plans import (
     HOME_PULL_LIMITATION_NOTICE,
     NormalizedProfile,
+    WorkoutDurationUnsupportedError,
     estimate_generated_day_minutes,
     generate_program,
     program_archetype,
+    supported_session_durations,
+    validate_generated_program_quality,
 )
 from services.workout_progression import ProgressionStrategy
 
@@ -45,30 +48,30 @@ class ProgramArchitectureTests(unittest.TestCase):
 
     def test_muscle_gain_uses_canonical_archetypes_and_six_day_ppl_variation(self) -> None:
         expected = {
-            2: ("Full Body A", "Full Body B"),
-            3: ("Full Body A", "Full Body B", "Full Body C"),
-            4: ("Upper A", "Lower A", "Upper B", "Lower B"),
-            5: ("Upper", "Lower", "Push", "Pull", "Legs"),
-            6: ("Push A", "Pull A", "Legs A", "Push B", "Pull B", "Legs B"),
+            2: ("Всё тело A", "Всё тело B"),
+            3: ("Всё тело A", "Всё тело B", "Всё тело C"),
+            4: ("Верх тела A", "Низ тела A", "Верх тела B", "Низ тела B"),
+            5: ("Верх тела", "Низ тела", "Жимовой день", "Тяговый день", "Ноги"),
+            6: ("Жимовой день A", "Тяговый день A", "Ноги A", "Жимовой день B", "Тяговый день B", "Ноги B"),
         }
         archetypes = {
-            2: "Full Body A/B",
-            3: "Full Body A/B/C",
-            4: "Upper/Lower A/B",
-            5: "Upper/Lower/Push/Pull/Legs",
-            6: "PPL A/B",
+            2: "Всё тело A/B",
+            3: "Всё тело A/B/C",
+            4: "Верх/низ тела A/B",
+            5: "Верх/низ/жим/тяга/ноги",
+            6: "Жим/тяга/ноги A/B",
         }
         for frequency, titles in expected.items():
             with self.subTest(frequency=frequency):
-                generated = generate_program(profile(frequency=frequency))
-                self.assertEqual(archetypes[frequency], program_archetype(profile(frequency=frequency)))
+                generated = generate_program(profile(frequency=frequency, duration=30))
+                self.assertEqual(archetypes[frequency], program_archetype(profile(frequency=frequency, duration=30)))
                 self.assertEqual(titles, tuple(day.title for day in generated.days))
-        six_day = generate_program(profile(frequency=6, duration=90))
+        six_day = generate_program(profile(frequency=6, duration=30))
         codes = [item.exercise_code for day in six_day.days for item in day.exercises]
         self.assertLess(max(codes.count(code) for code in codes), 6)
 
     def test_core_is_bounded_and_accessories_do_not_repeat_every_day(self) -> None:
-        generated = generate_program(profile(frequency=6, duration=90))
+        generated = generate_program(profile(frequency=6, duration=30))
         definitions = self.definitions(generated)
         self.assertLessEqual(sum(item.primary_muscle_group == "core" for item in definitions), 2)
         accessory_codes = [
@@ -82,7 +85,7 @@ class ProgramArchitectureTests(unittest.TestCase):
         self.assertLess(max(accessory_codes.count(code) for code in accessory_codes), 6)
         relative_strength = generate_program(profile(
             goal="strength", environment="street", experience="advanced",
-            frequency=6, duration=90,
+            frequency=6, duration=30,
         ))
         self.assertLessEqual(
             sum(
@@ -93,7 +96,7 @@ class ProgramArchitectureTests(unittest.TestCase):
         )
 
     def test_home_does_not_claim_scapular_work_as_true_pull(self) -> None:
-        generated = generate_program(profile(environment="home", frequency=3, duration=90))
+        generated = generate_program(profile(environment="home", frequency=3, duration=60))
         patterns = {
             item.movement_pattern for item in self.definitions(generated)
         }
@@ -147,8 +150,8 @@ class ProgramArchitectureTests(unittest.TestCase):
         self.assertEqual(3, len({program.days for program in programs}))
 
     def test_duration_estimate_grows_materially_between_sixty_and_ninety_minutes(self) -> None:
-        standard_profile = profile(duration=60, frequency=3)
-        long_profile = profile(duration=90, frequency=3)
+        standard_profile = profile(duration=60, frequency=2)
+        long_profile = profile(duration=90, frequency=2)
         standard = generate_program(standard_profile)
         long = generate_program(long_profile)
         standard_minutes = sum(
@@ -178,8 +181,41 @@ class ProgramArchitectureTests(unittest.TestCase):
         )
 
     def test_outputs_are_deterministic(self) -> None:
-        current = profile(goal="fat_loss", environment="functional_gym", experience="intermediate", frequency=5, duration=45)
+        current = profile(goal="fat_loss", environment="functional_gym", experience="intermediate", frequency=5, duration=30)
         self.assertEqual(generate_program(current), generate_program(current))
+
+    def test_duration_support_is_truthful_and_long_home_session_is_rejected(self) -> None:
+        home = profile(goal="strength", environment="home", experience="advanced", frequency=2)
+        supported = supported_session_durations(
+            goal=home.goal,
+            experience_level=home.experience_level,
+            training_environment=home.training_environment,
+            workouts_per_week=home.workouts_per_week,
+        )
+        self.assertIn(60, supported)
+        self.assertNotIn(90, supported)
+        with self.assertRaises(WorkoutDurationUnsupportedError):
+            generate_program(profile(
+                goal="strength", environment="home", experience="advanced",
+                frequency=2, duration=90,
+            ))
+
+    def test_strength_quality_gate_bounds_sbd_and_deadlift_fatigue(self) -> None:
+        current = profile(
+            goal="strength", environment="gym", experience="advanced",
+            frequency=6, duration=30,
+        )
+        generated = generate_program(current)
+        codes = [item.exercise_code for day in generated.days for item in day.exercises]
+        self.assertLessEqual(codes.count("barbell_back_squat"), 2)
+        self.assertLessEqual(codes.count("barbell_bench_press"), 3)
+        self.assertLessEqual(codes.count("barbell_deadlift"), 1)
+        for day in generated.days:
+            for position, item in enumerate(day.exercises):
+                if item.exercise_code == "barbell_deadlift":
+                    self.assertEqual(0, position)
+                    self.assertLessEqual(item.reps_max, 6)
+        self.assertFalse(validate_generated_program_quality(current, generated))
 
 
 if __name__ == "__main__":

@@ -599,24 +599,19 @@ def onboarding_frequency_mkp():
     )
 
 
-def onboarding_duration_mkp():
+def onboarding_duration_mkp(durations: tuple[int, ...] = (30, 45, 60, 90)):
+    rows = []
+    values = tuple(sorted(durations))
+    for start in range(0, len(values), 2):
+        rows.append([
+            types.InlineKeyboardButton(
+                text=f"{value} мин",
+                callback_data=f"onboarding:duration:{value}",
+            )
+            for value in values[start:start + 2]
+        ])
     return types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                types.InlineKeyboardButton(
-                    text=f"{value} мин",
-                    callback_data=f"onboarding:duration:{value}",
-                )
-                for value in (30, 45)
-            ],
-            [
-                types.InlineKeyboardButton(
-                    text=f"{value} мин",
-                    callback_data=f"onboarding:duration:{value}",
-                )
-                for value in (60, 90)
-            ],
-        ]
+        inline_keyboard=rows,
     )
 
 

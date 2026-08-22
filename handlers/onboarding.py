@@ -37,6 +37,7 @@ from services.onboarding import (
     update_existing_profile,
     validate_choice,
 )
+from services.workout_plans import supported_session_durations
 from storage.config import dp
 from storage.states import Onboarding
 
@@ -209,10 +210,27 @@ async def onboarding_workouts(call: types.CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(workouts_per_week=workouts)
+    data = await state.get_data()
+    durations = supported_session_durations(
+        goal=data["goal"],
+        experience_level=data["experience_level"],
+        training_environment=data["training_environment"],
+        workouts_per_week=workouts,
+    )
+    if not durations:
+        await call.message.edit_text(
+            "Для выбранных условий пока нельзя составить качественную тренировку. "
+            "Выберите другое место или количество тренировок.",
+            reply_markup=onboarding_environment_mkp(),
+        )
+        await state.set_state(Onboarding.training_environment)
+        await call.answer()
+        return
     await state.set_state(Onboarding.session_duration_minutes)
     await call.message.edit_text(
-        "Сколько времени вы готовы уделять тренировке?",
-        reply_markup=onboarding_duration_mkp(),
+        "Сколько времени вы готовы уделять тренировке? "
+        "Показываем только длительности, для которых получится полноценная тренировка.",
+        reply_markup=onboarding_duration_mkp(durations),
     )
     await call.answer()
 
@@ -226,6 +244,20 @@ async def onboarding_duration(call: types.CallbackQuery, state: FSMContext):
         duration = parse_session_duration_minutes(call.data.rsplit(":", 1)[-1])
     except OnboardingValidationError as error:
         await call.answer(str(error), show_alert=True)
+        return
+
+    data = await state.get_data()
+    durations = supported_session_durations(
+        goal=data["goal"],
+        experience_level=data["experience_level"],
+        training_environment=data["training_environment"],
+        workouts_per_week=data["workouts_per_week"],
+    )
+    if duration not in durations:
+        await call.answer(
+            "Эта длительность недоступна для выбранных условий. Выберите вариант на экране.",
+            show_alert=True,
+        )
         return
 
     await state.update_data(session_duration_minutes=duration)

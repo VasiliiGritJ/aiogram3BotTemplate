@@ -125,6 +125,12 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
             self.callback_values(onboarding_duration_mkp()),
         )
 
+    def test_onboarding_can_show_only_truthful_duration_choices(self) -> None:
+        self.assertEqual(
+            ["onboarding:duration:30", "onboarding:duration:45"],
+            self.callback_values(onboarding_duration_mkp((30, 45))),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,12 @@
 import types
 import unittest
 
-from services.workout_plans import NormalizedProfile, estimate_generated_day_minutes, generate_program
+from services.workout_plans import (
+    NormalizedProfile,
+    estimate_generated_day_minutes,
+    generate_program,
+    supported_session_durations,
+)
 from services.workout_warmup import (
     WarmupExercise,
     build_generated_day_warmup,
@@ -10,12 +15,12 @@ from services.workout_warmup import (
 )
 
 
-def profile(*, environment="gym", goal="muscle_gain", duration=60, experience="beginner"):
+def profile(*, environment="gym", goal="muscle_gain", duration=60, experience="beginner", frequency=3):
     return NormalizedProfile(
         goal=goal,
         experience_level=experience,
         training_environment=environment,
-        workouts_per_week=3,
+        workouts_per_week=frequency,
         session_duration_minutes=duration,
         equipment=environment,
         has_limitations=False,
@@ -43,6 +48,17 @@ class WorkoutWarmupTests(unittest.TestCase):
         for environment in ("gym", "functional_gym", "street", "home"):
             for goal in ("muscle_gain", "strength", "fat_loss"):
                 current = profile(environment=environment, goal=goal)
+                durations = supported_session_durations(
+                    goal=goal,
+                    experience_level=current.experience_level,
+                    training_environment=environment,
+                    workouts_per_week=current.workouts_per_week,
+                )
+                current = profile(
+                    environment=environment,
+                    goal=goal,
+                    duration=max(durations),
+                )
                 for day in generate_program(current).days:
                     with self.subTest(environment=environment, goal=goal, day=day.day_number):
                         first = build_generated_day_warmup(current, day)
@@ -138,7 +154,7 @@ class WorkoutWarmupTests(unittest.TestCase):
     def test_duration_estimates_include_required_warmup_and_use_longer_budget(self):
         estimates = {}
         for duration in (30, 60, 90):
-            current = profile(duration=duration)
+            current = profile(duration=duration, frequency=2)
             day = generate_program(current).days[0]
             estimates[duration] = estimate_generated_day_minutes(current, day)
             self.assertGreaterEqual(estimates[duration], build_generated_day_warmup(current, day).estimated_minutes)

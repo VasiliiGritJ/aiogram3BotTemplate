@@ -32,6 +32,8 @@ from services.workout_plans import (
     get_assigned_workout_plan,
     normalize_profile,
     generate_program,
+    supported_session_durations,
+    WorkoutDurationUnsupportedError,
 )
 from services.exercise_catalog import exercise_definition_by_code
 from services.workout_progression import ProgressionStrategy
@@ -229,6 +231,15 @@ class WorkoutPlanServiceTests(unittest.TestCase):
                         workouts_per_week=days,
                         session_duration_minutes=duration,
                     ))
+                    if duration not in supported_session_durations(
+                        goal=profile.goal,
+                        experience_level=profile.experience_level,
+                        training_environment=profile.training_environment,
+                        workouts_per_week=profile.workouts_per_week,
+                    ):
+                        with self.assertRaises(WorkoutDurationUnsupportedError):
+                            generate_program(profile)
+                        continue
                     first = generate_program(profile)
                     second = generate_program(profile)
                     self.assertEqual(first, second)
@@ -306,6 +317,15 @@ class WorkoutPlanServiceTests(unittest.TestCase):
                         workouts_per_week=days,
                         session_duration_minutes=duration,
                     ))
+                    if duration not in supported_session_durations(
+                        goal=profile.goal,
+                        experience_level=profile.experience_level,
+                        training_environment=profile.training_environment,
+                        workouts_per_week=profile.workouts_per_week,
+                    ):
+                        with self.assertRaises(WorkoutDurationUnsupportedError):
+                            generate_program(profile)
+                        continue
                     program = generate_program(profile)
                     definitions = [
                         exercise_definition_by_code(item.exercise_code)
@@ -366,12 +386,12 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         text = format_workout_plan(result.plan, result.fallback_notes)
 
         self.assertIn("Ваш недельный план", text)
-        self.assertIn("1. Full Body A", text)
+        self.assertIn("1. Всё тело A", text)
         self.assertIn("×", text)
         self.assertIn("отдых", text)
         self.assertIn("Подсказка:", text)
         self.assertIn("Группа мышц:", text)
-        self.assertIn("1. Full Body A —", text)
+        self.assertIn("1. Всё тело A —", text)
 
     def test_day_title_uses_ordered_unique_groups_from_its_exercises(self) -> None:
         result = assign_workout_plan(self.user_id, self.database)
@@ -427,6 +447,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
             profile = session.get(FitnessProfile, self.user_id)
             profile.goal = "strength"
             profile.training_environment = "gym"
+            profile.session_duration_minutes = 45
             session.commit()
 
         result = assign_workout_plan(self.user_id, self.database)
@@ -445,7 +466,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             profile.workouts_per_week = 4
-            profile.session_duration_minutes = 60
+            profile.session_duration_minutes = 45
             session.commit()
 
         result = assign_workout_plan(self.user_id, self.database)
@@ -475,6 +496,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
     def test_all_stage_seven_profile_combinations_generate_valid_deterministic_programs(self) -> None:
         definitions = {item.code: item for item in EXERCISE_DEFINITIONS}
         count = 0
+        unsupported = 0
         for goal in ("muscle_gain", "strength", "fat_loss"):
             for experience in ("beginner", "intermediate", "advanced"):
                 for environment in ("gym", "functional_gym", "street", "home"):
@@ -496,6 +518,18 @@ class WorkoutPlanServiceTests(unittest.TestCase):
                                     session_duration_minutes=duration,
                                 )
                                 normalized = normalize_profile(profile)
+                                supported = supported_session_durations(
+                                    goal=normalized.goal,
+                                    experience_level=normalized.experience_level,
+                                    training_environment=normalized.training_environment,
+                                    workouts_per_week=normalized.workouts_per_week,
+                                )
+                                if duration not in supported:
+                                    with self.assertRaises(WorkoutDurationUnsupportedError):
+                                        generate_program(normalized)
+                                    unsupported += 1
+                                    count += 1
+                                    continue
                                 first = generate_program(normalized)
                                 second = generate_program(normalized)
                                 self.assertEqual(first, second)
@@ -516,6 +550,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
                                             self.assertEqual("bodyweight", definition.equipment)
                                 count += 1
         self.assertEqual(720, count)
+        self.assertGreater(unsupported, 0)
 
     def test_goal_and_experience_selection_priorities(self) -> None:
         beginner = generate_program(normalize_profile(self.make_profile(
@@ -651,10 +686,12 @@ class WorkoutPlanServiceTests(unittest.TestCase):
 
     def test_duration_preserves_main_priority_and_changes_volume(self) -> None:
         short = generate_program(normalize_profile(self.make_profile(
-            self.user_id, training_environment="gym", session_duration_minutes=30,
+            self.user_id, training_environment="gym", workouts_per_week=2,
+            session_duration_minutes=30,
         )))
         long = generate_program(normalize_profile(self.make_profile(
-            self.user_id, training_environment="gym", session_duration_minutes=90,
+            self.user_id, training_environment="gym", workouts_per_week=2,
+            session_duration_minutes=90,
         )))
         self.assertEqual(short.days[0].exercises[0].exercise_code, long.days[0].exercises[0].exercise_code)
         self.assertLess(len(short.days[0].exercises), len(long.days[0].exercises))
@@ -666,7 +703,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
             profile.experience_level = "advanced"
             profile.training_environment = "home"
             profile.workouts_per_week = 6
-            profile.session_duration_minutes = 90
+            profile.session_duration_minutes = 30
             session.commit()
 
         assigned = assign_workout_plan(self.user_id, self.database)
@@ -683,10 +720,11 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         lookup = {item.code: item for item in EXERCISE_DEFINITIONS}
         counts = {}
         for goal in ("muscle_gain", "strength", "fat_loss"):
+            duration = {"muscle_gain": 60, "strength": 45, "fat_loss": 60}[goal]
             program = generate_program(normalize_profile(self.make_profile(
                 self.user_id, goal=goal, experience_level="beginner",
                 training_environment="functional_gym", workouts_per_week=3,
-                session_duration_minutes=60,
+                session_duration_minutes=duration,
             )))
             counts[goal] = sum(len(day.blocks) for day in program.days)
             for day in program.days:
@@ -724,7 +762,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         )))
         long = generate_program(normalize_profile(self.make_profile(
             self.user_id, goal="fat_loss", training_environment="functional_gym",
-            session_duration_minutes=90,
+            session_duration_minutes=60,
         )))
         self.assertLess(
             short.days[0].blocks[0].duration_seconds,

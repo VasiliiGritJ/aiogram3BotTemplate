@@ -27,6 +27,11 @@ class GeneratedProgramReviewTests(unittest.TestCase):
         self.assertEqual(0, self.review.audit_metrics["identical_cross_level_programs"])
         self.assertEqual(0, self.review.audit_metrics["warmup_working_volume_leaks"])
         self.assertEqual(0, self.review.audit_metrics["warmup_progression_leaks"])
+        self.assertEqual(0, self.review.audit_metrics["minimum_viable_day_failures"])
+        self.assertEqual(0, self.review.audit_metrics["one_exercise_long_days"])
+        self.assertEqual(0, self.review.audit_metrics["high_rep_conventional_deadlift"])
+        self.assertEqual(0, self.review.audit_metrics["consecutive_high_stress_warnings"])
+        self.assertEqual(0, self.review.audit_metrics["core_every_day_profiles"])
         self.assertEqual(
             {30, 45, 60, 90},
             set(self.review.audit_metrics["average_warmup_minutes_by_duration"]),
@@ -42,6 +47,18 @@ class GeneratedProgramReviewTests(unittest.TestCase):
         self.assertLessEqual(duration_metrics[30]["p90"], 35)
         self.assertGreaterEqual(averages[60], 45)
         self.assertGreaterEqual(averages[90], averages[60] + 15)
+        for metric in self.review.audit_metrics["duration_fit_days"].values():
+            self.assertEqual(metric["total"], metric["fit"])
+            self.assertEqual(100.0, metric["percent"])
+        self.assertTrue(self.review.audit_metrics["unsupported_duration_cases"])
+        self.assertLessEqual(
+            self.review.audit_metrics["relative_strength_weekly_set_max"]["home"],
+            60,
+        )
+        self.assertLessEqual(
+            self.review.audit_metrics["relative_strength_weekly_set_max"]["street"],
+            60,
+        )
         self.assertIsInstance(
             self.review.audit_metrics["profiles_with_exact_repeat_all_six_days"], int,
         )

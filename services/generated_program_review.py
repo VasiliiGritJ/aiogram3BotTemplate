@@ -15,9 +15,13 @@ from typing import Iterable
 
 from services.exercise_catalog import exercise_definition_by_code
 from services.workout_plans import (
+    DURATION_FIT_MAX_RATIO,
+    DURATION_FIT_MIN_RATIO,
     NormalizedProfile,
     estimate_generated_day_minutes,
     generate_program,
+    supported_session_durations,
+    validate_generated_program_quality,
 )
 from services.workout_warmup import build_generated_day_warmup
 
@@ -236,13 +240,35 @@ def build_generated_program_review(
     ramp_days_by_goal: Counter[str] = Counter()
     direct_arm_coverage: Counter[str] = Counter()
     program_signatures: dict[tuple[str, str, int, int], set[object]] = {}
+    program_signature_levels: dict[tuple[str, str, int, int], set[str]] = {}
     strength_specificity: Counter[str] = Counter()
     purposeful_main_repeat_four_or_more = 0
     unwanted_accessory_repeat_four_or_more = 0
+    duration_fit_days: Counter[int] = Counter()
+    duration_supported_days: Counter[int] = Counter()
+    unsupported_duration_cases: Counter[str] = Counter()
+    minimum_viable_day_failures = 0
+    one_exercise_long_days = 0
+    weekly_set_max_by_environment: Counter[str] = Counter()
+    relative_strength_weekly_set_max: Counter[str] = Counter()
+    sbd_exposure_max: Counter[str] = Counter()
+    high_rep_conventional_deadlift = 0
+    consecutive_high_stress_warnings = 0
 
     for profile in _profile_combinations(environments):
         combinations += 1
         program_key = _profile_key(profile)
+        supported_durations = supported_session_durations(
+            goal=profile.goal,
+            experience_level=profile.experience_level,
+            training_environment=profile.training_environment,
+            workouts_per_week=profile.workouts_per_week,
+        )
+        if profile.session_duration_minutes not in supported_durations:
+            unsupported_duration_cases[
+                f"{profile.training_environment}:{profile.goal}:{profile.session_duration_minutes}"
+            ] += 1
+            continue
         program = generate_program(profile)
         if program != generate_program(profile):
             failures.append(f"{program_key}: non-deterministic generation")
@@ -250,6 +276,7 @@ def build_generated_program_review(
         weekly_definitions = []
         standard_definitions = []
         weekly_codes: list[str] = []
+        weekly_working_sets = 0
         core_days = 0
         has_true_pull = False
         for day in program.days:
@@ -260,6 +287,13 @@ def build_generated_program_review(
             warmup = build_generated_day_warmup(profile, day)
             duration_estimates[estimated_minutes] += 1
             duration_values[profile.session_duration_minutes].append(estimated_minutes)
+            duration_supported_days[profile.session_duration_minutes] += 1
+            if (
+                ceil(profile.session_duration_minutes * DURATION_FIT_MIN_RATIO)
+                <= estimated_minutes
+                <= int(profile.session_duration_minutes * DURATION_FIT_MAX_RATIO)
+            ):
+                duration_fit_days[profile.session_duration_minutes] += 1
             warmup_minutes_by_duration[profile.session_duration_minutes] += warmup.estimated_minutes
             warmup_days_by_duration[profile.session_duration_minutes] += 1
             ramp_sets_by_goal[profile.goal] += sum(item.set_count for item in warmup.ramp_up_sets)
@@ -268,6 +302,7 @@ def build_generated_program_review(
                 codes.append(exercise.exercise_code)
                 standard_codes.append(exercise.exercise_code)
                 weekly_codes.append(exercise.exercise_code)
+                weekly_working_sets += exercise.sets
                 definition = exercise_definition_by_code(exercise.exercise_code)
                 if definition is not None:
                     weekly_definitions.append(definition)
@@ -278,6 +313,11 @@ def build_generated_program_review(
                         "horizontal_pull", "vertical_pull",
                     }
                     lunge_exposures += definition.movement_pattern == "lunge"
+                    if (
+                        definition.code == "barbell_deadlift"
+                        and exercise.reps_max > 6
+                    ):
+                        high_rep_conventional_deadlift += 1
                 rows.append(_row(
                     profile,
                     program_key=program_key,
@@ -329,6 +369,17 @@ def build_generated_program_review(
                         progression_strategy="timed_conditioning",
                     ))
             _validate_day(profile, program_key, day.day_number, codes, failures, duplicate_warnings)
+            quality_issues = validate_generated_program_quality(
+                profile,
+                type(program)(name=program.name, days=(day,)),
+                include_duration=False,
+            )
+            minimum_viable_day_failures += sum(
+                "minimum viable session" in item for item in quality_issues
+            )
+            one_exercise_long_days += (
+                profile.session_duration_minutes >= 60 and len(day.exercises) == 1
+            )
             if any(
                 exercise_definition_by_code(code).primary_muscle_group == "core"
                 for code in standard_codes
@@ -337,6 +388,15 @@ def build_generated_program_review(
                 core_days += 1
 
         core_count = sum(item.primary_muscle_group == "core" for item in standard_definitions)
+        weekly_set_max_by_environment[profile.training_environment] = max(
+            weekly_set_max_by_environment[profile.training_environment],
+            weekly_working_sets,
+        )
+        if profile.goal == "strength" and profile.training_environment in {"home", "street"}:
+            relative_strength_weekly_set_max[profile.training_environment] = max(
+                relative_strength_weekly_set_max[profile.training_environment],
+                weekly_working_sets,
+            )
         core_exposures += core_count
         if core_count > 2:
             core_warnings.append(f"{program_key}: core appears {core_count} times")
@@ -382,6 +442,9 @@ def build_generated_program_review(
             profile.session_duration_minutes,
         )
         program_signatures.setdefault(signature_key, set()).add(program.days)
+        program_signature_levels.setdefault(signature_key, set()).add(
+            profile.experience_level
+        )
         if (
             profile.goal == "muscle_gain"
             and profile.workouts_per_week >= 3
@@ -412,14 +475,32 @@ def build_generated_program_review(
                     item.progression_type == "bodyweight_reps"
                     for item in weekly_definitions
                 )
+            for code in ("barbell_back_squat", "barbell_bench_press", "barbell_deadlift"):
+                sbd_exposure_max[code] = max(
+                    sbd_exposure_max[code],
+                    weekly_codes.count(code),
+                )
+            heavy_deadlift_days = [
+                day.day_number
+                for day in program.days
+                if any(
+                    item.exercise_code == "barbell_deadlift" and item.reps_max <= 6
+                    for item in day.exercises
+                )
+            ]
+            consecutive_high_stress_warnings += any(
+                later == earlier + 1
+                for earlier, later in zip(heavy_deadlift_days, heavy_deadlift_days[1:])
+            )
 
     top_usage = {
         environment: tuple(counter.most_common(10))
         for environment, counter in usage.items()
     }
     identical_cross_level_programs = sum(
-        len(signatures) < len(REVIEW_EXPERIENCE)
-        for signatures in program_signatures.values()
+        len(program_signatures[key]) < len(levels)
+        for key, levels in program_signature_levels.items()
+        if len(levels) >= 2
     )
     audit_metrics: dict[str, object] = {
         "environment_violations": sum(
@@ -443,7 +524,7 @@ def build_generated_program_review(
         "average_warmup_minutes_by_duration": {
             duration: round(
                 warmup_minutes_by_duration[duration] / warmup_days_by_duration[duration], 2
-            )
+            ) if warmup_days_by_duration[duration] else 0
             for duration in REVIEW_DURATIONS
         },
         "average_ramp_sets_by_goal": {
@@ -451,13 +532,33 @@ def build_generated_program_review(
             for goal in REVIEW_GOALS
         },
         "average_estimated_session_minutes_by_duration": {
-            duration: round(sum(duration_values[duration]) / len(duration_values[duration]), 2)
+            duration: round(
+                sum(duration_values[duration]) / len(duration_values[duration]), 2
+            ) if duration_values[duration] else 0
             for duration in REVIEW_DURATIONS
         },
         "duration_p10_p50_p90": {
             duration: _percentiles(duration_values[duration])
             for duration in REVIEW_DURATIONS
         },
+        "duration_fit_days": {
+            duration: {
+                "fit": duration_fit_days[duration],
+                "total": duration_supported_days[duration],
+                "percent": round(
+                    duration_fit_days[duration] * 100 / duration_supported_days[duration], 1
+                ) if duration_supported_days[duration] else 0,
+            }
+            for duration in REVIEW_DURATIONS
+        },
+        "unsupported_duration_cases": dict(sorted(unsupported_duration_cases.items())),
+        "minimum_viable_day_failures": minimum_viable_day_failures,
+        "one_exercise_long_days": one_exercise_long_days,
+        "max_weekly_working_sets_by_environment": dict(sorted(weekly_set_max_by_environment.items())),
+        "relative_strength_weekly_set_max": dict(sorted(relative_strength_weekly_set_max.items())),
+        "sbd_exposure_max": dict(sorted(sbd_exposure_max.items())),
+        "high_rep_conventional_deadlift": high_rep_conventional_deadlift,
+        "consecutive_high_stress_warnings": consecutive_high_stress_warnings,
         # Ramp-up prescriptions never enter GeneratedExerciseDefinition sets or
         # any progression strategy.  These metrics make that separation visible
         # in the offline review contract.
@@ -526,6 +627,10 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
         f"- Warm-up progression leaks: {metrics['warmup_progression_leaks']}",
         f"- Purposeful main movement repeats 4+ times: {metrics['purposeful_main_repeat_4plus']}",
         f"- Unwanted accessory repeats 4+ times: {metrics['unwanted_accessory_repeat_4plus']}",
+        f"- Minimum viable day failures: {metrics['minimum_viable_day_failures']}",
+        f"- One-exercise long days: {metrics['one_exercise_long_days']}",
+        f"- High-rep conventional deadlift prescriptions: {metrics['high_rep_conventional_deadlift']}",
+        f"- Consecutive high-stress warnings: {metrics['consecutive_high_stress_warnings']}",
         "",
         "### Average weekly sets by primary muscle",
         "",
@@ -550,10 +655,21 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
         lines.append(f"- Average ramp-up sets for {goal}: {sets}")
     for duration, minutes in metrics["average_estimated_session_minutes_by_duration"].items():
         percentiles = metrics["duration_p10_p50_p90"][duration]
+        duration_fit = metrics["duration_fit_days"][duration]
         lines.append(
             f"- {duration} min request: avg {minutes}; "
-            f"p10/p50/p90 = {percentiles['p10']}/{percentiles['p50']}/{percentiles['p90']}"
+            f"p10/p50/p90 = {percentiles['p10']}/{percentiles['p50']}/{percentiles['p90']}; "
+            f"fit = {duration_fit['fit']}/{duration_fit['total']} ({duration_fit['percent']}%)"
         )
+    lines.extend([
+        "",
+        "### Duration support and recovery safeguards",
+        "",
+        f"- Unsupported duration cases: {metrics['unsupported_duration_cases']}",
+        f"- Max weekly working sets by environment: {metrics['max_weekly_working_sets_by_environment']}",
+        f"- Relative-strength weekly set max: {metrics['relative_strength_weekly_set_max']}",
+        f"- S/B/D exposure max: {metrics['sbd_exposure_max']}",
+    ])
     lines.extend([
         "",
         "### Direct arm coverage profiles by environment and goal",
