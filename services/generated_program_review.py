@@ -181,9 +181,13 @@ def _validate_day(
 
 
 def _direct_arm_coverage(definitions: list[object]) -> tuple[bool, bool]:
-    """Return direct biceps/triceps coverage without treating pull work as arms."""
+    """Return direct arm coverage, allowing street chin-up work for biceps."""
     return (
-        any(getattr(item, "primary_muscle_group", None) == "biceps" for item in definitions),
+        any(
+            getattr(item, "primary_muscle_group", None) == "biceps"
+            or getattr(item, "code", None) == "chin_up"
+            for item in definitions
+        ),
         any(getattr(item, "primary_muscle_group", None) == "triceps" for item in definitions),
     )
 

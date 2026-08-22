@@ -25,6 +25,9 @@ class GeneratedProgramReviewTests(unittest.TestCase):
         self.assertEqual(0, self.review.audit_metrics["environment_violations"])
         self.assertEqual(0, self.review.audit_metrics["fake_pull_claims"])
         self.assertEqual(0, self.review.audit_metrics["identical_cross_level_programs"])
+        arms = self.review.audit_metrics["direct_arm_coverage_profiles"]
+        self.assertGreater(arms["street:muscle_gain:biceps"], 0)
+        self.assertEqual(0, arms["home:muscle_gain:biceps"])
 
     def test_rows_contain_only_environment_compatible_beginner_safe_snapshots(self) -> None:
         self.assertTrue(self.review.rows)
