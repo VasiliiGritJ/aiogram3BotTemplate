@@ -501,10 +501,31 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             patch.object(workout_ui, "get_active_workout", return_value=_workout()),
         ):
             self.run_async(workout_ui.workout_environment_action(choose, _State()))
-        self.assertIn(
-            "workout:environment:set:session:home",
-            self.callback_values(choose.message.edits[-1][1]),
-        )
+        picker = choose.message.edits[-1][1]
+        picker_callbacks = self.callback_values(picker)
+        self.assertIn("workout:environment:set:session:home", picker_callbacks)
+        self.assertIn("workout:environment:back:session", picker_callbacks)
+        self.assertIn("start", picker_callbacks)
+        picker_texts = [
+            button.text for row in picker.inline_keyboard for button in row
+        ]
+        self.assertIn("↩️ Назад к тренировке", picker_texts)
+        self.assertIn("🏠 Главное меню", picker_texts)
+
+        back = _Call(data="workout:environment:back:session")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_active_workout", return_value=_workout()),
+            patch.object(
+                workout_ui, "show_workout_preview", new_callable=AsyncMock
+            ) as preview,
+            patch.object(workout_ui, "change_workout_environment") as change,
+            patch.object(workout_ui, "get_or_start_workout") as start,
+        ):
+            self.run_async(workout_ui.workout_environment_action(back, _State()))
+        preview.assert_awaited_once_with(back.message, 7, edit=True)
+        change.assert_not_called()
+        start.assert_not_called()
 
         selected = _Call(data="workout:environment:set:session:home")
         with (
@@ -534,6 +555,46 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         ):
             self.run_async(workout_ui.workout_environment_action(blocked, _State()))
         self.assertIn("только до первого", blocked.answers[-1][0][0])
+
+    def test_start_context_environment_back_and_main_menu_are_safe_navigation(self) -> None:
+        back = _Call(data="workout:environment:back:start")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_default_training_environment", return_value="gym"),
+            patch.object(workout_ui, "get_or_start_workout") as start,
+        ):
+            self.run_async(workout_ui.workout_environment_action(back, _State()))
+        self.assertIn("Подготовка тренировки", back.message.edits[-1][0])
+        self.assertIn(
+            "workout:environment:start:gym",
+            self.callback_values(back.message.edits[-1][1]),
+        )
+        start.assert_not_called()
+
+        start_handler = _load_handler_module_with_fake_config("handlers.start")
+        menu = _Call(data="start")
+        with (
+            patch.object(start_handler.User, "get", return_value=_User()),
+            patch.object(start_handler, "has_completed_profile", return_value=True),
+            patch.object(start_handler, "workout_menu_markup", return_value=workout_ui.to_menu_mpk()),
+        ):
+            self.run_async(start_handler.startCall(menu, _State()))
+        self.assertEqual("Меню", menu.message.edits[-1][0])
+
+        return_to_workout = _Call(data="workout:start")
+        with (
+            patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(workout_ui, "get_active_workout", return_value=_workout()),
+            patch.object(
+                workout_ui, "show_workout_preview", new_callable=AsyncMock
+            ) as preview,
+            patch.object(workout_ui, "get_or_start_workout") as start,
+        ):
+            self.run_async(
+                workout_ui.workout_start_or_resume(return_to_workout, _State())
+            )
+        preview.assert_awaited_once_with(return_to_workout.message, 7, edit=True)
+        start.assert_not_called()
 
     def test_preview_contains_full_snapshot_and_start_uses_the_same_snapshot(self) -> None:
         standard = (

@@ -641,6 +641,40 @@ async def workout_environment_action(
         )
         await call.answer()
         return
+    if parts == ["workout", "environment", "back", "session"]:
+        try:
+            workout = get_active_workout(user.id)
+            if workout is None or not _workout_environment_can_change(workout):
+                raise WorkoutEnvironmentChangeBlockedError("Workout already started.")
+        except (WorkoutExecutionError, SQLAlchemyError):
+            await call.answer(
+                "Место можно сменить только до первого выполненного подхода.",
+                show_alert=True,
+            )
+            return
+        await state.clear()
+        await show_workout_preview(call.message, user.id, edit=True)
+        await call.answer()
+        return
+    if parts == ["workout", "environment", "back", "start"]:
+        try:
+            environment = get_default_training_environment(user.id)
+        except (WorkoutEnvironmentError, SQLAlchemyError):
+            await state.clear()
+            await call.message.edit_text(
+                "Сначала укажите место тренировки в профиле.",
+                reply_markup=workout_menu_markup(user.id),
+            )
+        else:
+            await state.clear()
+            await call.message.edit_text(
+                "🏋️ Подготовка тренировки\n\n"
+                f"Сегодня тренируемся: "
+                f"{escape(TRAINING_ENVIRONMENT_LABELS[environment])}",
+                reply_markup=workout_environment_start_mkp(environment),
+            )
+        await call.answer()
+        return
     if (
         len(parts) == 5
         and parts[:3] == ["workout", "environment", "set"]

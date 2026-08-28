@@ -363,13 +363,24 @@ def workout_environment_choices_mkp(context: str):
         ("Улица", "street"),
         ("Дом", "home"),
     )
-    return types.InlineKeyboardMarkup(inline_keyboard=[
+    buttons = [
         [types.InlineKeyboardButton(
             text=label,
             callback_data=f"workout:environment:set:{context}:{value}",
         )]
         for label, value in labels
+    ]
+    buttons.extend([
+        [types.InlineKeyboardButton(
+            text="↩️ Назад к тренировке",
+            callback_data=f"workout:environment:back:{context}",
+        )],
+        [types.InlineKeyboardButton(
+            text="🏠 Главное меню",
+            callback_data="start",
+        )],
     ])
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def workout_replacement_mkp(options):
