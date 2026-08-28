@@ -13,6 +13,7 @@ from services.workout_execution import (
     CurrentWorkoutStep,
     WorkoutAccessDeniedError,
     WorkoutHistoryPage,
+    WorkoutEnvironmentIncompatibleError,
     WorkoutNotFoundError,
     WorkoutSetResultView,
     WorkoutSessionExerciseView,
@@ -236,6 +237,17 @@ def _recommendation(
 
 
 class WorkoutExecutionUiTests(unittest.TestCase):
+    def test_home_strength_environment_constraint_is_shown_without_internal_details(self) -> None:
+        text = workout_ui._environment_constraint_text(
+            WorkoutEnvironmentIncompatibleError(
+                "Для силовой тренировки дома без оборудования на этом уровне "
+                "недостаточно безопасных вариантов усложнения. Лучше выбрать улицу, "
+                "функциональный или тренажёрный зал."
+            )
+        )
+        self.assertIn("недостаточно безопасных вариантов", text)
+        self.assertIn("улицу", text)
+
     def test_technique_callback_shows_short_catalog_guidance_without_ids(self) -> None:
         call = _Call(data="workout:technique")
         state = _State()

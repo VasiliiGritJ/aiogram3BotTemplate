@@ -34,6 +34,7 @@ from services.workout_plans import (
     generate_program,
     supported_session_durations,
     WorkoutDurationUnsupportedError,
+    WorkoutStrengthProfileUnsupportedError,
 )
 from services.exercise_catalog import exercise_definition_by_code
 from services.workout_progression import ProgressionStrategy
@@ -524,6 +525,17 @@ class WorkoutPlanServiceTests(unittest.TestCase):
                                     training_environment=normalized.training_environment,
                                     workouts_per_week=normalized.workouts_per_week,
                                 )
+                                if (
+                                    goal == "strength"
+                                    and environment == "home"
+                                    and experience in {"intermediate", "advanced"}
+                                ):
+                                    self.assertEqual((), supported)
+                                    with self.assertRaises(WorkoutStrengthProfileUnsupportedError):
+                                        generate_program(normalized)
+                                    unsupported += 1
+                                    count += 1
+                                    continue
                                 if duration not in supported:
                                     with self.assertRaises(WorkoutDurationUnsupportedError):
                                         generate_program(normalized)
@@ -664,8 +676,9 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             profile.goal = "strength"
-            profile.experience_level = "advanced"
+            profile.experience_level = "beginner"
             profile.training_environment = "gym"
+            profile.session_duration_minutes = 45
             session.commit()
 
         assign_workout_plan(self.user_id, self.database)
@@ -700,7 +713,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
             profile.goal = "strength"
-            profile.experience_level = "advanced"
+            profile.experience_level = "beginner"
             profile.training_environment = "home"
             profile.workouts_per_week = 6
             profile.session_duration_minutes = 30

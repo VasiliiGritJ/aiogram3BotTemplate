@@ -48,6 +48,11 @@ HOME_PULL_LIMITATION_NOTICE = (
     "Без турника или резинки возможности для полноценной тренировки "
     "тяговых мышц ограничены."
 )
+HOME_RELATIVE_STRENGTH_LIMITATION_NOTICE = (
+    "Для силовой тренировки дома без оборудования на этом уровне "
+    "недостаточно безопасных вариантов усложнения. Лучше выбрать улицу, "
+    "функциональный или тренажёрный зал."
+)
 
 SUPPORTED_GOALS = {"muscle_gain", "strength", "fat_loss"}
 SUPPORTED_EXPERIENCE = {"beginner", "intermediate", "advanced"}
@@ -88,6 +93,10 @@ class WorkoutPlanNotReadyError(WorkoutPlanError):
 
 class WorkoutDurationUnsupportedError(WorkoutPlanNotReadyError):
     """The selected duration cannot be filled honestly for this profile."""
+
+
+class WorkoutStrengthProfileUnsupportedError(WorkoutPlanNotReadyError):
+    """The controlled catalog cannot support this relative-strength profile."""
 
 
 class WorkoutCatalogError(WorkoutPlanError):
@@ -236,6 +245,45 @@ class ProgramDayBlueprint:
     title: str
     slots: tuple[str, ...]
     include_conditioning: bool = False
+
+
+# These are intentionally catalog-code ladders rather than made-up exercise
+# names.  A level only receives a bodyweight strength blueprint when the
+# catalog contains a credible harder stage for its key movements.
+RELATIVE_STRENGTH_LADDERS = {
+    "home": {
+        "beginner": (
+            "bodyweight_squat",
+            "push_up",
+            "bodyweight_glute_bridge",
+        ),
+        # The no-equipment catalog has no controlled harder push successor
+        # beyond a standard floor push-up.  Intermediate and advanced home
+        # strength therefore fail closed instead of pretending that fewer reps
+        # of the same movement are a strength progression.
+        "intermediate": (),
+        "advanced": (),
+    },
+    "street": {
+        "beginner": (
+            "bodyweight_squat",
+            "incline_push_up",
+            "inverted_row",
+        ),
+        "intermediate": (
+            "reverse_lunge",
+            "pull_up",
+            "parallel_bar_dip",
+            "single_leg_glute_bridge",
+        ),
+        "advanced": (
+            "reverse_lunge",
+            "chin_up",
+            "parallel_bar_dip",
+            "single_leg_glute_bridge",
+        ),
+    },
+}
 
 
 DAY_BLUEPRINTS = {
@@ -490,6 +538,41 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
     )
 
 
+def strength_profile_constraint_message(
+    *,
+    goal: str,
+    experience_level: str,
+    training_environment: str,
+) -> str | None:
+    """Return a user-facing limitation when relative strength is not credible.
+
+    This is deliberately a planning boundary, not an automatic profile edit.
+    The user keeps the selected environment and can choose a more capable
+    place for a particular workout instead.
+    """
+    if (
+        goal == "strength"
+        and training_environment == "home"
+        and experience_level in {"intermediate", "advanced"}
+    ):
+        return HOME_RELATIVE_STRENGTH_LIMITATION_NOTICE
+    return None
+
+
+def has_credible_strength_profile(
+    *,
+    goal: str,
+    experience_level: str,
+    training_environment: str,
+) -> bool:
+    """Whether a controlled strength profile has an honest progression path."""
+    return strength_profile_constraint_message(
+        goal=goal,
+        experience_level=experience_level,
+        training_environment=training_environment,
+    ) is None
+
+
 def _profile_signature(profile: NormalizedProfile) -> str:
     payload = {
         "catalog_version": CATALOG_VERSION,
@@ -734,6 +817,28 @@ def _working_set_target(profile: NormalizedProfile, *, is_main: bool) -> int:
     """Keep longer sessions useful without turning high frequency into junk volume."""
     by_duration = {30: 2, 45: 3, 60: 3, 90: 4}
     target = by_duration[profile.session_duration_minutes]
+    if (
+        not is_main
+        and profile.session_duration_minutes == 45
+        and (
+            profile.goal == "strength"
+            or (
+                profile.goal == "fat_loss"
+                and profile.training_environment == "functional_gym"
+            )
+        )
+    ):
+        # A compact support prescription keeps a genuine 45-minute session
+        # inside its promise without simply deleting a duration option.
+        target = 2
+    if (
+        not is_main
+        and profile.goal == "strength"
+        and profile.experience_level == "beginner"
+        and profile.workouts_per_week >= 3
+        and profile.session_duration_minutes <= 60
+    ):
+        target = min(target, 2)
     if profile.workouts_per_week >= 5:
         target = min(target, 2)
     elif profile.workouts_per_week == 4:
@@ -901,12 +1006,18 @@ def _functional_block(
     if not selected:
         raise WorkoutCatalogError("Functional block has no compatible exercises.")
 
-    duration_minutes = {30: 3, 45: 5, 60: 8, 90: 12}[profile.session_duration_minutes]
+    # A 45-minute session keeps a compact but real conditioning finish.  Five
+    # minutes pushed several otherwise sound resistance sessions past the
+    # truthful upper bound, creating an artificial 30/60 duration hole.
+    duration_minutes = {30: 3, 45: 3, 60: 8, 90: 12}[profile.session_duration_minutes]
     if profile.experience_level == "beginner":
         duration_minutes = max(3, duration_minutes - 2)
     target_rounds = None
     if workout_format in {"for_time", "circuit_rounds"}:
-        target_rounds = {30: 2, 45: 3, 60: 3, 90: 4}[profile.session_duration_minutes]
+        # A 45-minute outdoor circuit uses two quality rounds.  A third round
+        # made the compact session exceed its declared time instead of adding
+        # useful strength or conditioning work.
+        target_rounds = {30: 2, 45: 2, 60: 3, 90: 4}[profile.session_duration_minutes]
     reps = 6 if profile.experience_level == "beginner" else 8
     return GeneratedBlockDefinition(
         title="Функциональный тренинг" if environment == "functional_gym" else "Круговая тренировка",
@@ -987,18 +1098,32 @@ def _strength_blueprints(profile: NormalizedProfile) -> tuple[ProgramDayBlueprin
     if profile.training_environment in {"home", "street"}:
         if profile.training_environment == "home":
             # Home deliberately does not pretend that scapular drills are pull
-            # movements.  Each day remains a complete, equipment-free session.
+            # movements.  Its controlled beginner ladder has a genuine squat
+            # successor and the same no-equipment boundary is enforced before
+            # intermediate/advanced plans are allowed to exist.
             relative = (
-                ProgramDayBlueprint("Относительная сила A", ("squat:quads", "horizontal_push:chest", "hinge:glutes", "lunge:quads", "core:core", "isolation:calves")),
-                ProgramDayBlueprint("Относительная сила B", ("lunge:quads", "horizontal_push:chest", "hinge:hamstrings", "scapular_rear_delt:shoulders", "core:core", "isolation:calves")),
-                ProgramDayBlueprint("Относительная сила C", ("squat:quads", "vertical_push:shoulders", "hinge:glutes", "lunge:quads", "scapular_rear_delt:shoulders", "core:core")),
+                ProgramDayBlueprint("Относительная сила A", ("code:bodyweight_squat", "code:push_up", "code:bodyweight_glute_bridge", "lunge:quads", "core:core", "isolation:calves")),
+                ProgramDayBlueprint("Относительная сила B", ("code:bodyweight_squat", "code:push_up", "lunge:quads", "hinge:glutes", "scapular_rear_delt:shoulders", "isolation:calves")),
+                ProgramDayBlueprint("Относительная сила C", ("code:bodyweight_squat", "code:push_up", "code:bodyweight_glute_bridge", "lunge:quads", "scapular_rear_delt:shoulders", "core:core")),
             )
         else:
-            relative = (
-                ProgramDayBlueprint("Относительная сила A", ("squat:quads", "horizontal_push:chest", "vertical_pull:back", "lunge:quads", "core:core")),
-                ProgramDayBlueprint("Относительная сила B", ("hinge:glutes", "horizontal_push:chest", "horizontal_pull:back", "lunge:quads", "isolation:calves")),
-                ProgramDayBlueprint("Относительная сила C", ("squat:quads", "vertical_push:shoulders", "vertical_pull:back", "hinge:hamstrings", "scapular_rear_delt:shoulders")),
-            )
+            if profile.experience_level == "beginner":
+                relative = (
+                    ProgramDayBlueprint("Относительная сила A", ("code:bodyweight_squat", "code:incline_push_up", "code:inverted_row", "hinge:glutes", "core:core")),
+                    ProgramDayBlueprint("Относительная сила B", ("hinge:glutes", "code:incline_push_up", "code:inverted_row", "lunge:quads", "isolation:calves")),
+                    ProgramDayBlueprint("Относительная сила C", ("code:bodyweight_squat", "code:push_up", "code:inverted_row", "hinge:hamstrings", "scapular_rear_delt:shoulders")),
+                )
+            else:
+                # Street has a real, controlled ladder: unilateral legs,
+                # single-leg hinge, pull-up/chin-up and dip progressions.  The
+                # selected code slots prevent a lexicographic fallback to easy
+                # bodyweight squat or push-up as an advanced main movement.
+                pull = "code:chin_up" if profile.experience_level == "advanced" else "code:pull_up"
+                relative = (
+                    ProgramDayBlueprint("Относительная сила A", ("code:reverse_lunge", "code:parallel_bar_dip", pull, "code:single_leg_glute_bridge", "core:core")),
+                    ProgramDayBlueprint("Относительная сила B", ("code:single_leg_glute_bridge", "code:parallel_bar_dip", "code:inverted_row", "code:reverse_lunge", "isolation:calves")),
+                    ProgramDayBlueprint("Относительная сила C", ("code:reverse_lunge", "code:parallel_bar_dip", pull, "code:single_leg_glute_bridge", "scapular_rear_delt:shoulders")),
+                )
         return tuple(relative[index % len(relative)] for index in range(profile.workouts_per_week))
 
     if profile.experience_level == "beginner":
@@ -1014,6 +1139,19 @@ def _strength_blueprints(profile: NormalizedProfile) -> tuple[ProgramDayBlueprin
                 ProgramDayBlueprint("Тяга и жим", ("hinge:glutes", "code:dumbbell_bench_press", "vertical_pull:back", "isolation:triceps")),
                 ProgramDayBlueprint("Ноги и техника", ("squat:quads", "hinge:hamstrings", "horizontal_pull:back", "core:core")),
             )
+    elif profile.experience_level == "intermediate":
+        # Intermediate trainees use loadable S/B/D-supporting movements, but
+        # never an advanced-only conventional deadlift.  The two-day version
+        # therefore remains a real 45/60-minute plan rather than a shortened
+        # day caused by a silently unavailable main lift.
+        base = (
+            ProgramDayBlueprint("Присед и жим", ("code:barbell_back_squat", "code:barbell_bench_press", "horizontal_pull:back", "vertical_pull:back", "core:core", "isolation:calves")),
+            ProgramDayBlueprint("Тяга и поддержка", ("code:barbell_romanian_deadlift", "vertical_pull:back", "horizontal_push:chest", "lunge:quads", "isolation:triceps", "core:core")),
+            ProgramDayBlueprint("Жим", ("code:barbell_bench_press", "horizontal_pull:back", "vertical_push:shoulders", "lunge:quads", "isolation:triceps", "scapular_rear_delt:shoulders")),
+            ProgramDayBlueprint("Присед и поддержка", ("code:barbell_back_squat", "vertical_pull:back", "horizontal_push:chest", "isolation:calves", "core:core")),
+            ProgramDayBlueprint("Жим и верх тела", ("code:barbell_bench_press", "horizontal_pull:back", "vertical_push:shoulders", "isolation:triceps", "scapular_rear_delt:shoulders")),
+            ProgramDayBlueprint("Восстановительная силовая база", ("lunge:quads", "horizontal_pull:back", "vertical_pull:back", "scapular_rear_delt:shoulders", "core:core")),
+        )
     else:
         # S/B/D exposure is intentionally uneven: bench tolerates more useful
         # practice, squat is moderate, and the conventional deadlift is kept to
@@ -1053,6 +1191,16 @@ def _purposeful_fill_slots(profile: NormalizedProfile) -> tuple[str, ...]:
         return (
             "lunge:quads", "hinge:glutes", "core:core", "isolation:calves",
             "vertical_pull:back", "horizontal_push:chest",
+        )
+    if profile.training_environment in {"gym", "functional_gym"}:
+        # A longer session may add only complementary work that supports the
+        # main pattern already chosen for that day.  This is capacity scaling,
+        # not generic filler: exact duplicates are rejected by ``used_codes``
+        # and the weekly recovery gate remains authoritative.
+        return (
+            "horizontal_pull:back", "vertical_pull:back", "lunge:quads",
+            "hinge:glutes", "scapular_rear_delt:shoulders", "isolation:calves",
+            "core:core", "isolation:triceps",
         )
     return ()
 
@@ -1257,6 +1405,50 @@ def _duration_fits(profile: NormalizedProfile, day: GeneratedDayDefinition) -> b
     )
 
 
+def _relative_strength_progression_failures(
+    profile: NormalizedProfile,
+    program: GeneratedProgramDefinition,
+) -> tuple[str, ...]:
+    """Reject easy-only intermediate/advanced bodyweight strength plans."""
+    if (
+        profile.goal != "strength"
+        or profile.training_environment not in {"home", "street"}
+    ):
+        return ()
+    constraint = strength_profile_constraint_message(
+        goal=profile.goal,
+        experience_level=profile.experience_level,
+        training_environment=profile.training_environment,
+    )
+    if constraint is not None:
+        return ("relative-strength profile has no credible catalog ladder",)
+    if profile.experience_level == "beginner":
+        return ()
+
+    failures: list[str] = []
+    easy_main_codes = {
+        "bodyweight_squat",
+        "push_up",
+        "incline_push_up",
+        "bodyweight_glute_bridge",
+    }
+    for day in program.days:
+        if not day.exercises or day.exercises[0].exercise_code in easy_main_codes:
+            failures.append(
+                f"day-{day.day_number}: easy-only relative-strength main movement"
+            )
+
+    weekly_codes = {
+        item.exercise_code for day in program.days for item in day.exercises
+    }
+    ladder = set(RELATIVE_STRENGTH_LADDERS[
+        profile.training_environment
+    ][profile.experience_level])
+    if not ladder <= weekly_codes:
+        failures.append("relative-strength ladder is incomplete")
+    return tuple(failures)
+
+
 def validate_generated_program_quality(
     profile: NormalizedProfile,
     program: GeneratedProgramDefinition,
@@ -1316,6 +1508,7 @@ def validate_generated_program_quality(
         for earlier, later in zip(high_stress_days, high_stress_days[1:])
     ):
         failures.append("consecutive high-stress hinge days")
+    failures.extend(_relative_strength_progression_failures(profile, program))
     return tuple(failures)
 
 
@@ -1327,7 +1520,13 @@ def supported_session_durations(
     training_environment: str,
     workouts_per_week: int,
 ) -> tuple[int, ...]:
-    """Expose only durations that this exact profile can fill truthfully."""
+    """Expose a truthful, user-comprehensible contiguous duration prefix."""
+    if not has_credible_strength_profile(
+        goal=goal,
+        experience_level=experience_level,
+        training_environment=training_environment,
+    ):
+        return ()
     supported: list[int] = []
     for duration in sorted(SUPPORTED_DURATIONS):
         # With no equipment, a 90-minute home session would require either
@@ -1348,14 +1547,25 @@ def supported_session_durations(
         try:
             program = _generate_program_unchecked(candidate)
         except WorkoutCatalogError:
-            continue
-        if not validate_generated_program_quality(candidate, program):
-            supported.append(duration)
+            break
+        if validate_generated_program_quality(candidate, program):
+            # Product-facing duration choices must never have gaps.  If a
+            # shorter option cannot be built honestly, a longer one is not a
+            # meaningful option even if a coincidental estimate happened to fit.
+            break
+        supported.append(duration)
     return tuple(supported)
 
 
 def generate_program(profile: NormalizedProfile) -> GeneratedProgramDefinition:
     """Build a valid deterministic program or fail before a misleading plan exists."""
+    constraint = strength_profile_constraint_message(
+        goal=profile.goal,
+        experience_level=profile.experience_level,
+        training_environment=profile.training_environment,
+    )
+    if constraint is not None:
+        raise WorkoutStrengthProfileUnsupportedError(constraint)
     supported = supported_session_durations(
         goal=profile.goal,
         experience_level=profile.experience_level,

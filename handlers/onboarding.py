@@ -37,7 +37,10 @@ from services.onboarding import (
     update_existing_profile,
     validate_choice,
 )
-from services.workout_plans import supported_session_durations
+from services.workout_plans import (
+    strength_profile_constraint_message,
+    supported_session_durations,
+)
 from storage.config import dp
 from storage.states import Onboarding
 
@@ -218,9 +221,16 @@ async def onboarding_workouts(call: types.CallbackQuery, state: FSMContext):
         workouts_per_week=workouts,
     )
     if not durations:
+        constraint = strength_profile_constraint_message(
+            goal=data["goal"],
+            experience_level=data["experience_level"],
+            training_environment=data["training_environment"],
+        )
         await call.message.edit_text(
-            "Для выбранных условий пока нельзя составить качественную тренировку. "
-            "Выберите другое место или количество тренировок.",
+            constraint or (
+                "Для выбранных условий пока нельзя составить качественную тренировку. "
+                "Выберите другое место или количество тренировок."
+            ),
             reply_markup=onboarding_environment_mkp(),
         )
         await state.set_state(Onboarding.training_environment)

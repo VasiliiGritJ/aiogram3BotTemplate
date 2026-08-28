@@ -38,6 +38,7 @@ from services.exercise_catalog import (
     ExerciseTechnique,
     exercise_definition_by_code,
 )
+from services.workout_plans import strength_profile_constraint_message
 
 
 class WorkoutExecutionError(RuntimeError):
@@ -776,6 +777,13 @@ def change_workout_environment(
                 raise WorkoutEnvironmentIncompatibleError(
                     "A complete training profile is required."
                 )
+            constraint = strength_profile_constraint_message(
+                goal=profile.goal,
+                experience_level=profile.experience_level,
+                training_environment=training_environment,
+            )
+            if constraint is not None:
+                raise WorkoutEnvironmentIncompatibleError(constraint)
             snapshots = session.scalars(
                 select(WorkoutSessionExercise)
                 .where(WorkoutSessionExercise.session_id == workout.id)
@@ -888,6 +896,13 @@ def get_or_start_workout(
                     raise WorkoutEnvironmentIncompatibleError(
                         "Unsupported training environment."
                     )
+                constraint = strength_profile_constraint_message(
+                    goal=profile.goal,
+                    experience_level=profile.experience_level,
+                    training_environment=effective_environment,
+                )
+                if constraint is not None:
+                    raise WorkoutEnvironmentIncompatibleError(constraint)
 
                 access = session.get(UserAccess, user_id)
                 decision = evaluate_access(access, started_at)

@@ -323,6 +323,7 @@ EXERCISE_ALTERNATIVES = {
 BODYWEIGHT_PROGRESSION_SUCCESSORS = {
     "incline_push_up": "push_up",
     "bodyweight_squat": "reverse_lunge",
+    "bodyweight_glute_bridge": "single_leg_glute_bridge",
 }
 
 

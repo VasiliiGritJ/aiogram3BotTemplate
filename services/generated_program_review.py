@@ -18,8 +18,11 @@ from services.workout_plans import (
     DURATION_FIT_MAX_RATIO,
     DURATION_FIT_MIN_RATIO,
     NormalizedProfile,
+    SUPPORTED_DURATIONS,
     estimate_generated_day_minutes,
     generate_program,
+    has_credible_strength_profile,
+    strength_profile_constraint_message,
     supported_session_durations,
     validate_generated_program_quality,
 )
@@ -254,6 +257,16 @@ def build_generated_program_review(
     sbd_exposure_max: Counter[str] = Counter()
     high_rep_conventional_deadlift = 0
     consecutive_high_stress_warnings = 0
+    supported_duration_sets: Counter[str] = Counter()
+    duration_holes = 0
+    only_30_profiles = 0
+    profiles_supporting_60 = 0
+    duration_coverage_by_environment_goal: dict[str, Counter[str]] = {}
+    duration_coverage_by_experience: dict[str, Counter[str]] = {}
+    duration_coverage_by_frequency: dict[str, Counter[str]] = {}
+    relative_strength_progression: dict[str, Counter[str]] = {}
+    unsupported_strength_profiles: Counter[str] = Counter()
+    advanced_strength_easy_variant_failures = 0
 
     for profile in _profile_combinations(environments):
         combinations += 1
@@ -264,6 +277,45 @@ def build_generated_program_review(
             training_environment=profile.training_environment,
             workouts_per_week=profile.workouts_per_week,
         )
+        if profile.session_duration_minutes == 30:
+            duration_set = "/".join(map(str, supported_durations)) or "none"
+            supported_duration_sets[duration_set] += 1
+            expected_prefix = tuple(sorted(SUPPORTED_DURATIONS))[:len(supported_durations)]
+            duration_holes += supported_durations != expected_prefix
+            only_30_profiles += supported_durations == (30,)
+            profiles_supporting_60 += 60 in supported_durations
+
+            environment_goal = f"{profile.training_environment}:{profile.goal}"
+            experience_key = profile.experience_level
+            frequency_key = f"{profile.workouts_per_week}d"
+            for key, target in (
+                (environment_goal, duration_coverage_by_environment_goal),
+                (experience_key, duration_coverage_by_experience),
+                (frequency_key, duration_coverage_by_frequency),
+            ):
+                coverage = target.setdefault(key, Counter())
+                coverage["profiles"] += 1
+                coverage["supports_45"] += 45 in supported_durations
+                coverage["supports_60"] += 60 in supported_durations
+                coverage["supports_90"] += 90 in supported_durations
+
+            if profile.goal == "strength" and profile.training_environment in {"home", "street"}:
+                level_key = f"{profile.training_environment}:{profile.experience_level}"
+                progression = relative_strength_progression.setdefault(level_key, Counter())
+                constraint = strength_profile_constraint_message(
+                    goal=profile.goal,
+                    experience_level=profile.experience_level,
+                    training_environment=profile.training_environment,
+                )
+                if constraint is not None:
+                    progression["constrained"] += 1
+                    unsupported_strength_profiles[f"{level_key}: {constraint}"] += 1
+                elif has_credible_strength_profile(
+                    goal=profile.goal,
+                    experience_level=profile.experience_level,
+                    training_environment=profile.training_environment,
+                ):
+                    progression["supported"] += 1
         if profile.session_duration_minutes not in supported_durations:
             unsupported_duration_cases[
                 f"{profile.training_environment}:{profile.goal}:{profile.session_duration_minutes}"
@@ -475,6 +527,15 @@ def build_generated_program_review(
                     item.progression_type == "bodyweight_reps"
                     for item in weekly_definitions
                 )
+                if profile.experience_level == "advanced":
+                    advanced_strength_easy_variant_failures += any(
+                        not day.exercises
+                        or day.exercises[0].exercise_code in {
+                            "bodyweight_squat", "push_up", "incline_push_up",
+                            "bodyweight_glute_bridge",
+                        }
+                        for day in program.days
+                    )
             for code in ("barbell_back_squat", "barbell_bench_press", "barbell_deadlift"):
                 sbd_exposure_max[code] = max(
                     sbd_exposure_max[code],
@@ -552,6 +613,28 @@ def build_generated_program_review(
             for duration in REVIEW_DURATIONS
         },
         "unsupported_duration_cases": dict(sorted(unsupported_duration_cases.items())),
+        "supported_duration_sets": dict(sorted(supported_duration_sets.items())),
+        "duration_holes": duration_holes,
+        "only_30_profile_count": only_30_profiles,
+        "profiles_supporting_60_count": profiles_supporting_60,
+        "duration_coverage_by_environment_goal": {
+            key: dict(sorted(value.items()))
+            for key, value in sorted(duration_coverage_by_environment_goal.items())
+        },
+        "duration_coverage_by_experience": {
+            key: dict(sorted(value.items()))
+            for key, value in sorted(duration_coverage_by_experience.items())
+        },
+        "duration_coverage_by_frequency": {
+            key: dict(sorted(value.items()))
+            for key, value in sorted(duration_coverage_by_frequency.items())
+        },
+        "relative_strength_progression": {
+            key: dict(sorted(value.items()))
+            for key, value in sorted(relative_strength_progression.items())
+        },
+        "unsupported_strength_profiles": dict(sorted(unsupported_strength_profiles.items())),
+        "advanced_strength_easy_variant_failures": advanced_strength_easy_variant_failures,
         "minimum_viable_day_failures": minimum_viable_day_failures,
         "one_exercise_long_days": one_exercise_long_days,
         "max_weekly_working_sets_by_environment": dict(sorted(weekly_set_max_by_environment.items())),
@@ -631,6 +714,10 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
         f"- One-exercise long days: {metrics['one_exercise_long_days']}",
         f"- High-rep conventional deadlift prescriptions: {metrics['high_rep_conventional_deadlift']}",
         f"- Consecutive high-stress warnings: {metrics['consecutive_high_stress_warnings']}",
+        f"- Duration holes: {metrics['duration_holes']}",
+        f"- Only-30-minute profiles: {metrics['only_30_profile_count']}",
+        f"- Profiles supporting 60 minutes: {metrics['profiles_supporting_60_count']}",
+        f"- Advanced easy-variant strength failures: {metrics['advanced_strength_easy_variant_failures']}",
         "",
         "### Average weekly sets by primary muscle",
         "",
@@ -665,6 +752,12 @@ def format_review_summary(review: GeneratedProgramReview) -> str:
         "",
         "### Duration support and recovery safeguards",
         "",
+        f"- Supported duration sets: {metrics['supported_duration_sets']}",
+        f"- Duration coverage by environment and goal: {metrics['duration_coverage_by_environment_goal']}",
+        f"- Duration coverage by experience: {metrics['duration_coverage_by_experience']}",
+        f"- Duration coverage by frequency: {metrics['duration_coverage_by_frequency']}",
+        f"- Relative-strength progression: {metrics['relative_strength_progression']}",
+        f"- Unsupported strength profiles: {metrics['unsupported_strength_profiles']}",
         f"- Unsupported duration cases: {metrics['unsupported_duration_cases']}",
         f"- Max weekly working sets by environment: {metrics['max_weekly_working_sets_by_environment']}",
         f"- Relative-strength weekly set max: {metrics['relative_strength_weekly_set_max']}",

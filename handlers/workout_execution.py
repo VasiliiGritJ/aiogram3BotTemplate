@@ -517,6 +517,14 @@ def _workout_summary(workout: WorkoutSessionView) -> str:
     )
 
 
+def _environment_constraint_text(error: WorkoutEnvironmentIncompatibleError) -> str:
+    """Expose only deliberate Russian planning constraints to the user."""
+    message = str(error)
+    if message.startswith("Для силовой тренировки дома"):
+        return message
+    return "Текущий день нельзя безопасно адаптировать к выбранному месту. Выберите другое место."
+
+
 @dp.callback_query(F.data.in_({WORKOUT_START_CALLBACK, WORKOUT_RESUME_CALLBACK}))
 async def workout_start_or_resume(
     call: types.CallbackQuery,
@@ -570,6 +578,12 @@ async def workout_start_or_resume(
         await state.clear()
         await call.message.edit_text(
             "Сначала откройте «Мой план», чтобы подготовить тренировку.",
+            reply_markup=workout_menu_markup(user.id),
+        )
+    except WorkoutEnvironmentIncompatibleError as error:
+        await state.clear()
+        await call.message.edit_text(
+            _environment_constraint_text(error),
             reply_markup=workout_menu_markup(user.id),
         )
     except (WorkoutExecutionError, SQLAlchemyError):
@@ -655,9 +669,9 @@ async def workout_environment_action(
                 show_alert=True,
             )
             return
-        except WorkoutEnvironmentIncompatibleError:
+        except WorkoutEnvironmentIncompatibleError as error:
             await call.answer(
-                "Эту тренировку нельзя безопасно перенести в выбранное место.",
+                _environment_constraint_text(error),
                 show_alert=True,
             )
             return
@@ -687,11 +701,10 @@ async def workout_environment_action(
                 "Сначала откройте «Мой план», чтобы подготовить тренировку.",
                 reply_markup=workout_menu_markup(user.id),
             )
-        except WorkoutEnvironmentIncompatibleError:
+        except WorkoutEnvironmentIncompatibleError as error:
             await state.clear()
             await call.message.edit_text(
-                "Текущий день нельзя безопасно адаптировать к выбранному месту. "
-                "Выберите другое место.",
+                _environment_constraint_text(error),
                 reply_markup=workout_environment_choices_mkp("start"),
             )
         except (WorkoutExecutionError, SQLAlchemyError):

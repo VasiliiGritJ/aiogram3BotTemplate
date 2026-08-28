@@ -334,6 +334,30 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             )
         self.assertIsNone(get_active_workout(self.user_id, self.database))
 
+    def test_advanced_strength_home_override_fails_before_snapshot_creation(self) -> None:
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+            profile.goal = "strength"
+            profile.experience_level = "advanced"
+            profile.training_environment = "gym"
+            session.commit()
+        activate_generated_plan_for_profile(self.user_id, self.database)
+
+        with self.assertRaisesRegex(
+            WorkoutEnvironmentIncompatibleError,
+            "недостаточно безопасных вариантов",
+        ):
+            get_or_start_workout(
+                self.user_id,
+                BASE_TIME,
+                self.database,
+                training_environment="home",
+            )
+        self.assertIsNone(get_active_workout(self.user_id, self.database))
+        with self.database() as session:
+            profile = session.get(FitnessProfile, self.user_id)
+        self.assertEqual("gym", profile.training_environment)
+
     def test_environment_change_is_blocked_after_first_recorded_set(self) -> None:
         started = get_or_start_workout(self.user_id, BASE_TIME, self.database)
         step = get_current_step(self.user_id, started.workout.id, self.database)

@@ -4,7 +4,7 @@ from services.exercise_catalog import EXERCISE_DEFINITIONS, exercise_definition_
 from services.workout_plans import (
     HOME_PULL_LIMITATION_NOTICE,
     NormalizedProfile,
-    WorkoutDurationUnsupportedError,
+    WorkoutStrengthProfileUnsupportedError,
     estimate_generated_day_minutes,
     generate_program,
     program_archetype,
@@ -118,29 +118,75 @@ class ProgramArchitectureTests(unittest.TestCase):
         self.assertIn("horizontal_pull", patterns)
         self.assertIn("vertical_pull", patterns)
 
-    def test_strength_is_specific_in_gym_and_relative_at_home_and_street(self) -> None:
+    def test_strength_is_specific_in_gym_and_relative_on_street(self) -> None:
         gym = generate_program(profile(goal="strength", experience="advanced", frequency=3))
         gym_codes = {item.exercise_code for day in gym.days for item in day.exercises}
         self.assertTrue({
             "barbell_back_squat", "barbell_bench_press", "barbell_deadlift",
         }.issubset(gym_codes))
-        for environment in ("home", "street"):
-            with self.subTest(environment=environment):
-                generated = generate_program(profile(
-                    goal="strength", environment=environment, experience="advanced",
-                ))
-                self.assertEqual(
-                    "Относительная сила с собственным весом",
-                    program_archetype(profile(goal="strength", environment=environment)),
+        generated = generate_program(profile(
+            goal="strength", environment="street", experience="advanced",
+        ))
+        self.assertEqual(
+            "Относительная сила с собственным весом",
+            program_archetype(profile(goal="strength", environment="street")),
+        )
+        self.assertTrue(all(
+            item.progression_strategy == ProgressionStrategy.BODYWEIGHT_REPS
+            for day in generated.days for item in day.exercises
+        ))
+        self.assertTrue(all(
+            item.reps_max > 6
+            for day in generated.days for item in day.exercises
+        ))
+        first_exercises = [day.exercises[0].exercise_code for day in generated.days]
+        self.assertNotIn("bodyweight_squat", first_exercises)
+        self.assertNotIn("push_up", first_exercises)
+
+    def test_home_intermediate_and_advanced_strength_fail_closed_without_fake_ladder(self) -> None:
+        for experience in ("intermediate", "advanced"):
+            with self.subTest(experience=experience):
+                current = profile(
+                    goal="strength", environment="home", experience=experience,
+                    frequency=3, duration=30,
                 )
-                self.assertTrue(all(
-                    item.progression_strategy == ProgressionStrategy.BODYWEIGHT_REPS
-                    for day in generated.days for item in day.exercises
+                self.assertEqual(
+                    (),
+                    supported_session_durations(
+                        goal=current.goal,
+                        experience_level=current.experience_level,
+                        training_environment=current.training_environment,
+                        workouts_per_week=current.workouts_per_week,
+                    ),
+                )
+                with self.assertRaisesRegex(
+                    WorkoutStrengthProfileUnsupportedError,
+                    "недостаточно безопасных вариантов",
+                ):
+                    generate_program(current)
+
+    def test_street_relative_strength_uses_controlled_harder_ladders(self) -> None:
+        expected = {
+            "intermediate": {
+                "reverse_lunge", "pull_up", "parallel_bar_dip", "single_leg_glute_bridge",
+            },
+            "advanced": {
+                "reverse_lunge", "chin_up", "parallel_bar_dip", "single_leg_glute_bridge",
+            },
+        }
+        for experience, ladder in expected.items():
+            with self.subTest(experience=experience):
+                generated = generate_program(profile(
+                    goal="strength", environment="street", experience=experience,
+                    frequency=3, duration=60,
                 ))
-                self.assertTrue(all(
-                    item.reps_max > 6
-                    for day in generated.days for item in day.exercises
-                ))
+                weekly_codes = {
+                    item.exercise_code for day in generated.days for item in day.exercises
+                }
+                self.assertTrue(ladder.issubset(weekly_codes))
+                self.assertFalse({"bodyweight_squat", "push_up", "incline_push_up"} & {
+                    day.exercises[0].exercise_code for day in generated.days
+                })
 
     def test_experience_changes_the_actual_prescription(self) -> None:
         programs = [
@@ -184,7 +230,7 @@ class ProgramArchitectureTests(unittest.TestCase):
         current = profile(goal="fat_loss", environment="functional_gym", experience="intermediate", frequency=5, duration=30)
         self.assertEqual(generate_program(current), generate_program(current))
 
-    def test_duration_support_is_truthful_and_long_home_session_is_rejected(self) -> None:
+    def test_duration_support_is_truthful_and_home_strength_limitation_is_explicit(self) -> None:
         home = profile(goal="strength", environment="home", experience="advanced", frequency=2)
         supported = supported_session_durations(
             goal=home.goal,
@@ -192,13 +238,40 @@ class ProgramArchitectureTests(unittest.TestCase):
             training_environment=home.training_environment,
             workouts_per_week=home.workouts_per_week,
         )
-        self.assertIn(60, supported)
-        self.assertNotIn(90, supported)
-        with self.assertRaises(WorkoutDurationUnsupportedError):
+        self.assertEqual((), supported)
+        with self.assertRaises(WorkoutStrengthProfileUnsupportedError):
             generate_program(profile(
-                goal="strength", environment="home", experience="advanced",
-                frequency=2, duration=90,
+                goal="strength", environment="home", experience="advanced", frequency=2,
             ))
+
+    def test_duration_options_are_contiguous_and_required_profiles_keep_sixty_minutes(self) -> None:
+        for environment in ("home", "street", "functional_gym", "gym"):
+            for goal in ("muscle_gain", "strength", "fat_loss"):
+                for experience in ("beginner", "intermediate", "advanced"):
+                    for frequency in (2, 3, 4, 5, 6):
+                        with self.subTest(
+                            environment=environment, goal=goal,
+                            experience=experience, frequency=frequency,
+                        ):
+                            supported = supported_session_durations(
+                                goal=goal,
+                                experience_level=experience,
+                                training_environment=environment,
+                                workouts_per_week=frequency,
+                            )
+                            self.assertEqual(
+                                tuple((30, 45, 60, 90)[:len(supported)]),
+                                supported,
+                            )
+
+        self.assertTrue({30, 45, 60}.issubset(supported_session_durations(
+            goal="strength", experience_level="intermediate",
+            training_environment="functional_gym", workouts_per_week=2,
+        )))
+        self.assertTrue({30, 45, 60}.issubset(supported_session_durations(
+            goal="fat_loss", experience_level="advanced",
+            training_environment="functional_gym", workouts_per_week=2,
+        )))
 
     def test_strength_quality_gate_bounds_sbd_and_deadlift_fatigue(self) -> None:
         current = profile(

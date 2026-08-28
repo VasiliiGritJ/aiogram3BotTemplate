@@ -31,6 +31,21 @@ class GeneratedProgramReviewTests(unittest.TestCase):
         self.assertEqual(0, self.review.audit_metrics["one_exercise_long_days"])
         self.assertEqual(0, self.review.audit_metrics["high_rep_conventional_deadlift"])
         self.assertEqual(0, self.review.audit_metrics["consecutive_high_stress_warnings"])
+        self.assertEqual(0, self.review.audit_metrics["duration_holes"])
+        self.assertEqual(0, self.review.audit_metrics["advanced_strength_easy_variant_failures"])
+        self.assertTrue(self.review.audit_metrics["unsupported_strength_profiles"])
+        self.assertEqual(
+            {"supported": 5},
+            self.review.audit_metrics["relative_strength_progression"]["street:advanced"],
+        )
+        self.assertEqual(
+            {"constrained": 5},
+            self.review.audit_metrics["relative_strength_progression"]["home:advanced"],
+        )
+        self.assertGreater(
+            self.review.audit_metrics["profiles_supporting_60_count"],
+            0,
+        )
         self.assertEqual(0, self.review.audit_metrics["core_every_day_profiles"])
         self.assertEqual(
             {30, 45, 60, 90},
