@@ -1,15 +1,24 @@
 from dataclasses import dataclass
 from environs import Env
-from aiogram import Bot, Dispatcher, Router
-from aiogram.client.default import DefaultBotProperties
+from aiogram import Dispatcher, Router
+
+from storage.telegram_session import create_telegram_bot
 
 def get_value_from_env(variable) -> str:
     env = Env()
     env.read_env("storage/.env")
     return env(variable)
 
+
+def get_optional_value_from_env(variable) -> str:
+    env = Env()
+    env.read_env("storage/.env")
+    return env.str(variable, default="").strip()
+
+
 bot_token = get_value_from_env("BOT_TOKEN")
-bot = Bot(bot_token, default=DefaultBotProperties(parse_mode='html'))
+telegram_proxy_url = get_optional_value_from_env("TELEGRAM_PROXY_URL")
+bot = create_telegram_bot(bot_token, telegram_proxy_url)
 dp = Dispatcher()
 router = Router()
 

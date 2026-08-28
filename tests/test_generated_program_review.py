@@ -1,0 +1,106 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from services.generated_program_review import (
+    CSV_COLUMNS,
+    build_generated_program_review,
+    format_review_summary,
+    write_generated_program_review,
+)
+
+
+class GeneratedProgramReviewTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.review = build_generated_program_review()
+
+    def test_all_requested_profiles_are_exported_deterministically(self) -> None:
+        repeated = build_generated_program_review()
+        self.assertEqual(540, self.review.combinations_count)
+        self.assertEqual(self.review.rows, repeated.rows)
+        self.assertEqual(self.review.validation_failures, repeated.validation_failures)
+        self.assertFalse(self.review.validation_failures)
+        self.assertTrue(self.review.audit_metrics["deterministic_generation"])
+        self.assertEqual(0, self.review.audit_metrics["environment_violations"])
+        self.assertEqual(0, self.review.audit_metrics["fake_pull_claims"])
+        self.assertEqual(0, self.review.audit_metrics["identical_cross_level_programs"])
+        self.assertEqual(0, self.review.audit_metrics["warmup_working_volume_leaks"])
+        self.assertEqual(0, self.review.audit_metrics["warmup_progression_leaks"])
+        self.assertEqual(0, self.review.audit_metrics["minimum_viable_day_failures"])
+        self.assertEqual(0, self.review.audit_metrics["one_exercise_long_days"])
+        self.assertEqual(0, self.review.audit_metrics["high_rep_conventional_deadlift"])
+        self.assertEqual(0, self.review.audit_metrics["consecutive_high_stress_warnings"])
+        self.assertEqual(0, self.review.audit_metrics["duration_holes"])
+        self.assertEqual(0, self.review.audit_metrics["advanced_strength_easy_variant_failures"])
+        self.assertTrue(self.review.audit_metrics["unsupported_strength_profiles"])
+        self.assertEqual(
+            {"supported": 5},
+            self.review.audit_metrics["relative_strength_progression"]["street:advanced"],
+        )
+        self.assertEqual(
+            {"constrained": 5},
+            self.review.audit_metrics["relative_strength_progression"]["home:advanced"],
+        )
+        self.assertGreater(
+            self.review.audit_metrics["profiles_supporting_60_count"],
+            0,
+        )
+        self.assertEqual(0, self.review.audit_metrics["core_every_day_profiles"])
+        self.assertEqual(
+            {30, 45, 60, 90},
+            set(self.review.audit_metrics["average_warmup_minutes_by_duration"]),
+        )
+        self.assertEqual(
+            {30, 45, 60, 90},
+            set(self.review.audit_metrics["duration_p10_p50_p90"]),
+        )
+        duration_metrics = self.review.audit_metrics["duration_p10_p50_p90"]
+        averages = self.review.audit_metrics[
+            "average_estimated_session_minutes_by_duration"
+        ]
+        self.assertLessEqual(duration_metrics[30]["p90"], 35)
+        self.assertGreaterEqual(averages[60], 45)
+        self.assertGreaterEqual(averages[90], averages[60] + 15)
+        for metric in self.review.audit_metrics["duration_fit_days"].values():
+            self.assertEqual(metric["total"], metric["fit"])
+            self.assertEqual(100.0, metric["percent"])
+        self.assertTrue(self.review.audit_metrics["unsupported_duration_cases"])
+        self.assertLessEqual(
+            self.review.audit_metrics["relative_strength_weekly_set_max"]["home"],
+            60,
+        )
+        self.assertLessEqual(
+            self.review.audit_metrics["relative_strength_weekly_set_max"]["street"],
+            60,
+        )
+        self.assertIsInstance(
+            self.review.audit_metrics["profiles_with_exact_repeat_all_six_days"], int,
+        )
+        arms = self.review.audit_metrics["direct_arm_coverage_profiles"]
+        self.assertGreater(arms["street:muscle_gain:biceps"], 0)
+        self.assertEqual(0, arms["home:muscle_gain:biceps"])
+
+    def test_rows_contain_only_environment_compatible_beginner_safe_snapshots(self) -> None:
+        self.assertTrue(self.review.rows)
+        for row in self.review.rows:
+            self.assertEqual(set(CSV_COLUMNS), set(row))
+            self.assertTrue(row["stable_exercise_id"])
+            self.assertTrue(row["display_name"])
+            if row["environment"] == "home":
+                self.assertEqual("bodyweight", row["equipment"])
+
+    def test_writer_creates_csv_and_summary_only_in_requested_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path, summary_path, review = write_generated_program_review(Path(directory))
+            self.assertTrue(csv_path.is_file())
+            self.assertTrue(summary_path.is_file())
+            self.assertTrue((Path(directory) / "stage7_gym_program_review.csv").is_file())
+            self.assertTrue((Path(directory) / "stage7_gym_program_review_summary.md").is_file())
+            self.assertEqual(540, review.combinations_count)
+            self.assertIn("Profile combinations: 540", summary_path.read_text(encoding="utf-8"))
+            self.assertIn("Validation failures: 0", format_review_summary(review))
+
+
+if __name__ == "__main__":
+    unittest.main()
