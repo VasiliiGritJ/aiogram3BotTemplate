@@ -20,7 +20,7 @@
 
 - `[x]` **Stage 5 — ACCEPTED / COMPLETE (sandbox):** migration 6, идемпотентная модель платежей, PaymentService и YooKassa adapter приняты. Sandbox-оплата успешно подтверждена: повторный reconcile не продлевает доступ второй раз; UX корректно показывает оплаченный платный период, зарезервированный после trial, без технического product code и лишних платёжных кнопок. Полный suite — 204/204 PASS. Причина Telegram 409 на локальной машине устранена single-instance guard для polling. Sandbox payment остаётся в защищённой локальной `db.db`. Production-платежи ещё не готовы: требуются отдельные коммерческие, юридические и инфраструктурные решения.
 - `[x]` **Stage 6 — TECHNICAL CHECKPOINT COMPLETE:** разделены test/production payment modes с fail-closed проверкой типа магазина; подготовлены идемпотентный webhook processor, HTTP adapter, runtime contract, health checks и безопасная observability. Полный suite — 235/235 PASS. Реальные production-платежи, webhook registration и deploy не выполнялись и остаются отдельной коммерческой, юридической и hosting-границей.
-- `[~]` **Stage 7 — PRODUCT EXPANSION SPEC FROZEN:** перед production-платежами зафиксированы цели, уровни опыта, среды тренировки, библиотека упражнений, типы программ, замены и расширение progression. Реализация начинается с taxonomy/library; code, schema и реальная `db.db` в docs-block не менялись.
+- `[x]` **Stage 7 — ACCEPTED / COMPLETE:** реализована контролируемая библиотека из 113 упражнений с техникой 113/113, детерминированные evidence-oriented программы и weekly-balance safeguards. Поддержаны Full Body / Upper–Lower / hybrid / PPL A/B, силовые gym/functional программы, честные ограничения relative strength дома/на улице, resistance-first fat loss, truthful supported durations, adaptive warm-up/ramp-up и optional cooldown. Также приняты user text programs, runtime replacement, per-session environment override и полный preview адаптированной тренировки до execution. Live acceptance пройдена; полный suite — 357/357 PASS. Миграции 7–12 применены к защищённой реальной `db.db`; sandbox payment сохранён. Следующая граница — отдельный pre-launch коммерческий и production-readiness блок.
 
 Нумерация «Этапов 0–3» ниже — историческая декомпозиция ранних работ. Незакрытые старые флажки в этих разделах не отменяют подтверждённую приёмку Stage 1. Существующие разделы сохранены без перенумерации как подробная долгосрочная дорожная карта.
 
@@ -264,7 +264,7 @@
 
 ## Ближайшая задача
 
-**Следующая задача — Stage 7A `[~]`:** exercise taxonomy и контролируемая библиотека. Сначала спроектировать и проверить минимальную расширяемую структуру упражнений, сохранить стабильные ID и довести библиотеку до 70 качественных упражнений; затем отдельно расширять профиль и генерацию планов. Точный scope и миграционная граница зафиксированы в [NEXT_TASK.md](NEXT_TASK.md).
+**Следующая задача — Stage 8 `[~]`:** pre-launch commercial polish и production readiness. Сначала отдельно утвердить коммерческую цену, merchant/legal и 54-ФЗ/receipt границы, production payment configuration, публичный webhook/deploy contract и production acceptance; не смешивать эти решения с дальнейшим расширением тренировочной логики. Точный scope зафиксирован в [NEXT_TASK.md](NEXT_TASK.md).
 
 ---
 
@@ -335,6 +335,8 @@
 - Migration: **нет новой по умолчанию**; применяются только уже одобренные миграции после copy acceptance.
 - Риски: регрессия trial/subscription, workout history, access, single-instance polling.
 - Checkpoint: полный suite, compile/diff checks, migration copy acceptance и сценарии owner live acceptance; production payment/deploy не входят в этот этап.
+
+**Статус: ACCEPTED / COMPLETE.** Миграции 7–12 применены и проверены на реальной БД без потери workout/access/payment данных; owner live acceptance подтверждена. Production payments, webhook registration и deploy остаются вне Stage 7.
 
 ## Историческая ближайшая задача (Stage 4)
 

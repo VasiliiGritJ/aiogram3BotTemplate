@@ -1,62 +1,53 @@
 # NEXT_TASK.md
 
-## Следующая задача: Stage 7H — полный product regression и live acceptance
+## Следующая задача: Stage 8 — pre-launch commercial polish и production readiness
 
 ### Принятый baseline
 
-- Stage 7A–7F: контролируемая библиотека из 111 упражнений, расширенный профиль,
-  deterministic generator, multi-type progression, functional/street formats и
-  безопасный импорт пользовательской программы из текста.
-- Stage 7G: во время активной тренировки можно один раз заменить ещё не начатое
-  упражнение на максимум три безопасных эквивалента из taxonomy. Выбор учитывает
-  среду, опыт, primary muscle, movement pattern, progression capability,
-  equivalence/role и оборудование.
-- `planned_exercise_id` и planned snapshot остаются неизменными; меняется только
-  selected snapshot текущей WorkoutSession. Progression продолжает искать историю
-  по фактически выполненному `selected_exercise_id`.
-- STRICT user program не предлагает замену; REPLACEMENTS/ADAPTIVE и generated
-  plans поддерживают её. После первого сохранённого подхода или старта timed block
-  замена блокируется. Stale/duplicate callbacks и ownership проверяются сервисом.
-- Migration 12 не потребовалась: текущая schema уже содержит immutable
-  planned/selected snapshots. Реальная `db.db` остаётся на migration 6 и защищена.
-- Последний local checkpoint: полный unittest suite 300/300 PASS, compileall PASS,
-  `git diff --check` PASS. Live Telegram acceptance ещё не выполнялся.
+- Stage 7 ACCEPTED / COMPLETE: контролируемая библиотека из 113 упражнений,
+  техника 113/113, deterministic evidence-oriented generation, weekly balance,
+  multi-type progression, functional/street formats, user text programs,
+  runtime replacement, per-session environment override и адаптированный preview
+  перед execution.
+- Миграции 7–12 безопасно применены к реальной защищённой `db.db`; workout history,
+  access и единственная sandbox payment сохранены.
+- Final owner live acceptance пройдена; последний полный unittest suite — 357/357
+  PASS. Локальный polling lifecycle защищён single-instance guard.
+- Stage 5–6 дали sandbox payment flow, fail-closed test/production mode boundary и
+  production webhook foundation. Реальные production payments, webhook registration
+  и deploy не выполнялись.
 
-## Цель Stage 7H
+## Цель Stage 8
 
-Провести контролируемую приёмку всего Stage 7 на временной БД/копии и затем в
-Telegram только по отдельному явному разрешению владельца. Цель — подтвердить,
-что новые profile/generator/format/user-program/replacement flows не нарушают
-access, subscription, history, resume и polling lifecycle.
+Подготовить коммерческий и operational go/no-go перед production payments, не
+создавая реальные списания до отдельных явных подтверждений владельца.
 
-### Обязательные проверки
+### Порядок решений и работ
 
-- Один полный regression suite, compileall и `git diff --check` только после
-  окончательного интеграционного checkpoint, без повторов при отсутствии новых
-  кодовых изменений.
-- Copy acceptance migrations 7→8→9→10→11: idempotent second run, `quick_check`,
-  `foreign_key_check`, сохранность Stage 1–6 данных. Реальную `db.db` не
-  мигрировать без отдельного решения владельца.
-- Targeted end-to-end scenarios на temporary DB: generated plans по profile,
-  strict/replacements/adaptive user program, standard and timed formats,
-  replacement before start/after saved work, selected-history progression,
-  cancel/resume/history.
-- Live acceptance — отдельные ограниченные шаги: сначала ровно один bot process,
-  затем owner-driven Telegram checks. Не создавать payments и не выполнять
-  YooKassa actions.
+1. Утвердить коммерческую цену, период и продуктовую формулировку отдельно от
+   sandbox value; не использовать test price как production fallback.
+2. Подтвердить merchant/self-employed, налоговую и 54-ФЗ/receipt модель с
+   компетентным специалистом. Это внешняя юридическая граница, не задача кода.
+3. Подготовить production credentials/configuration только после подтверждения
+   типа магазина и fail-closed verification; secrets не читать и не коммитить.
+4. Выбрать hosting/public HTTPS endpoint, подключить deployment contract и
+   зарегистрировать webhook только отдельным разрешённым шагом.
+5. Провести ограниченную production acceptance без повторных/случайных списаний:
+   provider verification, controlled payment, webhook delivery, idempotent access,
+   receipt/merchant checks и rollback/incident procedure.
 
 ### Safety
 
-- `db.db` не stage/reset/restore/мигрировать; `storage/.env` не читать и не менять.
-- Не выполнять Telegram/YooKassa network actions, bot launch, deploy или push без
-  отдельного явного подтверждения владельца.
-- Новые schema changes/Migration 12 не создавать без доказанного пробела в
-  immutable snapshot semantics.
-- Не смешивать Stage 7H с production payments, webhook registration, legal/commercial
-  decisions или расширением catalogue без отдельной задачи.
+- Не переключать `PAYMENTS_MODE=production` только из-за наличия credentials.
+- Не создавать реальный платёж, не регистрировать webhook и не выполнять deploy без
+  отдельного явного подтверждения владельца после внешних решений выше.
+- `db.db` остаётся защищённой: не stage/reset/restore/delete; `storage/.env` не
+  читать, не показывать и не коммитить.
+- Не смешивать Stage 8 с новыми тренировочными функциями, медицинскими заявлениями
+  или неограниченной AI-генерацией.
 
 ### Done-критерий
 
-Stage 7H завершается только после зелёных технических проверок, copy migration
-acceptance и явной owner live acceptance. После этого можно отдельно обновить
-ROADMAP и запросить разрешение на точный checkpoint commit/push.
+Production launch возможен только после отдельного commercial/legal approval,
+проверенного HTTPS/webhook deployment и успешной контролируемой production
+acceptance с доказанной идемпотентностью доступа.
