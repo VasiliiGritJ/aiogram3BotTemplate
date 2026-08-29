@@ -22,6 +22,19 @@
 Подготовить коммерческий и operational go/no-go перед production payments, не
 создавая реальные списания до отдельных явных подтверждений владельца.
 
+### Текущий технический checkpoint
+
+- Stage 8A–8C подготовили gap audit, централизованную admin authorization,
+  role-specific runtime bootstrap и безопасный SQLite/WAL contract для одного bot
+  и одного webhook process.
+- Import-time dotenv/network side effects удалены; production конфигурация и
+  test/production payment mode проверяются fail-closed до запуска role.
+- Migration/backup/restore gate использует SQLite Backup API и не требует
+  Telegram/payment secrets.
+- Следующий безопасный блок — **Stage 8D: fiscal/receipt boundary decision**. Это
+  внешнее коммерческое/юридическое решение; receipt/54-ФЗ код не добавлять до его
+  явного утверждения.
+
 ### Порядок решений и работ
 
 1. Утвердить коммерческую цену, период и продуктовую формулировку отдельно от

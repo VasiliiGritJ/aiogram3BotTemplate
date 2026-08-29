@@ -61,6 +61,19 @@
 - миграции тестировать на новой временной БД и копии;
 - позднее отдельным этапом безопасно перестать отслеживать runtime DB после проверки создания БД с нуля.
 
+## Production runtime и SQLite maintenance
+
+- `bot.py --production` и `payment_webhook_server.py` используют только environment
+  процесса; локальный `storage/.env` загружается лишь явным dev-entrypoint.
+- Перед migration остановить bot/webhook writers, создать проверенный SQLite Backup
+  API snapshot вне репозитория, применить pending migrations и выполнить
+  `quick_check`/FK/schema verification.
+- Не копировать один `db.db` как online backup при WAL и не делать автоматический
+  restore после ошибки. Restore сначала проверяется в новом временном файле.
+- Production DB работает в WAL с FK и bounded busy timeout для одного bot process и
+  одного webhook process. Несколько replicas/high write load требуют отдельного
+  решения о PostgreSQL.
+
 ## Контроль качества перед commit
 
 Минимум:

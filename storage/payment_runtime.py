@@ -1,8 +1,8 @@
-"""Lazy application composition for the paid-subscription flow.
+"""Explicit application composition for the paid-subscription flow.
 
 No environment file is read while importing this module.  The production
-factory is called only by the subscription UI and requires every commercial
-value explicitly, so a price is never silently invented.
+factory is called by a validated runtime bootstrap and requires every
+commercial value explicitly, so a price is never silently invented.
 """
 
 from dataclasses import dataclass
@@ -40,9 +40,12 @@ class PaymentRuntime:
     mode: PaymentMode
 
 
+_configured_runtime: PaymentRuntime | None = None
+
+
 def build_payment_runtime(read_required: Callable[[str], str]) -> PaymentRuntime:
     """Build the live composition only from injected server-side settings."""
-    mode = _read_payment_mode(read_required)
+    mode = read_payment_mode(read_required)
     amount_value = _read_required(read_required, "SUBSCRIPTION_AMOUNT_MINOR")
     try:
         amount_minor = int(amount_value)
@@ -99,7 +102,7 @@ def _read_required(read_required: Callable[[str], str], name: str) -> str:
     return value.strip()
 
 
-def _read_payment_mode(read_required: Callable[[str], str]) -> PaymentMode:
+def read_payment_mode(read_required: Callable[[str], str]) -> PaymentMode:
     """Read an explicit mode, retaining only safe legacy sandbox compatibility.
 
     Existing local sandbox configuration with ``PAYMENTS_TEST_MODE=true`` stays
@@ -142,8 +145,15 @@ def _read_optional(read_required: Callable[[str], str], name: str) -> str | None
     return value.strip()
 
 
-def get_payment_runtime() -> PaymentRuntime:
-    """Lazily compose production payment dependencies outside Telegram handlers."""
-    from storage.config import get_value_from_env
+def configure_payment_runtime(runtime: PaymentRuntime) -> None:
+    global _configured_runtime
+    if _configured_runtime is not None:
+        raise PaymentRuntimeConfigurationError("Payment runtime is already configured.")
+    _configured_runtime = runtime
 
-    return build_payment_runtime(get_value_from_env)
+
+def get_payment_runtime() -> PaymentRuntime:
+    """Return dependencies validated during the role bootstrap."""
+    if _configured_runtime is None:
+        raise PaymentRuntimeConfigurationError("Payment runtime is not configured.")
+    return _configured_runtime

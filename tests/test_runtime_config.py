@@ -1,0 +1,161 @@
+import importlib
+from pathlib import Path
+import sys
+import unittest
+from unittest.mock import patch
+
+from storage.runtime_config import (
+    ApplicationEnvironment,
+    RuntimeConfigurationError,
+    SettingsReader,
+    build_bot_role_config,
+    build_maintenance_role_config,
+    build_webhook_role_config,
+    process_environment_settings,
+)
+from storage.payment_runtime import PaymentMode
+from storage.runtime_bootstrap import validate_payment_environment
+
+
+SECRET = "secret-value-that-must-not-leak"
+
+
+def settings(values: dict[str, str]) -> SettingsReader:
+    return SettingsReader(values.__getitem__, values.get)
+
+
+class RuntimeConfigTests(unittest.TestCase):
+    def test_bot_module_import_does_not_read_dotenv_or_create_bot(self) -> None:
+        previous_bot = sys.modules.pop("bot", None)
+        previous_config = sys.modules.pop("storage.config", None)
+        try:
+            with (
+                patch("environs.Env.read_env") as read_env,
+                patch("storage.telegram_session.create_telegram_bot") as create_bot,
+            ):
+                module = importlib.import_module("bot")
+            read_env.assert_not_called()
+            create_bot.assert_not_called()
+            self.assertTrue(callable(module.run))
+        finally:
+            sys.modules.pop("bot", None)
+            sys.modules.pop("storage.config", None)
+            if previous_bot is not None:
+                sys.modules["bot"] = previous_bot
+            if previous_config is not None:
+                sys.modules["storage.config"] = previous_config
+
+    def test_process_environment_loader_never_reads_dotenv(self) -> None:
+        with patch("environs.Env.read_env") as read_env:
+            reader = process_environment_settings()
+        read_env.assert_not_called()
+        self.assertIsInstance(reader, SettingsReader)
+
+    def test_legacy_payment_import_no_longer_reads_credentials(self) -> None:
+        sys.modules.pop("payments.yookassa_manager", None)
+        with patch("environs.Env.read_env") as read_env:
+            module = importlib.import_module("payments.yookassa_manager")
+        read_env.assert_not_called()
+        self.assertTrue(hasattr(module, "YOOKassa"))
+
+    def test_development_bot_role_has_only_bot_and_safe_local_defaults(self) -> None:
+        config = build_bot_role_config(
+            settings({"BOT_TOKEN": "123456:test-token"}),
+            expected_environment=ApplicationEnvironment.DEVELOPMENT,
+        )
+        self.assertEqual(Path("db.db").resolve(), config.database_path)
+        self.assertIsNone(config.telegram_proxy_url)
+        self.assertEqual((), config.admin_ids)
+        self.assertNotIn("test-token", repr(config))
+
+    def test_production_bot_role_requires_explicit_environment_and_absolute_db(self) -> None:
+        for values in (
+            {"BOT_TOKEN": "token"},
+            {"APP_ENV": "production", "BOT_TOKEN": "token"},
+            {
+                "APP_ENV": "development",
+                "BOT_TOKEN": "token",
+                "DATABASE_PATH": str(Path("runtime.db").resolve()),
+            },
+        ):
+            with self.subTest(values=values), self.assertRaises(RuntimeConfigurationError):
+                build_bot_role_config(
+                    settings(values),
+                    expected_environment=ApplicationEnvironment.PRODUCTION,
+                )
+
+    def test_webhook_role_has_separate_required_production_config(self) -> None:
+        database = str(Path("runtime.db").resolve())
+        config = build_webhook_role_config(
+            settings(
+                {
+                    "APP_ENV": "production",
+                    "DATABASE_PATH": database,
+                    "PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1",
+                    "PAYMENT_WEBHOOK_BIND_PORT": "8081",
+                    "PAYMENT_WEBHOOK_PATH": "/internal/payment",
+                }
+            ),
+            expected_environment=ApplicationEnvironment.PRODUCTION,
+        )
+        self.assertEqual(Path(database), config.database_path)
+        self.assertEqual(8081, config.bind_port)
+
+        with self.assertRaises(RuntimeConfigurationError):
+            build_webhook_role_config(
+                settings({"APP_ENV": "production", "DATABASE_PATH": database}),
+                expected_environment=ApplicationEnvironment.PRODUCTION,
+            )
+
+    def test_maintenance_role_needs_only_database_path(self) -> None:
+        config = build_maintenance_role_config(
+            settings({"DATABASE_PATH": str(Path("maintenance.db").resolve())})
+        )
+        self.assertEqual(Path("maintenance.db").resolve(), config.database_path)
+
+    def test_application_and_payment_modes_must_match(self) -> None:
+        validate_payment_environment(ApplicationEnvironment.DEVELOPMENT, PaymentMode.TEST)
+        validate_payment_environment(
+            ApplicationEnvironment.PRODUCTION,
+            PaymentMode.PRODUCTION,
+        )
+        for environment, mode in (
+            (ApplicationEnvironment.DEVELOPMENT, PaymentMode.PRODUCTION),
+            (ApplicationEnvironment.PRODUCTION, PaymentMode.TEST),
+        ):
+            with self.subTest(environment=environment, mode=mode):
+                with self.assertRaises(RuntimeConfigurationError):
+                    validate_payment_environment(environment, mode)
+
+    def test_mode_mismatch_blocks_provider_composition_before_side_effects(self) -> None:
+        import bot as bot_entrypoint
+
+        values = {
+            "APP_ENV": "development",
+            "BOT_TOKEN": "123456:test-token",
+            "PAYMENTS_MODE": "production",
+            "PAYMENTS_TEST_MODE": "false",
+        }
+        with patch.object(bot_entrypoint, "build_payment_runtime") as builder:
+            with self.assertRaises(RuntimeConfigurationError):
+                bot_entrypoint.build_bot_application(
+                    settings(values),
+                    expected_environment=ApplicationEnvironment.DEVELOPMENT,
+                )
+        builder.assert_not_called()
+
+    def test_configuration_errors_never_echo_reader_secret(self) -> None:
+        reader = SettingsReader(
+            lambda name: (_ for _ in ()).throw(RuntimeError(SECRET)),
+            lambda name: None,
+        )
+        with self.assertRaises(RuntimeConfigurationError) as error:
+            build_bot_role_config(
+                reader,
+                expected_environment=ApplicationEnvironment.DEVELOPMENT,
+            )
+        self.assertNotIn(SECRET, str(error.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

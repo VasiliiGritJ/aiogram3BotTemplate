@@ -9,10 +9,12 @@ import asyncio
 from dataclasses import dataclass
 from json import JSONDecodeError
 import logging
+import os
 from time import perf_counter
 from typing import Callable, Mapping, Protocol
 
 from aiohttp import web
+from db.models import dbSession
 
 from services.payment_webhook import (
     PaymentWebhookReason,
@@ -24,6 +26,17 @@ from storage.payment_runtime import (
     PaymentMode,
     PaymentRuntimeConfigurationError,
     build_payment_runtime,
+    read_payment_mode,
+)
+from storage.runtime_bootstrap import (
+    initialize_database_runtime,
+    validate_payment_environment,
+)
+from storage.runtime_config import (
+    ApplicationEnvironment,
+    SettingsReader,
+    RuntimeConfigurationError,
+    build_webhook_role_config,
 )
 
 
@@ -153,6 +166,54 @@ def build_payment_webhook_http_runtime(
         create_payment_webhook_app(processor, config),
         config,
     )
+
+
+def build_deployed_payment_webhook_runtime(
+    settings: SettingsReader,
+    *,
+    expected_environment: ApplicationEnvironment,
+) -> PaymentWebhookHttpRuntime:
+    """Validate the complete webhook role before binding any socket."""
+    try:
+        role = build_webhook_role_config(
+            settings,
+            expected_environment=expected_environment,
+        )
+        payment_mode = read_payment_mode(settings)
+        validate_payment_environment(role.environment, payment_mode)
+        payment_runtime = build_payment_runtime(settings)
+        database = initialize_database_runtime(role.database_path)
+        config = PaymentWebhookServerConfig(
+            role.bind_host,
+            role.bind_port,
+            role.path,
+        )
+    except (
+        PaymentRuntimeConfigurationError,
+        RuntimeConfigurationError,
+        ValueError,
+        TypeError,
+    ):
+        raise PaymentWebhookHttpConfigurationError(
+            "Payment webhook configuration is invalid."
+        ) from None
+    logger.info(
+        "runtime_ready role=webhook environment=%s payment_mode=%s "
+        "schema_version=%d sqlite_journal=wal pid=%d",
+        role.environment.value,
+        payment_runtime.mode.value,
+        database.validation.migration_versions[-1],
+        os.getpid(),
+    )
+    processor = YooKassaWebhookProcessor(payment_runtime.payment_service)
+    app = create_payment_webhook_app(processor, config)
+    app.on_cleanup.append(_close_database_runtime)
+    return PaymentWebhookHttpRuntime(app, config)
+
+
+async def _close_database_runtime(app: web.Application) -> None:
+    del app
+    dbSession.dispose()
 
 
 def _build_server_config(

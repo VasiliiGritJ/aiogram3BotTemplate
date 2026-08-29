@@ -1,65 +1,118 @@
-# Шаблон Telegram-бота на Aiogram 3
+# AI Trainer Telegram Bot
 
-## 📚 Описание
-Это полнофункциональный шаблон Telegram-бота на **aiogram 3.x** (текущая версия в requirements — 3.24.0). Включает админ‑панель, интеграцию оплаты, поддержку БД и модульную архитектуру для масштабируемой разработки.
+Русскоязычный Telegram-бот персонального фитнес-тренера на Python 3.12,
+aiogram 3, SQLAlchemy и SQLite. Проект включает детерминированные тренировочные
+программы, журнал и прогрессию, trial/подписку YooKassa и отдельный HTTP runtime
+для платёжных уведомлений.
 
-## 🚀 Возможности
-- **Админ‑панель**: управление пользователями, рассылками и админ‑задачами.
-- **Оплата**: поддержка YooKassa (опционально).
-- **Напоминания**: планирование и отправка напоминаний.
-- **Профили пользователей**: хранение данных в базе.
-- **FSM‑состояния**: удобное управление состояниями диалога.
-- **Конфигурация окружения**: хранение секретов в `.env`.
+## Локальная разработка
 
-## 🛠️ Установка
+1. Создайте виртуальное окружение и установите зависимости из
+   `storage/requirements.txt`.
+2. Скопируйте `storage/.env.example` в локальный `storage/.env` и замените
+   заглушки. Этот файл игнорируется Git и никогда не должен коммититься.
+3. Примените миграции через maintenance-команду после создания проверенного
+   backup (см. ниже).
+4. Запустите bot role явно через локальный loader:
 
-1. Клонируйте репозиторий:
-   ```bash
-   git clone https://github.com/mlt-melt/aiogram3BotTemplate.git
-   cd aiogram3BotTemplate
+   ```powershell
+   .venv\Scripts\python.exe bot.py
    ```
 
-2. Установите зависимости:
-   ```bash
-   pip install -r storage/requirements.txt
-   ```
+Webhook в локальном test mode запускается отдельно и только по явному флагу:
 
-3. Создайте файл `.env` в `storage/` и добавьте токены бота и (опционально) YooKassa.
-
-4. Заполните `storage/config.py`: укажите URL бота и список ID администраторов.
-
-5. Запустите бота:
-   ```bash
-   python bot.py
-   ```
-
-## 📄 Конфигурация
-Настройки находятся в `.env` и `storage/config.py`.
-
-### Пример `.env`:
-```
-BOT_TOKEN=tg_bot_token
-YOOKASSA_SHOP_ID=your_shop_id
-YOOKASSA_SECRET_TOKEN=your_secret_token
+```powershell
+.venv\Scripts\python.exe payment_webhook_server.py --local-env
 ```
 
-## 💻 Использование
-- Запуск: `python bot.py`
-- Команды админ‑панели: `/admin`
-- Обработчики и команды находятся в `handlers/`
+Обычный `import bot` или импорт `storage.config` не читает `.env`, не создаёт
+Telegram client и не запускает сеть.
 
-## 🧠 Технологии
-- **Python**
-- **Aiogram 3.x**
-- **SQLite**
-- **YooKassa API**
+## Runtime roles и конфигурация
 
-## 📊 База данных
-- Используется SQLite база `db.db` для данных пользователей и сессий.
+Production получает настройки только из переменных окружения процесса.
+Наличие credentials само по себе не включает production: одновременно требуются
+`APP_ENV=production` и `PAYMENTS_MODE=production`. Несовпадение test/production
+shop проверяется через существующий fail-closed provider guard до создания
+платежа.
 
-## 👤 Автор
-**Melt**  
-[GitHub Profile](https://github.com/mlt-melt)
+Bot role (`python bot.py --production`) требует:
 
-## 📜 Лицензия
-Проект распространяется по лицензии MIT.
+- `APP_ENV`, абсолютный `DATABASE_PATH`;
+- `BOT_TOKEN`; опционально `TELEGRAM_PROXY_URL`;
+- опциональные `ADMIN_IDS`, `SYSTEMD_SERVICE_NAME`, `DEBUG_MODE`;
+- `PAYMENTS_MODE`, `SUBSCRIPTION_AMOUNT_MINOR`, `SUBSCRIPTION_CURRENCY`,
+  `YOOKASSA_RETURN_URL`, `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_TOKEN`.
+
+Webhook role (`python payment_webhook_server.py`) требует:
+
+- `APP_ENV=production`, абсолютный `DATABASE_PATH`;
+- все payment-переменные выше;
+- `PAYMENT_WEBHOOK_BIND_HOST`, `PAYMENT_WEBHOOK_BIND_PORT`,
+  `PAYMENT_WEBHOOK_PATH`.
+
+Maintenance role не читает Telegram/YooKassa credentials: ему передаётся только
+явный путь к БД. Ошибки bootstrap не содержат значения секретов.
+
+## SQLite: два процесса
+
+Поддерживаемая MVP-схема — один bot process и один webhook process с одной
+persistent SQLite DB. Все SQLAlchemy connections централизованно получают:
+
+- `foreign_keys=ON`;
+- `busy_timeout=5000` мс и connection timeout 5 секунд;
+- WAL journal и `synchronous=NORMAL`.
+
+WAL позволяет коротким bot/webhook-транзакциям читать и писать без обычной
+блокировки reader-versus-writer. Каждый service operation создаёт собственную
+SQLAlchemy Session; Session не разделяется между потоками или процессами.
+Платёжная идемпотентность и атомарная выдача доступа остаются на уровне БД/service.
+
+SQLite не является целью для нескольких application replicas или высокой
+постоянной write-нагрузки. При появлении нескольких bot/webhook replicas,
+регулярном исчерпании busy timeout или необходимости HA следующий шаг —
+PostgreSQL, а не увеличение таймаутов.
+
+## Миграции, backup и restore
+
+Перед production migration:
+
+1. Остановить bot и webhook writers.
+2. Проверить абсолютный путь активной БД.
+3. Создать новый backup вне репозитория и вне каталога активной БД.
+4. Применить только pending migrations.
+5. Проверить `quick_check`, foreign keys и полный набор schema versions.
+6. Запускать webhook/bot только после PASS.
+
+Maintenance helper использует SQLite Backup API, поэтому snapshot включает
+закоммиченные данные WAL. Нельзя заменять его копированием одного `db.db` при
+активном WAL.
+
+```powershell
+.venv\Scripts\python.exe -m db.maintenance validate --database D:\data\trainer.db
+.venv\Scripts\python.exe -m db.maintenance backup --database D:\data\trainer.db --destination D:\backups\trainer-YYYYMMDD.db
+.venv\Scripts\python.exe -m db.maintenance migrate --database D:\data\trainer.db --backup D:\backups\trainer-pre-migration-YYYYMMDD.db --writers-stopped
+.venv\Scripts\python.exe -m db.maintenance restore-copy --backup D:\backups\trainer-YYYYMMDD.db --destination D:\restore-drill\trainer.db
+```
+
+Backup/restore destination должен быть новым: существующий файл не
+перезаписывается. При ошибке миграции процессы остаются остановленными; helper не
+делает автоматический restore. Восстановление выполняется оператором в новый файл
+после проверки причины и integrity.
+
+## Production startup и health
+
+Рекомендуемый порядок: migration gate → webhook process → bot process → внешний
+reverse proxy. TLS и публичный HTTPS endpoint принадлежат deploy/reverse-proxy
+слою, а webhook bind остаётся приватным.
+
+- `/health/live` подтверждает, что HTTP process жив;
+- `/health/ready` доступен только у runtime, собранного после успешной проверки
+  конфигурации и схемы.
+
+Health endpoints не вызывают YooKassa, не меняют БД и не раскрывают пути или
+секреты. При shutdown webhook освобождает DB engine; bot корректно останавливает
+polling, закрывает Telegram session, DB resources и single-instance guard.
+
+Runtime `db.db`, `db.db-wal`, `db.db-shm`, backups и `storage/.env` никогда не
+должны попадать в Git staging или deployment через Git.

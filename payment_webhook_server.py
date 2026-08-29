@@ -1,18 +1,37 @@
-"""Separate production entrypoint for the YooKassa webhook HTTP process.
+"""Explicit entrypoint for the separate YooKassa webhook HTTP role."""
 
-It intentionally reads only the process environment.  It does not load the
-local ``storage/.env`` file and does not import or start the Telegram bot.
-"""
+from __future__ import annotations
+
+import argparse
 
 from aiohttp import web
-from environs import Env
 
-from storage.payment_webhook_http import build_payment_webhook_http_runtime
+from storage.payment_webhook_http import build_deployed_payment_webhook_runtime
+from storage.runtime_config import (
+    ApplicationEnvironment,
+    local_development_settings,
+    process_environment_settings,
+)
 
 
-def main() -> None:
-    env = Env()
-    runtime = build_payment_webhook_http_runtime(env)
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Run the payment webhook role.")
+    parser.add_argument(
+        "--local-env",
+        action="store_true",
+        help="Explicitly load storage/.env for local test-mode development.",
+    )
+    arguments = parser.parse_args(argv)
+    if arguments.local_env:
+        settings = local_development_settings()
+        environment = ApplicationEnvironment.DEVELOPMENT
+    else:
+        settings = process_environment_settings()
+        environment = ApplicationEnvironment.PRODUCTION
+    runtime = build_deployed_payment_webhook_runtime(
+        settings,
+        expected_environment=environment,
+    )
     web.run_app(
         runtime.app,
         host=runtime.config.bind_host,

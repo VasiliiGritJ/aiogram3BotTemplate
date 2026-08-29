@@ -6,28 +6,26 @@ from sqlalchemy import (
     Index,
     Integer,
     UniqueConstraint,
-    create_engine,
-    event,
     text,
 )
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
+from db.runtime import SQLitePolicy, create_sqlite_engine, sqlite_url
+
 class Base(DeclarativeBase):
     pass
 
 class SqliteSession:
-    def __init__(self, database_url: str = "sqlite:///db.db"):
-        self._engine = create_engine(database_url)
-        event.listen(self._engine, "connect", self._enable_foreign_keys)
+    def __init__(
+        self,
+        database_url: str = "sqlite:///db.db",
+        policy: SQLitePolicy = SQLitePolicy(),
+    ):
+        self._database_url = database_url
+        self._policy = policy
+        self._engine = create_sqlite_engine(database_url, policy)
         self._session = sessionmaker(bind=self._engine, expire_on_commit=False)
-
-    @staticmethod
-    def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
-        del connection_record
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
 
     @property
     def engine(self):
@@ -51,7 +49,20 @@ class SqliteSession:
     def dispose(self) -> None:
         self._engine.dispose()
 
+    def reconfigure(self, database_url: str) -> None:
+        """Point the process-wide session factory at a validated bootstrap DB."""
+        if not isinstance(database_url, str) or not database_url.startswith("sqlite:///"):
+            raise ValueError("A SQLite database URL is required.")
+        self.dispose()
+        self._database_url = database_url
+        self._engine = create_sqlite_engine(database_url, self._policy)
+        self._session.configure(bind=self._engine)
+
 dbSession = SqliteSession()
+
+
+def configure_database(database_path: str) -> None:
+    dbSession.reconfigure(sqlite_url(database_path))
 
 
 from sqlalchemy import exc

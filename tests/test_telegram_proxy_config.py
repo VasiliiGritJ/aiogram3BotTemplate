@@ -46,30 +46,14 @@ class TelegramProxyConfigTests(unittest.TestCase):
         finally:
             self.close_bot(bot)
 
-    def test_config_reads_optional_proxy_without_opening_real_env_file(self) -> None:
-        values = {"BOT_TOKEN": TEST_TOKEN}
-        read_paths: list[str] = []
-
-        class _Env:
-            def read_env(self, path: str) -> None:
-                read_paths.append(path)
-
-            def __call__(self, variable: str) -> str:
-                return values[variable]
-
-            def str(self, variable: str, default: str = "") -> str:
-                return values.get(variable, default)
-
-        fake_environs = python_types.ModuleType("environs")
-        fake_environs.Env = _Env
+    def test_config_import_has_no_dotenv_or_bot_creation_side_effect(self) -> None:
         previous_config = sys.modules.pop("storage.config", None)
         try:
-            with patch.dict(sys.modules, {"environs": fake_environs}):
+            with patch("environs.Env.read_env") as read_env:
                 config = importlib.import_module("storage.config")
-            self.assertEqual("", config.telegram_proxy_url)
-            self.assertIsNone(config.bot.session._proxy)
-            self.assertEqual(["storage/.env", "storage/.env"], read_paths)
-            self.close_bot(config.bot)
+            read_env.assert_not_called()
+            self.assertIsNone(config.telegram_proxy_url)
+            self.assertIsNone(config.bot)
         finally:
             sys.modules.pop("storage.config", None)
             if previous_config is not None:
@@ -140,7 +124,14 @@ class TelegramProxyConfigTests(unittest.TestCase):
         with patch.dict(sys.modules, module_names):
             sys.modules.pop("bot", None)
             bot_module = importlib.import_module("bot")
-            asyncio.run(bot_module.main())
+            runtime = bot_module.BotApplicationRuntime(
+                config.bot,
+                config.dp,
+                object(),
+                bot_module.ApplicationEnvironment.DEVELOPMENT,
+            )
+            with patch("db.models.dbSession.dispose"):
+                asyncio.run(bot_module.main(runtime))
             sys.modules.pop("bot", None)
 
         self.assertIn(config.bot, calls)
