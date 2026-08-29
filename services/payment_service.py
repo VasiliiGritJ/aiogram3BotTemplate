@@ -30,6 +30,7 @@ from services.payment_provider import (
     PaymentProviderError,
     ProviderPayment,
 )
+from services.receipt_service import ensure_receipt_intent
 
 
 class PaymentServiceReason(StrEnum):
@@ -420,6 +421,7 @@ class PaymentService:
         payment.access_applied_at = now
         payment.grant_started_at = grant.started_at
         payment.grant_ends_at = grant.ends_at
+        ensure_receipt_intent(session, payment, now=now)
         return self._result_from_payment(
             payment,
             PaymentServiceReason.ACCESS_APPLIED,

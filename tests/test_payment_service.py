@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 
 from db.migrations import run_migrations
-from db.models import SqliteSession, SubscriptionPayment, UserAccess
+from db.models import PaymentReceipt, SqliteSession, SubscriptionPayment, UserAccess
 from services.access import AccessStatus, activate_trial_once, evaluate_access
 from services.payment_domain import PaymentStatus
 from services.payment_provider import (
@@ -38,7 +38,7 @@ class PaymentServiceTests(unittest.TestCase):
         )
         self._key_number = 0
         self.assertEqual(
-            (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+            (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
             run_migrations(self.database.engine),
         )
         with self.database.engine.begin() as connection:
@@ -438,12 +438,16 @@ class PaymentServiceTests(unittest.TestCase):
         self.assertEqual(PaymentStatus.CREATING, payment.status)
         self.assertIsNone(payment.access_applied_at)
         self.assertIsNone(access.subscription_ends_at)
+        with self.database() as session:
+            self.assertEqual(0, session.scalar(select(func.count(PaymentReceipt.id))))
 
         retried = service.get_or_create_payment(1)
         payment, access = self.payment_and_access()
         self.assertTrue(retried.access_applied)
         self.assertEqual(PaymentStatus.SUCCEEDED, payment.status)
         self.assertIsNotNone(access.subscription_ends_at)
+        with self.database() as session:
+            self.assertEqual(1, session.scalar(select(func.count(PaymentReceipt.id))))
 
 
 if __name__ == "__main__":

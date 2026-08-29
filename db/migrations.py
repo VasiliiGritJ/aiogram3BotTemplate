@@ -824,6 +824,65 @@ def _add_effective_training_environment(connection: Connection) -> None:
     )
 
 
+def _create_npd_receipt_outbox(connection: Connection) -> None:
+    """Add durable receipt intents without fiscalizing historic payments."""
+    connection.exec_driver_sql(
+        """CREATE TABLE IF NOT EXISTS payment_receipts (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            subscription_payment_id INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at DATETIME,
+            processing_started_at DATETIME,
+            claim_token TEXT,
+            provider_receipt_id TEXT,
+            product_code TEXT NOT NULL,
+            amount_minor INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            service_period_days INTEGER NOT NULL,
+            item_description TEXT NOT NULL,
+            payment_reference TEXT NOT NULL,
+            buyer_contact TEXT,
+            income_received_at DATETIME NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            succeeded_at DATETIME,
+            last_error_code TEXT,
+            CONSTRAINT ck_payment_receipts_status CHECK (status IN (
+                'pending', 'processing', 'succeeded', 'retryable_failed',
+                'permanent_failed', 'voided'
+            )),
+            CONSTRAINT ck_payment_receipts_attempts CHECK (attempts >= 0),
+            CONSTRAINT ck_payment_receipts_amount_minor CHECK (amount_minor > 0),
+            CONSTRAINT ck_payment_receipts_currency CHECK (
+                length(currency) = 3 AND currency = upper(currency)
+            ),
+            CONSTRAINT ck_payment_receipts_period_days CHECK (
+                service_period_days > 0
+            ),
+            CONSTRAINT ck_payment_receipts_description CHECK (
+                length(item_description) > 0
+            ),
+            CONSTRAINT uq_payment_receipts_subscription_payment
+                UNIQUE (subscription_payment_id),
+            CONSTRAINT uq_payment_receipts_idempotency UNIQUE (idempotency_key),
+            FOREIGN KEY(subscription_payment_id)
+                REFERENCES subscription_payments(id) ON DELETE RESTRICT
+        )"""
+    )
+    connection.exec_driver_sql(
+        """CREATE UNIQUE INDEX IF NOT EXISTS
+            uq_payment_receipts_provider_receipt_id
+        ON payment_receipts(provider_receipt_id)
+        WHERE provider_receipt_id IS NOT NULL"""
+    )
+    connection.exec_driver_sql(
+        """CREATE INDEX IF NOT EXISTS ix_payment_receipts_delivery
+        ON payment_receipts(status, next_attempt_at, id)"""
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -841,6 +900,7 @@ MIGRATIONS = (
         "workout_session_effective_training_environment",
         _add_effective_training_environment,
     ),
+    Migration(13, "npd_receipt_outbox", _create_npd_receipt_outbox),
 )
 
 

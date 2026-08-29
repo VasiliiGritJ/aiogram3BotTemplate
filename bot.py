@@ -21,6 +21,7 @@ from storage.runtime_bootstrap import (
     initialize_database_runtime,
     validate_payment_environment,
 )
+from storage.receipt_runtime import build_receipt_runtime_config
 from storage.runtime_config import (
     ApplicationEnvironment,
     SettingsReader,
@@ -64,6 +65,7 @@ def build_bot_application(
     config = build_bot_role_config(settings, expected_environment=expected_environment)
     payment_mode = read_payment_mode(settings)
     validate_payment_environment(config.environment, payment_mode)
+    build_receipt_runtime_config(settings, environment=config.environment)
     payment_runtime = build_payment_runtime(settings)
     database = initialize_database_runtime(config.database_path)
     configure_payment_runtime(payment_runtime)

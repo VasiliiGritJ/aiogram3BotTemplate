@@ -14,6 +14,7 @@ from storage.runtime_config import (
     process_environment_settings,
 )
 from storage.payment_runtime import PaymentMode
+from storage.receipt_runtime import ReceiptMode, build_receipt_runtime_config
 from storage.runtime_bootstrap import validate_payment_environment
 
 
@@ -155,6 +156,43 @@ class RuntimeConfigTests(unittest.TestCase):
                 expected_environment=ApplicationEnvironment.DEVELOPMENT,
             )
         self.assertNotIn(SECRET, str(error.exception))
+
+    def test_receipts_default_to_disabled_only_in_development(self) -> None:
+        config = build_receipt_runtime_config(
+            settings({}),
+            environment=ApplicationEnvironment.DEVELOPMENT,
+        )
+        self.assertIs(ReceiptMode.DISABLED, config.mode)
+        with self.assertRaises(RuntimeConfigurationError):
+            build_receipt_runtime_config(
+                settings({}),
+                environment=ApplicationEnvironment.PRODUCTION,
+            )
+
+    def test_receipt_test_mode_is_explicit_and_provider_neutral(self) -> None:
+        config = build_receipt_runtime_config(
+            settings({"RECEIPTS_MODE": "test", "RECEIPT_PROVIDER": "fake"}),
+            environment=ApplicationEnvironment.DEVELOPMENT,
+        )
+        self.assertIs(ReceiptMode.TEST, config.mode)
+        self.assertEqual("fake", config.provider_code)
+
+    def test_production_receipts_fail_closed_until_adapter_is_available(self) -> None:
+        values = {
+            "RECEIPTS_MODE": "production",
+            "RECEIPT_PROVIDER": "future_authorized_operator",
+        }
+        with self.assertRaises(RuntimeConfigurationError):
+            build_receipt_runtime_config(
+                settings(values),
+                environment=ApplicationEnvironment.PRODUCTION,
+            )
+        config = build_receipt_runtime_config(
+            settings(values),
+            environment=ApplicationEnvironment.PRODUCTION,
+            provider_adapter_available=True,
+        )
+        self.assertIs(ReceiptMode.PRODUCTION, config.mode)
 
 
 if __name__ == "__main__":

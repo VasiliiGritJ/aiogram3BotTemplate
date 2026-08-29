@@ -32,6 +32,7 @@ from storage.runtime_bootstrap import (
     initialize_database_runtime,
     validate_payment_environment,
 )
+from storage.receipt_runtime import build_receipt_runtime_config
 from storage.runtime_config import (
     ApplicationEnvironment,
     SettingsReader,
@@ -181,6 +182,7 @@ def build_deployed_payment_webhook_runtime(
         )
         payment_mode = read_payment_mode(settings)
         validate_payment_environment(role.environment, payment_mode)
+        build_receipt_runtime_config(settings, environment=role.environment)
         payment_runtime = build_payment_runtime(settings)
         database = initialize_database_runtime(role.database_path)
         config = PaymentWebhookServerConfig(

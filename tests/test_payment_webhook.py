@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 
 from db.migrations import run_migrations
-from db.models import SqliteSession, SubscriptionPayment, UserAccess
+from db.models import PaymentReceipt, SqliteSession, SubscriptionPayment, UserAccess
 from services.payment_domain import PaymentStatus
 from services.payment_provider import PaymentProviderUnavailable, ProviderPayment
 from services.payment_service import PaymentService, SubscriptionProduct
@@ -141,6 +141,7 @@ class PaymentWebhookTests(unittest.TestCase):
             self.assertEqual(
                 1, session.scalar(select(func.count(SubscriptionPayment.id)))
             )
+            self.assertEqual(1, session.scalar(select(func.count(PaymentReceipt.id))))
 
     def test_payload_succeeded_cannot_override_pending_or_canceled_provider(self) -> None:
         for status in (PaymentStatus.PENDING, PaymentStatus.CANCELED):

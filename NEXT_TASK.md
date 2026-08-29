@@ -35,12 +35,26 @@
   внешнее коммерческое/юридическое решение; receipt/54-ФЗ код не добавлять до его
   явного утверждения.
 
+### Stage 8D1 technical checkpoint
+
+- Launch route зафиксирован как self-employed/NPD: доходный чек НПД отделён от
+  YooKassa payment lifecycle и не моделируется как 54-ФЗ KKT flow.
+- Migration 13 добавляет durable provider-neutral receipt outbox без backfill
+  исторического sandbox payment. Payment success, access grant и новый receipt
+  intent сходятся в одной exactly-once транзакции.
+- Receipt worker foundation использует стабильный idempotency key, SQLite-safe
+  claim lease и bounded retry; внешнего provider adapter/daemon пока нет.
+- Production receipt runtime остаётся fail-closed. Следующая внешняя граница —
+  выбрать уполномоченного ФНС оператора НПД и подтвердить совместимость с текущей
+  YooKassa/merchant схемой до credentials, сети и production acceptance.
+
 ### Порядок решений и работ
 
-1. Утвердить коммерческую цену, период и продуктовую формулировку отдельно от
-   sandbox value; не использовать test price как production fallback.
-2. Подтвердить merchant/self-employed, налоговую и 54-ФЗ/receipt модель с
-   компетентным специалистом. Это внешняя юридическая граница, не задача кода.
+1. Зафиксировано: 499 RUB, 30 дней, без автопродления; server-side receipt item —
+   `Доступ к сервису «Мой AI Тренер» на 30 дней`.
+2. Подтвердить финальную merchant/self-employed/NPD receipt модель и выбранного
+   уполномоченного оператора с компетентным специалистом. Это внешняя юридическая
+   граница, не задача кода.
 3. Подготовить production credentials/configuration только после подтверждения
    типа магазина и fail-closed verification; secrets не читать и не коммитить.
 4. Выбрать hosting/public HTTPS endpoint, подключить deployment contract и

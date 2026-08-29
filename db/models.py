@@ -366,6 +366,74 @@ class SubscriptionPayment(Base):
     )
 
 
+class PaymentReceipt(Base):
+    __tablename__ = "payment_receipts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'succeeded', "
+            "'retryable_failed', 'permanent_failed', 'voided')",
+            name="ck_payment_receipts_status",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_payment_receipts_attempts"),
+        CheckConstraint("amount_minor > 0", name="ck_payment_receipts_amount_minor"),
+        CheckConstraint(
+            "length(currency) = 3 AND currency = upper(currency)",
+            name="ck_payment_receipts_currency",
+        ),
+        CheckConstraint(
+            "service_period_days > 0",
+            name="ck_payment_receipts_period_days",
+        ),
+        CheckConstraint(
+            "length(item_description) > 0",
+            name="ck_payment_receipts_description",
+        ),
+        UniqueConstraint(
+            "subscription_payment_id",
+            name="uq_payment_receipts_subscription_payment",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_payment_receipts_idempotency"),
+        Index(
+            "uq_payment_receipts_provider_receipt_id",
+            "provider_receipt_id",
+            unique=True,
+            sqlite_where=text("provider_receipt_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_payment_receipts_delivery",
+            "status",
+            "next_attempt_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    subscription_payment_id: Mapped[int] = mapped_column(
+        ForeignKey("subscription_payments.id", ondelete="RESTRICT")
+    )
+    idempotency_key: Mapped[str] = mapped_column(Text())
+    status: Mapped[str] = mapped_column(Text(), server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer(), server_default="0")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    claim_token: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    provider_receipt_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    product_code: Mapped[str] = mapped_column(Text())
+    amount_minor: Mapped[int] = mapped_column(Integer())
+    currency: Mapped[str] = mapped_column(Text())
+    service_period_days: Mapped[int] = mapped_column(Integer())
+    item_description: Mapped[str] = mapped_column(Text())
+    payment_reference: Mapped[str] = mapped_column(Text())
+    buyer_contact: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    income_received_at: Mapped[datetime] = mapped_column(DateTime())
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+    succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
+
+
 class Exercise(Base):
     __tablename__ = "exercises"
 
