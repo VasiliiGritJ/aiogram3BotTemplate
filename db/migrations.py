@@ -883,6 +883,13 @@ def _create_npd_receipt_outbox(connection: Connection) -> None:
     )
 
 
+def _add_receipt_email_to_fitness_profile(connection: Connection) -> None:
+    """Keep an optional receipt-delivery contact without changing historic users."""
+    connection.exec_driver_sql(
+        "ALTER TABLE fitness_profiles ADD COLUMN receipt_email TEXT"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -901,6 +908,11 @@ MIGRATIONS = (
         _add_effective_training_environment,
     ),
     Migration(13, "npd_receipt_outbox", _create_npd_receipt_outbox),
+    Migration(
+        14,
+        "fitness_profile_receipt_email",
+        _add_receipt_email_to_fitness_profile,
+    ),
 )
 
 

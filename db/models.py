@@ -244,6 +244,7 @@ class FitnessProfile(Base):
     workouts_per_week: Mapped[int] = mapped_column(Integer())
     session_duration_minutes: Mapped[int] = mapped_column(Integer())
     limitations: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    receipt_email: Mapped[str | None] = mapped_column(Text(), nullable=True)
     completed_at: Mapped[datetime] = mapped_column(DateTime())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(), server_default=func.now()

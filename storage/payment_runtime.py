@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from services.payment_service import PaymentService, SubscriptionProduct
 from services.yookassa_provider import YooKassaCredentials, YooKassaProvider
+from services.receipt_email import get_receipt_email
 
 
 PRODUCT_CODE = "monthly_30d_v1"
@@ -80,6 +81,7 @@ def build_payment_runtime(read_required: Callable[[str], str]) -> PaymentRuntime
             provider,
             product,
             expected_test_mode=mode.expects_test_shop,
+            receipt_email_required=lambda user_id: get_receipt_email(user_id) is not None,
         )
     except ValueError as error:
         raise PaymentRuntimeConfigurationError(

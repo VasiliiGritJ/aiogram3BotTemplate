@@ -95,11 +95,17 @@ def cancel_mpk():
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=btns)
 
-def profile_mpk():
+def profile_mpk(*, receipt_email_set: bool = False):
     btns = [
         [
             types.InlineKeyboardButton(
                 text="Изменить профиль", callback_data="profile:edit"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text=("Изменить email для чеков" if receipt_email_set else "Добавить email для чеков"),
+                callback_data="profile:receipt_email",
             )
         ],
         [
@@ -110,6 +116,15 @@ def profile_mpk():
         ],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=btns)
+
+
+def receipt_email_mpk(*, back_callback: str = "profile"):
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="↩️ Назад", callback_data=back_callback
+        )],
+        [types.InlineKeyboardButton(text="🏠 В меню", callback_data="start")],
+    ])
 
 
 def workout_plan_mkp(

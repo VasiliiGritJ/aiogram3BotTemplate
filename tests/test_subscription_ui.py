@@ -15,6 +15,7 @@ from services.payment_service import (
     PaymentServiceResult,
     SubscriptionProduct,
 )
+from services.receipt_email import ReceiptEmailValidationError
 from storage.payment_runtime import (
     PaymentMode,
     PaymentRuntime,
@@ -25,6 +26,9 @@ from storage.payment_runtime import (
 
 class _Dispatcher:
     def callback_query(self, *args, **kwargs):
+        return lambda handler: handler
+
+    def message(self, *args, **kwargs):
         return lambda handler: handler
 
 
@@ -53,9 +57,13 @@ class _FromUser:
 class _Message:
     def __init__(self) -> None:
         self.edits: list[tuple[str, object]] = []
+        self.answers: list[tuple[str, object]] = []
 
     async def edit_text(self, text, reply_markup=None):
         self.edits.append((text, reply_markup))
+
+    async def answer(self, text, reply_markup=None):
+        self.answers.append((text, reply_markup))
 
 
 class _Call:
@@ -72,9 +80,20 @@ class _Call:
 class _State:
     def __init__(self) -> None:
         self.clear_count = 0
+        self.states = []
 
     async def clear(self):
         self.clear_count += 1
+
+    async def set_state(self, value):
+        self.states.append(value)
+
+
+class _IncomingMessage(_Message):
+    def __init__(self, text, user_id=101) -> None:
+        super().__init__()
+        self.text = text
+        self.from_user = _FromUser(user_id)
 
 
 class _PaymentService:
@@ -295,6 +314,7 @@ class SubscriptionUiTests(unittest.TestCase):
         call = _Call("subscription:pay")
         with (
             patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(subscription_ui, "get_receipt_email", return_value="user@example.com"),
             patch.object(subscription_ui, "get_payment_runtime", return_value=self.runtime(service)),
             patch.object(subscription_ui, "get_access_decision", return_value=AccessDecision(AccessStatus.TRIAL_AVAILABLE, None)),
         ):
@@ -304,6 +324,65 @@ class SubscriptionUiTests(unittest.TestCase):
         markup = call.message.edits[-1][1]
         self.assertIn("subscription:check:11", self.callbacks(markup))
         self.assertEqual("https://example.invalid/pay", markup.inline_keyboard[0][0].url)
+
+    def test_missing_receipt_email_prompts_before_any_payment_is_created(self):
+        service = _PaymentService(create=result(reason=PaymentServiceReason.CREATED))
+        call = _Call("subscription:pay")
+        state = _State()
+        with (
+            patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(subscription_ui, "get_payment_runtime", return_value=self.runtime(service)),
+            patch.object(subscription_ui, "get_access_decision", return_value=AccessDecision(AccessStatus.TRIAL_AVAILABLE, None)),
+            patch.object(subscription_ui, "get_receipt_email", return_value=None),
+        ):
+            self.run_async(subscription_ui.subscription_pay(call, state))
+        self.assertEqual([], service.create_calls)
+        self.assertIn("Куда отправлять чеки", call.message.edits[-1][0])
+        self.assertEqual([subscription_ui.ReceiptEmail.awaiting_payment_email], state.states)
+
+    def test_invalid_receipt_email_does_not_create_payment(self):
+        service = _PaymentService(create=result())
+        message = _IncomingMessage("bad address")
+        state = _State()
+        with (
+            patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(subscription_ui, "save_receipt_email", side_effect=ReceiptEmailValidationError("bad")),
+        ):
+            self.run_async(subscription_ui.subscription_receipt_email_message(message, state))
+        self.assertEqual([], service.create_calls)
+        self.assertIn("Проверьте email", message.answers[-1][0])
+        self.assertEqual(0, state.clear_count)
+
+    def test_valid_receipt_email_is_saved_then_continues_the_same_payment_flow(self):
+        pending = result(reason=PaymentServiceReason.CREATED)
+        service = _PaymentService(create=pending)
+        message = _IncomingMessage("User+tag@Example.com")
+        state = _State()
+        with (
+            patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(subscription_ui, "save_receipt_email", return_value="user+tag@example.com") as saved,
+            patch.object(subscription_ui, "get_payment_runtime", return_value=self.runtime(service)),
+            patch.object(subscription_ui, "get_access_decision", return_value=AccessDecision(AccessStatus.TRIAL_AVAILABLE, None)),
+        ):
+            self.run_async(subscription_ui.subscription_receipt_email_message(message, state))
+        saved.assert_called_once_with(7, "User+tag@Example.com")
+        self.assertEqual([7], service.create_calls)
+        self.assertEqual(1, state.clear_count)
+        self.assertIn("Оплата ожидает подтверждения", message.answers[-1][0])
+
+    def test_repeated_pay_after_email_uses_existing_service_idempotency(self):
+        pending = result(reason=PaymentServiceReason.CREATED)
+        service = _PaymentService(create=pending)
+        call = _Call("subscription:pay")
+        with (
+            patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(subscription_ui, "get_payment_runtime", return_value=self.runtime(service)),
+            patch.object(subscription_ui, "get_access_decision", return_value=AccessDecision(AccessStatus.TRIAL_AVAILABLE, None)),
+            patch.object(subscription_ui, "get_receipt_email", return_value="user@example.com"),
+        ):
+            self.run_async(subscription_ui.subscription_pay(call, _State()))
+            self.run_async(subscription_ui.subscription_pay(call, _State()))
+        self.assertEqual([7, 7], service.create_calls)
 
     def test_pending_payment_keeps_link_and_check_button(self):
         pending = result()

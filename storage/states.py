@@ -13,6 +13,11 @@ class ContactWithDevs(StatesGroup):
     Message = FSMState()
 
 
+class ReceiptEmail(StatesGroup):
+    awaiting_payment_email = FSMState()
+    awaiting_profile_email = FSMState()
+
+
 class Onboarding(StatesGroup):
     goal = FSMState()
     experience_level = FSMState()

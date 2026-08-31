@@ -48,6 +48,17 @@
   выбрать уполномоченного ФНС оператора НПД и подтвердить совместимость с текущей
   YooKassa/merchant схемой до credentials, сети и production acceptance.
 
+### Stage 8D2 technical checkpoint
+
+- Migration 14 добавляет nullable `receipt_email` в fitness profile без backfill.
+  Email собирается только при первом входе в purchase flow, хранится в профиле и
+  не является маркетинговым согласием.
+- Новый receipt intent получает неизменяемый provider-neutral snapshot email;
+  повторный reconcile/webhook не создаёт новую оплату или receipt intent.
+- Конкретный payment/NPD provider всё ещё не выбран; PayAnyWay в код не
+  интегрирован. Следующий безопасный блок — продолжать production readiness без
+  внешних API, пока не принято это коммерческое решение.
+
 ### Порядок решений и работ
 
 1. Зафиксировано: 499 RUB, 30 дней, без автопродления; server-side receipt item —

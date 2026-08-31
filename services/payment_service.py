@@ -31,6 +31,7 @@ from services.payment_provider import (
     ProviderPayment,
 )
 from services.receipt_service import ensure_receipt_intent
+from services.receipt_email import ReceiptEmailRequired
 
 
 class PaymentServiceReason(StrEnum):
@@ -103,6 +104,7 @@ class PaymentService:
         provider_idempotency_window: timedelta = timedelta(hours=24),
         before_access_apply: Callable[[], None] | None = None,
         expected_test_mode: bool | None = None,
+        receipt_email_required: Callable[[int], bool] | None = None,
     ) -> None:
         validation = validate_payment_spec(product.spec)
         if not validation.is_valid:
@@ -119,12 +121,14 @@ class PaymentService:
         if expected_test_mode is not None and type(expected_test_mode) is not bool:
             raise ValueError("expected_test_mode must be a boolean or None")
         self._expected_test_mode = expected_test_mode
+        self._receipt_email_required = receipt_email_required
 
     def get_or_create_payment(self, user_id: int) -> PaymentServiceResult:
         """Return the one active payment or create one local request safely."""
         existing_payment_id = self._get_active_payment_id(user_id)
         if existing_payment_id is None:
             self._ensure_payment_creation_allowed()
+            self._ensure_receipt_email(user_id)
         payment_id, created = self._get_or_create_local_payment(user_id)
         with self._session_factory() as session:
             payment = session.get(SubscriptionPayment, payment_id)
@@ -152,6 +156,16 @@ class PaymentService:
     def _ensure_payment_creation_allowed(self) -> None:
         if isinstance(self._provider, PaymentCreationGuard):
             self._provider.ensure_payment_creation_allowed()
+
+    def _ensure_receipt_email(self, user_id: int) -> None:
+        if self._receipt_email_required is None:
+            return
+        try:
+            permitted = self._receipt_email_required(user_id)
+        except Exception as error:
+            raise ReceiptEmailRequired("Receipt email is unavailable.") from error
+        if permitted is not True:
+            raise ReceiptEmailRequired("Receipt email is required.")
 
     def _get_active_payment_id(self, user_id: int) -> int | None:
         with self._session_factory() as session:

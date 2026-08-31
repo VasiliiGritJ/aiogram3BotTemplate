@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy.exc import SQLAlchemyError
 
 from db import User
-from handlers.markups import subscription_mkp, to_menu_mpk
+from handlers.markups import receipt_email_mpk, subscription_mkp, to_menu_mpk
 from services.access import (
     AccessDecision,
     AccessStatus,
@@ -19,18 +19,30 @@ from services.access import (
 from services.payment_domain import PaymentStatus
 from services.payment_provider import PaymentProviderError
 from services.payment_service import PaymentServiceReason, PaymentServiceResult
+from services.receipt_email import (
+    RECEIPT_EMAIL_ERROR_MESSAGE,
+    ReceiptEmailProfileUnavailable,
+    ReceiptEmailRequired,
+    ReceiptEmailValidationError,
+    get_receipt_email,
+    save_receipt_email,
+)
 from storage.config import dp
 from storage.payment_runtime import (
     PaymentRuntime,
     PaymentRuntimeConfigurationError,
     get_payment_runtime,
 )
-from storage.states import tryFinish
+from storage.states import ReceiptEmail, tryFinish
 
 
 SUBSCRIPTION_CALLBACK = "subscription"
 SUBSCRIPTION_PAY_CALLBACK = "subscription:pay"
 SUBSCRIPTION_CHECK_PREFIX = "subscription:check:"
+RECEIPT_EMAIL_PROMPT = (
+    "📧 Куда отправлять чеки?\n\n"
+    "Укажите email. Мы сохраним его в профиле и будем использовать для отправки чеков после оплаты."
+)
 
 
 def _format_date(value: datetime | None) -> str:
@@ -147,15 +159,49 @@ def _payment_markup(
     )
 
 
-async def _load_runtime_or_show_error(message: types.Message) -> PaymentRuntime | None:
+async def _load_runtime_or_show_error(
+    message: types.Message,
+    *,
+    reply_to_user: bool = False,
+) -> PaymentRuntime | None:
     try:
         return get_payment_runtime()
     except PaymentRuntimeConfigurationError:
-        await message.edit_text(
-            "Подписка временно недоступна. Попробуйте позже.",
-            reply_markup=to_menu_mpk(),
-        )
+        text = "Подписка временно недоступна. Попробуйте позже."
+        if reply_to_user:
+            await message.answer(text, reply_markup=to_menu_mpk())
+        else:
+            await message.edit_text(text, reply_markup=to_menu_mpk())
         return None
+
+
+async def _create_payment_after_receipt_email(
+    message: types.Message,
+    user_id: int,
+    runtime: PaymentRuntime,
+) -> None:
+    """Create/reuse through the service only after the canonical email is stored."""
+    try:
+        payment = runtime.payment_service.get_or_create_payment(user_id)
+    except ReceiptEmailRequired:
+        await message.answer(
+            RECEIPT_EMAIL_PROMPT,
+            reply_markup=receipt_email_mpk(back_callback=SUBSCRIPTION_CALLBACK),
+        )
+        return
+    except (PaymentProviderError, SQLAlchemyError, RuntimeError, ValueError):
+        await message.answer(
+            "Не удалось подготовить оплату. Попробуйте позже.",
+            reply_markup=subscription_mkp(),
+        )
+        return
+    decision = get_access_decision(user_id)
+    message_text = (
+        "Не удалось подготовить оплату. Попробуйте позже."
+        if payment.reason is PaymentServiceReason.PROVIDER_UNAVAILABLE
+        else format_subscription_screen(runtime, decision, payment)
+    )
+    await message.answer(message_text, reply_markup=_payment_markup(payment, decision))
 
 
 @dp.callback_query(F.data == SUBSCRIPTION_CALLBACK)
@@ -197,8 +243,24 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
         )
         await call.answer()
         return
+    if get_receipt_email(user.id) is None:
+        await call.message.edit_text(
+            RECEIPT_EMAIL_PROMPT,
+            reply_markup=receipt_email_mpk(back_callback=SUBSCRIPTION_CALLBACK),
+        )
+        await state.set_state(ReceiptEmail.awaiting_payment_email)
+        await call.answer()
+        return
     try:
         payment = runtime.payment_service.get_or_create_payment(user.id)
+    except ReceiptEmailRequired:
+        await call.message.edit_text(
+            RECEIPT_EMAIL_PROMPT,
+            reply_markup=receipt_email_mpk(back_callback=SUBSCRIPTION_CALLBACK),
+        )
+        await state.set_state(ReceiptEmail.awaiting_payment_email)
+        await call.answer()
+        return
     except (PaymentProviderError, SQLAlchemyError, RuntimeError, ValueError):
         await call.message.edit_text(
             "Не удалось подготовить оплату. Попробуйте позже.",
@@ -216,6 +278,33 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
         reply_markup=_payment_markup(payment, decision),
     )
     await call.answer()
+
+
+@dp.message(ReceiptEmail.awaiting_payment_email)
+async def subscription_receipt_email_message(
+    message: types.Message, state: FSMContext
+) -> None:
+    user = User.get(tg_id=message.from_user.id)
+    if user is None:
+        await message.answer("Отправьте /start, чтобы начать.", reply_markup=to_menu_mpk())
+        await tryFinish(state)
+        return
+    try:
+        save_receipt_email(user.id, message.text or "")
+    except ReceiptEmailValidationError:
+        await message.answer(RECEIPT_EMAIL_ERROR_MESSAGE, reply_markup=receipt_email_mpk(
+            back_callback=SUBSCRIPTION_CALLBACK
+        ))
+        return
+    except (ReceiptEmailProfileUnavailable, LookupError):
+        await message.answer("Сначала заполните профиль.", reply_markup=to_menu_mpk())
+        await tryFinish(state)
+        return
+    await tryFinish(state)
+    runtime = await _load_runtime_or_show_error(message, reply_to_user=True)
+    if runtime is None:
+        return
+    await _create_payment_after_receipt_email(message, user.id, runtime)
 
 
 @dp.callback_query(F.data.startswith(SUBSCRIPTION_CHECK_PREFIX))

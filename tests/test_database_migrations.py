@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14), applied)
         self.assertTrue(
             {
                 "users",
@@ -67,9 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13), first_run)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(13, applied_count)
+        self.assertEqual(14, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -113,7 +113,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13), applied)
+        self.assertEqual((3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
@@ -428,7 +428,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM user_access ORDER BY user_id"
             ).fetchall()
 
-        self.assertEqual((8, 9, 10, 11, 12, 13), run_migrations(session.engine))
+        self.assertEqual((8, 9, 10, 11, 12, 13, 14), run_migrations(session.engine))
         self.assertEqual((), run_migrations(session.engine, target_version=9))
 
         with session.engine.connect() as connection:
@@ -632,12 +632,13 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "experience_level", "workouts_per_week",
                 "training_environment",
                 "session_duration_minutes", "limitations", "completed_at",
-                "updated_at",
+                "updated_at", "receipt_email",
             },
             set(profile_columns),
         )
         self.assertEqual("FLOAT", str(profile_columns["weight_kg"]["type"]))
         self.assertTrue(profile_columns["limitations"]["nullable"])
+        self.assertTrue(profile_columns["receipt_email"]["nullable"])
         self.assertEqual(
             {
                 "user_id", "trial_started_at", "trial_ends_at",
@@ -777,7 +778,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13), applied)
+        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 
