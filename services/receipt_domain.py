@@ -7,8 +7,10 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 import re
 
+from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
 
-NPD_RECEIPT_DESCRIPTION = "Доступ к сервису «Мой AI Тренер» на 30 дней"
+
+NPD_RECEIPT_DESCRIPTION = LAUNCH_COMMERCIAL_PRODUCT.receipt_description
 _SAFE_ERROR_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
 
 

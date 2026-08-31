@@ -57,6 +57,11 @@ def subscription_mkp(
     payment_id: int | None = None,
     confirmation_url: str | None = None,
     show_pay: bool = True,
+    public_site_url: str | None = None,
+    terms_url: str | None = None,
+    privacy_url: str | None = None,
+    refund_url: str | None = None,
+    show_support: bool = False,
 ) -> types.InlineKeyboardMarkup:
     buttons = []
     if isinstance(confirmation_url, str) and confirmation_url.startswith("https://"):
@@ -76,6 +81,20 @@ def subscription_mkp(
                 )
             ]
         )
+    for text, url in (
+        ("🌐 О сервисе", public_site_url),
+        ("📄 Условия", terms_url),
+        ("🔒 Политика конфиденциальности", privacy_url),
+        ("↩️ Условия отказа и возврата", refund_url),
+    ):
+        if isinstance(url, str) and url.startswith(("https://", "http://")):
+            buttons.append([types.InlineKeyboardButton(text=text, url=url)])
+    if show_support:
+        buttons.append([
+            types.InlineKeyboardButton(
+                text="💬 Поддержка", callback_data="subscription:support"
+            )
+        ])
     buttons.append(
         [types.InlineKeyboardButton(text="🏠 В меню", callback_data="start")]
     )
@@ -109,6 +128,11 @@ def profile_mpk(*, receipt_email_set: bool = False):
             )
         ],
         [
+            types.InlineKeyboardButton(
+                text="📄 Документы и поддержка", callback_data="subscription:documents"
+            )
+        ],
+        [
             types.InlineKeyboardButton(text="Связаться с разработчиками", callback_data="contact_with_devs")
         ],
         [
@@ -125,6 +149,38 @@ def receipt_email_mpk(*, back_callback: str = "profile"):
         )],
         [types.InlineKeyboardButton(text="🏠 В меню", callback_data="start")],
     ])
+
+
+def subscription_info_mpk(
+    *,
+    public_site_url: str | None = None,
+    terms_url: str | None = None,
+    privacy_url: str | None = None,
+    refund_url: str | None = None,
+    show_support: bool = False,
+    back_callback: str = "subscription",
+):
+    """Public commercial actions; unavailable development links are omitted."""
+    buttons = []
+    for text, url in (
+        ("🌐 О сервисе", public_site_url),
+        ("📄 Условия", terms_url),
+        ("🔒 Политика конфиденциальности", privacy_url),
+        ("↩️ Условия отказа и возврата", refund_url),
+    ):
+        if isinstance(url, str) and url.startswith(("https://", "http://")):
+            buttons.append([types.InlineKeyboardButton(text=text, url=url)])
+    if show_support:
+        buttons.append([
+            types.InlineKeyboardButton(
+                text="💬 Поддержка", callback_data="subscription:support"
+            )
+        ])
+    buttons.extend((
+        [types.InlineKeyboardButton(text="↩️ Назад", callback_data=back_callback)],
+        [types.InlineKeyboardButton(text="🏠 В меню", callback_data="start")],
+    ))
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def workout_plan_mkp(

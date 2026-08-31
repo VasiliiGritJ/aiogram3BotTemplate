@@ -86,6 +86,7 @@ class ProfileReceiptEmailUiTests(unittest.TestCase):
         present = profile_ui.profile_mpk(receipt_email_set=True)
         self.assertEqual("Добавить email для чеков", absent.inline_keyboard[1][0].text)
         self.assertEqual("Изменить email для чеков", present.inline_keyboard[1][0].text)
+        self.assertIn("subscription:documents", self.callbacks(absent))
         email_markup = profile_ui.receipt_email_mpk()
         self.assertEqual(["profile", "start"], self.callbacks(email_markup))
 

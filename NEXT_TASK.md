@@ -59,6 +59,21 @@
   интегрирован. Следующий безопасный блок — продолжать production readiness без
   внешних API, пока не принято это коммерческое решение.
 
+### Stage 8D3 technical checkpoint
+
+- Коммерческий контракт launch offer централизован в коде: `Мой AI Тренер`,
+  499 RUB за 30 дней без автопродления; user-facing receipt description не
+  использует технический product code.
+- Purchase UX показывает цену, период, отсутствие автопродления и сохранённый
+  email чека; документы, политика конфиденциальности, условия отказа/возврата и
+  поддержка доступны из безопасных конфигурационных ссылок.
+- В paid production mode обязательны `PUBLIC_SITE_URL`, `TERMS_URL`,
+  `PRIVACY_URL`, `REFUND_URL` и `SUPPORT_EMAIL`: отсутствующее, небезопасное или
+  не-HTTPS значение fail-closed до provider create. В development/test незаданные
+  публичные действия не показываются.
+- Конкретный payment/NPD provider, реальные public URLs, merchant/legal
+  approvals и hosting остаются внешней границей; PayAnyWay не интегрирован.
+
 ### Порядок решений и работ
 
 1. Зафиксировано: 499 RUB, 30 дней, без автопродления; server-side receipt item —

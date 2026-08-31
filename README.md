@@ -41,8 +41,13 @@ Bot role (`python bot.py --production`) требует:
 - `APP_ENV`, абсолютный `DATABASE_PATH`;
 - `BOT_TOKEN`; опционально `TELEGRAM_PROXY_URL`;
 - опциональные `ADMIN_IDS`, `SYSTEMD_SERVICE_NAME`, `DEBUG_MODE`;
-- `PAYMENTS_MODE`, `SUBSCRIPTION_AMOUNT_MINOR`, `SUBSCRIPTION_CURRENCY`,
-  `YOOKASSA_RETURN_URL`, `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_TOKEN`.
+- `PAYMENTS_MODE`, `YOOKASSA_RETURN_URL`, `YOOKASSA_SHOP_ID`,
+  `YOOKASSA_SECRET_TOKEN`;
+- для paid production launch обязательны публичные HTTPS-значения
+  `PUBLIC_SITE_URL`, `TERMS_URL`, `PRIVACY_URL`, `REFUND_URL` и валидный
+  `SUPPORT_EMAIL`. Их отсутствие или некорректный формат останавливают startup
+  до создания платежа. В test/development режиме незаданные публичные ссылки
+  безопасно не показываются.
 
 Webhook role (`python payment_webhook_server.py`) требует:
 
@@ -76,7 +81,11 @@ receipt provider сохраняет `disabled`. Production runtime fail-closed, 
 
 Текущий server-side продукт: 499 RUB за 30 дней без автопродления. Неизменяемое
 описание receipt item: `Доступ к сервису «Мой AI Тренер» на 30 дней`; внутренний
-код `monthly_30d_v1` не используется как пользовательское описание.
+код `monthly_30d_v1` не используется как пользовательское описание. До перехода
+к оплате бот показывает стоимость, период, отсутствие автопродления, известный
+email для чека и ссылки на условия, приватность, возврат и поддержку. Реальные
+URL и контакт поддержки не коммитятся: конкретный payment/NPD provider всё ещё
+ожидает отдельного compliance-решения.
 
 Email для доставки чеков не входит в fitness onboarding. При первом переходе к
 оплате бот запрашивает его один раз, валидирует и сохраняет в профиле как

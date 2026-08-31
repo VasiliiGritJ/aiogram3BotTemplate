@@ -13,14 +13,14 @@ from services.payment_provider import PaymentProviderUnavailable
 from services.payment_service import (
     PaymentServiceReason,
     PaymentServiceResult,
-    SubscriptionProduct,
 )
 from services.receipt_email import ReceiptEmailValidationError
+from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
 from storage.payment_runtime import (
+    CommercialPublicConfig,
     PaymentMode,
     PaymentRuntime,
     PaymentRuntimeConfigurationError,
-    build_payment_runtime,
 )
 
 
@@ -41,7 +41,7 @@ def _load_handler_module():
 
 
 subscription_ui = _load_handler_module()
-PRODUCT = SubscriptionProduct("monthly_30d_v1", 99000, "RUB", 30)
+PRODUCT = LAUNCH_COMMERCIAL_PRODUCT.payment_product
 
 
 @dataclass
@@ -140,17 +140,28 @@ def result(
 
 
 class SubscriptionUiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.receipt_email_patcher = patch.object(
+            subscription_ui,
+            "get_receipt_email",
+            new=lambda _user_id: None,
+        )
+        self.receipt_email_patcher.start()
+
+    def tearDown(self) -> None:
+        self.receipt_email_patcher.stop()
+
     def run_async(self, coroutine):
         return asyncio.run(coroutine)
 
-    def runtime(self, service):
-        return PaymentRuntime(PRODUCT, service, PaymentMode.TEST)
+    def runtime(self, service, commercial=CommercialPublicConfig()):
+        return PaymentRuntime(PRODUCT, service, PaymentMode.TEST, commercial)
 
     @staticmethod
     def callbacks(markup):
         return [button.callback_data for row in markup.inline_keyboard for button in row]
 
-    def test_menu_is_visible_and_displays_trial_price_without_fallback(self):
+    def test_menu_is_visible_and_displays_server_owned_purchase_disclosure(self):
         service = _PaymentService()
         runtime = self.runtime(service)
         text = subscription_ui.format_subscription_screen(
@@ -159,8 +170,10 @@ class SubscriptionUiTests(unittest.TestCase):
             None,
         )
         self.assertIn("пробный период до 14.08.2026 12:00", text)
-        self.assertIn("Подписка: 30 дней", text)
-        self.assertIn("990 ₽", text)
+        self.assertIn("💳 Доступ на 30 дней", text)
+        self.assertIn("Стоимость: 499 ₽", text)
+        self.assertIn("Автопродления нет.", text)
+        self.assertIn("доступ активируется на 30 дней", text)
         self.assertNotIn(PRODUCT.product_code, text)
         self.assertIn(
             "subscription:pay",
@@ -174,10 +187,60 @@ class SubscriptionUiTests(unittest.TestCase):
                 )
             ),
         )
-        for invalid_amount in ("not-a-price", "0"):
-            with self.subTest(invalid_amount=invalid_amount):
-                with self.assertRaises(PaymentRuntimeConfigurationError):
-                    build_payment_runtime(lambda _: invalid_amount)
+
+    def test_purchase_disclosure_shows_known_receipt_email_only_in_screen_text(self):
+        text = subscription_ui.format_subscription_screen(
+            self.runtime(_PaymentService()),
+            AccessDecision(AccessStatus.TRIAL_AVAILABLE, None),
+            None,
+            "user@example.com",
+        )
+        self.assertIn("Чек отправим на: user@example.com", text)
+        markup = subscription_ui._payment_markup(
+            None,
+            AccessDecision(AccessStatus.TRIAL_AVAILABLE, None),
+            self.runtime(_PaymentService()),
+        )
+        self.assertNotIn("user@example.com", str(markup.inline_keyboard))
+
+    def test_purchase_markup_exposes_valid_legal_actions_support_and_menu(self):
+        runtime = self.runtime(
+            _PaymentService(),
+            CommercialPublicConfig(
+                public_site_url="https://example.invalid",
+                terms_url="https://example.invalid/terms",
+                privacy_url="https://example.invalid/privacy",
+                refund_url="https://example.invalid/refund",
+                support_email="support@example.invalid",
+            ),
+        )
+        markup = subscription_ui._payment_markup(
+            None,
+            AccessDecision(AccessStatus.TRIAL_AVAILABLE, None),
+            runtime,
+        )
+        buttons = [button for row in markup.inline_keyboard for button in row]
+        self.assertEqual(
+            {
+                "🌐 О сервисе",
+                "📄 Условия",
+                "🔒 Политика конфиденциальности",
+                "↩️ Условия отказа и возврата",
+            },
+            {button.text for button in buttons if button.url},
+        )
+        self.assertIn("subscription:support", self.callbacks(markup))
+        self.assertIn("start", self.callbacks(markup))
+
+    def test_development_without_public_urls_omits_broken_legal_actions(self):
+        markup = subscription_ui._payment_markup(
+            None,
+            AccessDecision(AccessStatus.TRIAL_AVAILABLE, None),
+            self.runtime(_PaymentService()),
+        )
+        buttons = [button for row in markup.inline_keyboard for button in row]
+        self.assertFalse(any(button.url for button in buttons))
+        self.assertNotIn("subscription:support", self.callbacks(markup))
 
     def test_paid_and_expired_access_are_displayed(self):
         runtime = self.runtime(_PaymentService())
@@ -369,6 +432,7 @@ class SubscriptionUiTests(unittest.TestCase):
         self.assertEqual([7], service.create_calls)
         self.assertEqual(1, state.clear_count)
         self.assertIn("Оплата ожидает подтверждения", message.answers[-1][0])
+        self.assertIn("Чек отправим на: user+tag@example.com", message.answers[-1][0])
 
     def test_repeated_pay_after_email_uses_existing_service_idempotency(self):
         pending = result(reason=PaymentServiceReason.CREATED)
@@ -485,6 +549,31 @@ class SubscriptionUiTests(unittest.TestCase):
             self.run_async(subscription_ui.subscription_screen(call, _State()))
         self.assertIn("временно недоступна", call.message.edits[-1][0])
         self.assertNotIn("yookassa", subscription_ui.__dict__)
+
+    def test_documents_and_support_use_validated_actions_with_safe_back_navigation(self):
+        runtime = self.runtime(
+            _PaymentService(),
+            CommercialPublicConfig(
+                public_site_url="https://example.invalid",
+                terms_url="https://example.invalid/terms",
+                privacy_url="https://example.invalid/privacy",
+                refund_url="https://example.invalid/refund",
+                support_email="support@example.invalid",
+            ),
+        )
+        documents = _Call("subscription:documents")
+        support = _Call("subscription:support")
+        with patch.object(subscription_ui, "get_payment_runtime", return_value=runtime):
+            self.run_async(subscription_ui.subscription_documents(documents, _State()))
+            self.run_async(subscription_ui.subscription_support(support, _State()))
+        document_text, document_markup = documents.message.edits[-1]
+        self.assertIn("не заменяет медицинскую помощь", document_text)
+        self.assertIn("profile", self.callbacks(document_markup))
+        self.assertIn("start", self.callbacks(document_markup))
+        support_text, support_markup = support.message.edits[-1]
+        self.assertIn("support@example.invalid", support_text)
+        self.assertIn("subscription", self.callbacks(support_markup))
+        self.assertIn("start", self.callbacks(support_markup))
 
 
 if __name__ == "__main__":

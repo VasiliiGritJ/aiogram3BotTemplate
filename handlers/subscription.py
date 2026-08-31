@@ -8,7 +8,12 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy.exc import SQLAlchemyError
 
 from db import User
-from handlers.markups import receipt_email_mpk, subscription_mkp, to_menu_mpk
+from handlers.markups import (
+    receipt_email_mpk,
+    subscription_info_mpk,
+    subscription_mkp,
+    to_menu_mpk,
+)
 from services.access import (
     AccessDecision,
     AccessStatus,
@@ -19,6 +24,7 @@ from services.access import (
 from services.payment_domain import PaymentStatus
 from services.payment_provider import PaymentProviderError
 from services.payment_service import PaymentServiceReason, PaymentServiceResult
+from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
 from services.receipt_email import (
     RECEIPT_EMAIL_ERROR_MESSAGE,
     ReceiptEmailProfileUnavailable,
@@ -39,6 +45,8 @@ from storage.states import ReceiptEmail, tryFinish
 SUBSCRIPTION_CALLBACK = "subscription"
 SUBSCRIPTION_PAY_CALLBACK = "subscription:pay"
 SUBSCRIPTION_CHECK_PREFIX = "subscription:check:"
+SUBSCRIPTION_SUPPORT_CALLBACK = "subscription:support"
+SUBSCRIPTION_DOCUMENTS_CALLBACK = "subscription:documents"
 RECEIPT_EMAIL_PROMPT = (
     "📧 Куда отправлять чеки?\n\n"
     "Укажите email. Мы сохраним его в профиле и будем использовать для отправки чеков после оплаты."
@@ -60,8 +68,11 @@ def format_subscription_screen(
     runtime: PaymentRuntime,
     decision: AccessDecision,
     payment: PaymentServiceResult | None,
+    receipt_email: str | None = None,
 ) -> str:
-    lines = ["💳 Подписка", ""]
+    del runtime
+    product = LAUNCH_COMMERCIAL_PRODUCT
+    lines = [f"💳 Доступ на {product.period_days} дней", ""]
     if decision.status is AccessStatus.TRIAL_AVAILABLE:
         lines.append("Доступ: пробный период ещё не начат.")
     elif decision.status is AccessStatus.TRIAL:
@@ -73,10 +84,13 @@ def format_subscription_screen(
     lines.extend(
         (
             "",
-            f"Подписка: {runtime.product.period_days} дней",
-            f"Стоимость: {_format_price(runtime.product.amount_minor, runtime.product.currency)}",
+            f"Стоимость: {_format_price(product.amount_minor, product.currency)}",
+            "Автопродления нет.",
+            "После успешной оплаты доступ активируется на 30 дней.",
         )
     )
+    if receipt_email is not None:
+        lines.extend(("", f"Чек отправим на: {receipt_email}"))
     if _is_paid_reserved(payment):
         lines.extend(
             (
@@ -142,11 +156,20 @@ def _is_paid_reserved(payment: PaymentServiceResult | None) -> bool:
 def _payment_markup(
     payment: PaymentServiceResult | None,
     decision: AccessDecision,
+    runtime: PaymentRuntime | None = None,
 ):
+    commercial = runtime.commercial_public if runtime is not None else None
+    link_kwargs = {
+        "public_site_url": None if commercial is None else commercial.public_site_url,
+        "terms_url": None if commercial is None else commercial.terms_url,
+        "privacy_url": None if commercial is None else commercial.privacy_url,
+        "refund_url": None if commercial is None else commercial.refund_url,
+        "show_support": commercial is not None and commercial.support_email is not None,
+    }
     paid_active = _is_paid_active(decision)
     payment_already_committed = paid_active or _is_paid_reserved(payment)
     if payment is None:
-        return subscription_mkp(show_pay=not payment_already_committed)
+        return subscription_mkp(show_pay=not payment_already_committed, **link_kwargs)
     is_active_payment = payment.status in {
         PaymentStatus.CREATING,
         PaymentStatus.PENDING,
@@ -156,6 +179,7 @@ def _payment_markup(
         payment_id=payment.payment_id if is_active_payment else None,
         confirmation_url=payment.confirmation_url if is_active_payment else None,
         show_pay=not payment_already_committed,
+        **link_kwargs,
     )
 
 
@@ -179,6 +203,7 @@ async def _create_payment_after_receipt_email(
     message: types.Message,
     user_id: int,
     runtime: PaymentRuntime,
+    receipt_email: str,
 ) -> None:
     """Create/reuse through the service only after the canonical email is stored."""
     try:
@@ -192,16 +217,20 @@ async def _create_payment_after_receipt_email(
     except (PaymentProviderError, SQLAlchemyError, RuntimeError, ValueError):
         await message.answer(
             "Не удалось подготовить оплату. Попробуйте позже.",
-            reply_markup=subscription_mkp(),
+            reply_markup=_payment_markup(
+                None,
+                AccessDecision(AccessStatus.EXPIRED, None),
+                runtime,
+            ),
         )
         return
     decision = get_access_decision(user_id)
     message_text = (
         "Не удалось подготовить оплату. Попробуйте позже."
         if payment.reason is PaymentServiceReason.PROVIDER_UNAVAILABLE
-        else format_subscription_screen(runtime, decision, payment)
+        else format_subscription_screen(runtime, decision, payment, receipt_email)
     )
-    await message.answer(message_text, reply_markup=_payment_markup(payment, decision))
+    await message.answer(message_text, reply_markup=_payment_markup(payment, decision, runtime))
 
 
 @dp.callback_query(F.data == SUBSCRIPTION_CALLBACK)
@@ -215,9 +244,10 @@ async def subscription_screen(call: types.CallbackQuery, state: FSMContext) -> N
         if runtime is not None:
             payment = runtime.payment_service.get_latest_payment(user.id)
             decision = get_access_decision(user.id)
+            receipt_email = get_receipt_email(user.id)
             await call.message.edit_text(
-                format_subscription_screen(runtime, decision, payment),
-                reply_markup=_payment_markup(payment, decision),
+                format_subscription_screen(runtime, decision, payment, receipt_email),
+                reply_markup=_payment_markup(payment, decision, runtime),
             )
     await call.answer()
 
@@ -236,14 +266,15 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
         return
     payment = runtime.payment_service.get_latest_payment(user.id)
     decision = get_access_decision(user.id)
+    receipt_email = get_receipt_email(user.id)
     if _is_paid_active(decision) or _is_paid_reserved(payment):
         await call.message.edit_text(
-            format_subscription_screen(runtime, decision, payment),
-            reply_markup=_payment_markup(payment, decision),
+            format_subscription_screen(runtime, decision, payment, receipt_email),
+            reply_markup=_payment_markup(payment, decision, runtime),
         )
         await call.answer()
         return
-    if get_receipt_email(user.id) is None:
+    if receipt_email is None:
         await call.message.edit_text(
             RECEIPT_EMAIL_PROMPT,
             reply_markup=receipt_email_mpk(back_callback=SUBSCRIPTION_CALLBACK),
@@ -264,7 +295,7 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
     except (PaymentProviderError, SQLAlchemyError, RuntimeError, ValueError):
         await call.message.edit_text(
             "Не удалось подготовить оплату. Попробуйте позже.",
-            reply_markup=subscription_mkp(),
+            reply_markup=_payment_markup(payment, decision, runtime),
         )
         await call.answer()
         return
@@ -272,10 +303,10 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
     if payment.reason is PaymentServiceReason.PROVIDER_UNAVAILABLE:
         message = "Не удалось подготовить оплату. Попробуйте позже."
     else:
-        message = format_subscription_screen(runtime, decision, payment)
+        message = format_subscription_screen(runtime, decision, payment, receipt_email)
     await call.message.edit_text(
         message,
-        reply_markup=_payment_markup(payment, decision),
+        reply_markup=_payment_markup(payment, decision, runtime),
     )
     await call.answer()
 
@@ -290,7 +321,7 @@ async def subscription_receipt_email_message(
         await tryFinish(state)
         return
     try:
-        save_receipt_email(user.id, message.text or "")
+        receipt_email = save_receipt_email(user.id, message.text or "")
     except ReceiptEmailValidationError:
         await message.answer(RECEIPT_EMAIL_ERROR_MESSAGE, reply_markup=receipt_email_mpk(
             back_callback=SUBSCRIPTION_CALLBACK
@@ -304,7 +335,12 @@ async def subscription_receipt_email_message(
     runtime = await _load_runtime_or_show_error(message, reply_to_user=True)
     if runtime is None:
         return
-    await _create_payment_after_receipt_email(message, user.id, runtime)
+    await _create_payment_after_receipt_email(
+        message,
+        user.id,
+        runtime,
+        receipt_email,
+    )
 
 
 @dp.callback_query(F.data.startswith(SUBSCRIPTION_CHECK_PREFIX))
@@ -327,17 +363,72 @@ async def subscription_check(call: types.CallbackQuery, state: FSMContext) -> No
     except (PaymentProviderError, SQLAlchemyError, RuntimeError):
         await call.message.edit_text(
             "Сейчас не удалось проверить оплату. Попробуйте позже.",
-            reply_markup=subscription_mkp(payment_id=payment_id),
+            reply_markup=_payment_markup(
+                PaymentServiceResult(
+                    payment_id=payment_id,
+                    status=PaymentStatus.PENDING,
+                    confirmation_url=None,
+                    reason=PaymentServiceReason.NOT_SUCCEEDED,
+                ),
+                AccessDecision(AccessStatus.EXPIRED, None),
+                runtime,
+            ),
         )
         await call.answer()
         return
     decision = get_access_decision(user.id)
+    receipt_email = get_receipt_email(user.id)
     if payment.reason is PaymentServiceReason.PROVIDER_UNAVAILABLE:
         message = "Сейчас не удалось проверить оплату. Попробуйте позже."
     else:
-        message = format_subscription_screen(runtime, decision, payment)
+        message = format_subscription_screen(runtime, decision, payment, receipt_email)
     await call.message.edit_text(
         message,
-        reply_markup=_payment_markup(payment, decision),
+        reply_markup=_payment_markup(payment, decision, runtime),
     )
+    await call.answer()
+
+
+def _commercial_markup(runtime: PaymentRuntime, *, back_callback: str):
+    commercial = runtime.commercial_public
+    return subscription_info_mpk(
+        public_site_url=commercial.public_site_url,
+        terms_url=commercial.terms_url,
+        privacy_url=commercial.privacy_url,
+        refund_url=commercial.refund_url,
+        show_support=commercial.support_email is not None,
+        back_callback=back_callback,
+    )
+
+
+@dp.callback_query(F.data == SUBSCRIPTION_DOCUMENTS_CALLBACK)
+async def subscription_documents(call: types.CallbackQuery, state: FSMContext) -> None:
+    await tryFinish(state)
+    runtime = await _load_runtime_or_show_error(call.message)
+    if runtime is not None:
+        await call.message.edit_text(
+            "📄 Документы и поддержка\n\n"
+            "Сервис предоставляет общие фитнес-рекомендации и не заменяет медицинскую помощь. "
+            "Учитывайте личные ограничения и при необходимости обратитесь к квалифицированному специалисту.",
+            reply_markup=_commercial_markup(runtime, back_callback="profile"),
+        )
+    await call.answer()
+
+
+@dp.callback_query(F.data == SUBSCRIPTION_SUPPORT_CALLBACK)
+async def subscription_support(call: types.CallbackQuery, state: FSMContext) -> None:
+    await tryFinish(state)
+    runtime = await _load_runtime_or_show_error(call.message)
+    if runtime is not None:
+        support_email = runtime.commercial_public.support_email
+        text = (
+            "💬 Поддержка\n\n"
+            f"По вопросам оплаты, доступа или возврата напишите: {support_email}"
+            if support_email is not None
+            else "💬 Поддержка временно недоступна."
+        )
+        await call.message.edit_text(
+            text,
+            reply_markup=_commercial_markup(runtime, back_callback=SUBSCRIPTION_CALLBACK),
+        )
     await call.answer()
