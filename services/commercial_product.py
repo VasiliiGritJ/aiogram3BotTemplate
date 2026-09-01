@@ -3,6 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
+
+
+TRIAL_DAYS = 3
+TRIAL_DURATION = timedelta(hours=72)
+TRIAL_PRICE_MINOR = 0
+TRIAL_REQUIRES_PAYMENT_METHOD = False
+TRIAL_AUTO_RENEW = False
+TRIAL_LIFETIME_LIMIT = 1
 
 
 @dataclass(frozen=True)
@@ -14,6 +23,11 @@ class CommercialProduct:
     currency: str
     period_days: int
     auto_renew: bool
+    trial_duration: timedelta
+    trial_price_minor: int
+    trial_requires_payment_method: bool
+    trial_auto_renew: bool
+    trial_lifetime_limit: int
 
     def __post_init__(self) -> None:
         if not self.service_name.strip() or not self.product_code.strip():
@@ -24,6 +38,18 @@ class CommercialProduct:
             raise ValueError("Commercial product launch contract is invalid.")
         if self.auto_renew:
             raise ValueError("The launch offer must not auto-renew.")
+        if (
+            self.trial_duration != TRIAL_DURATION
+            or self.trial_price_minor != TRIAL_PRICE_MINOR
+            or self.trial_requires_payment_method
+            or self.trial_auto_renew
+            or self.trial_lifetime_limit != TRIAL_LIFETIME_LIMIT
+        ):
+            raise ValueError("The launch trial contract is invalid.")
+
+    @property
+    def trial_days(self) -> int:
+        return self.trial_duration.days
 
     @property
     def payment_product(self):
@@ -45,4 +71,9 @@ LAUNCH_COMMERCIAL_PRODUCT = CommercialProduct(
     currency="RUB",
     period_days=30,
     auto_renew=False,
+    trial_duration=TRIAL_DURATION,
+    trial_price_minor=TRIAL_PRICE_MINOR,
+    trial_requires_payment_method=TRIAL_REQUIRES_PAYMENT_METHOD,
+    trial_auto_renew=TRIAL_AUTO_RENEW,
+    trial_lifetime_limit=TRIAL_LIFETIME_LIMIT,
 )

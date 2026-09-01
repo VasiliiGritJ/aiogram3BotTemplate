@@ -890,6 +890,19 @@ def _add_receipt_email_to_fitness_profile(connection: Connection) -> None:
     )
 
 
+def _add_durable_trial_consumption(connection: Connection) -> None:
+    """Record lifetime trial use without activating eligible historic users."""
+    connection.exec_driver_sql(
+        "ALTER TABLE user_access ADD COLUMN trial_consumed_at DATETIME"
+    )
+    connection.exec_driver_sql(
+        """UPDATE user_access
+        SET trial_consumed_at = trial_started_at
+        WHERE trial_started_at IS NOT NULL
+          AND trial_consumed_at IS NULL"""
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -913,6 +926,7 @@ MIGRATIONS = (
         "fitness_profile_receipt_email",
         _add_receipt_email_to_fitness_profile,
     ),
+    Migration(15, "durable_trial_consumption", _add_durable_trial_consumption),
 )
 
 

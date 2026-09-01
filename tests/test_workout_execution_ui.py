@@ -334,11 +334,8 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             ),
             patch.object(workout_ui, "get_or_start_workout") as start,
         ):
-            self.assertEqual(
-                ("🏋️ Начать первую тренировку бесплатно", "workout:start"),
-                workout_ui.workout_entry_action(7),
-            )
-            self.assertIn(
+            self.assertIsNone(workout_ui.workout_entry_action(7))
+            self.assertNotIn(
                 "workout:start",
                 self.callback_values(workout_ui.workout_menu_markup(7)),
             )
@@ -412,27 +409,23 @@ class WorkoutExecutionUiTests(unittest.TestCase):
             "workout:resume", self.callback_values(call.message.edits[-1][1])
         )
 
-    def test_plan_preview_adds_start_action_without_starting_trial(self) -> None:
+    def test_plan_generation_requires_explicit_trial_activation(self) -> None:
         plan_handler = _load_handler_module_with_fake_config("handlers.workout_plan")
         call = _Call()
         state = _State()
-        action = ("🏋️ Начать первую тренировку бесплатно", "workout:start")
         assignment = python_types.SimpleNamespace(plan=object(), fallback_notes=())
         with (
             patch.object(plan_handler.User, "get", return_value=_User()),
-            patch.object(plan_handler, "assign_workout_plan", return_value=assignment),
-            patch.object(plan_handler, "get_fitness_profile", return_value=object()),
+            patch.object(plan_handler, "assign_workout_plan", return_value=assignment) as assign,
             patch.object(
                 plan_handler,
                 "get_access_decision",
                 return_value=AccessDecision(AccessStatus.TRIAL_AVAILABLE, None),
             ),
-            patch.object(plan_handler, "format_workout_plan_preview", return_value="preview"),
-            patch.object(plan_handler, "workout_entry_action", return_value=action) as entry,
         ):
             self.run_async(plan_handler.generated_workout_plan_call(call, state))
-        entry.assert_called_once_with(7)
-        self.assertIn("workout:start", self.callback_values(call.message.edits[-1][1]))
+        assign.assert_not_called()
+        self.assertIn("subscription", self.callback_values(call.message.edits[-1][1]))
 
     def test_weight_and_reps_parsing_accepts_comma_and_zero(self) -> None:
         self.assertEqual(12.5, workout_ui.parse_workout_weight(" 12,5 "))
@@ -1077,6 +1070,11 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         empty_page = WorkoutHistoryPage((), 0, 5, False, False)
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL, None),
+            ),
             patch.object(workout_ui, "get_workout_history_page", return_value=empty_page),
         ):
             self.run_async(workout_ui.workout_history(call, state))
@@ -1089,6 +1087,11 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         page = WorkoutHistoryPage((completed,), 0, 5, False, False)
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL, None),
+            ),
             patch.object(
                 workout_ui,
                 "get_workout_history_page",
@@ -1120,6 +1123,11 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         state = _State()
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL, None),
+            ),
             patch.object(workout_ui, "get_workout_history_page", return_value=first_page) as page_service,
         ):
             self.run_async(workout_ui.workout_history(call, state))
@@ -1139,6 +1147,11 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         older_call = _Call(data="workout:history:page:5")
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL, None),
+            ),
             patch.object(workout_ui, "get_workout_history_page", return_value=older_page) as page_service,
         ):
             self.run_async(workout_ui.workout_history_page(older_call, _State()))
@@ -1164,6 +1177,11 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         call = _Call(data="workout:history:detail:21:5")
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL, None),
+            ),
             patch.object(workout_ui, "get_completed_workout_detail", return_value=workout),
         ):
             self.run_async(workout_ui.workout_history_detail(call, _State()))
@@ -1175,6 +1193,11 @@ class WorkoutExecutionUiTests(unittest.TestCase):
         stale_call = _Call(data="workout:history:detail:999:0")
         with (
             patch.object(workout_ui.User, "get", return_value=_User()),
+            patch.object(
+                workout_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL, None),
+            ),
             patch.object(workout_ui, "get_completed_workout_detail", side_effect=WorkoutStateError("cancelled")),
         ):
             self.run_async(workout_ui.workout_history_detail(stale_call, _State()))

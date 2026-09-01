@@ -7,7 +7,7 @@ import types as python_types
 import unittest
 from unittest.mock import patch
 
-from services.access import AccessDecision, AccessStatus
+from services.access import AccessDecision, AccessEntitlement, AccessStatus
 from services.payment_domain import PaymentStatus
 from services.payment_provider import PaymentProviderUnavailable
 from services.payment_service import (
@@ -170,10 +170,10 @@ class SubscriptionUiTests(unittest.TestCase):
             None,
         )
         self.assertIn("пробный период до 14.08.2026 12:00", text)
-        self.assertIn("💳 Доступ на 30 дней", text)
+        self.assertIn("💳 Подписка", text)
         self.assertIn("Стоимость: 499 ₽", text)
-        self.assertIn("Автопродления нет.", text)
-        self.assertIn("доступ активируется на 30 дней", text)
+        self.assertIn("Без автопродления", text)
+        self.assertIn("не превращается в платную подписку автоматически", text)
         self.assertNotIn(PRODUCT.product_code, text)
         self.assertIn(
             "subscription:pay",
@@ -187,6 +187,80 @@ class SubscriptionUiTests(unittest.TestCase):
                 )
             ),
         )
+
+    def test_trial_available_screen_has_explicit_free_action_without_card(self):
+        decision = AccessDecision(AccessStatus.TRIAL_AVAILABLE, None)
+        text = subscription_ui.format_subscription_screen(
+            self.runtime(_PaymentService()), decision, None
+        )
+        markup = subscription_ui._payment_markup(
+            None, decision, self.runtime(_PaymentService())
+        )
+
+        self.assertIn("Попробуйте бесплатно — 3 дня", text)
+        self.assertIn("Без карты и автопродления", text)
+        self.assertIn("Стоимость: 499 ₽", text)
+        self.assertIn("subscription:trial", self.callbacks(markup))
+
+    def test_explicit_trial_callback_activates_without_payment_or_receipt_email(self):
+        service = _PaymentService()
+        call = _Call("subscription:trial")
+        trial_end = datetime(2026, 9, 4, 12, 0)
+        with (
+            patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(
+                subscription_ui,
+                "activate_trial_once",
+                return_value=python_types.SimpleNamespace(activated=True),
+            ) as activate,
+            patch.object(
+                subscription_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL, trial_end),
+            ),
+            patch.object(
+                subscription_ui,
+                "get_payment_runtime",
+                return_value=self.runtime(service),
+            ),
+        ):
+            self.run_async(subscription_ui.subscription_trial(call, _State()))
+
+        activate.assert_called_once_with(7)
+        self.assertEqual([], service.create_calls)
+        self.assertEqual([], service.reconcile_calls)
+        self.assertIn("Пробный период включён", call.message.edits[-1][0])
+        self.assertIn("Доступ: пробный период до", call.message.edits[-1][0])
+        self.assertIn("workout_plan", self.callbacks(call.message.edits[-1][1]))
+
+    def test_repeated_trial_callback_does_not_request_payment_or_extend_in_ui(self):
+        service = _PaymentService()
+        call = _Call("subscription:trial")
+        trial_end = datetime(2026, 9, 4, 12, 0)
+        with (
+            patch.object(subscription_ui.User, "get", return_value=_User()),
+            patch.object(
+                subscription_ui,
+                "activate_trial_once",
+                return_value=python_types.SimpleNamespace(activated=False),
+            ) as activate,
+            patch.object(
+                subscription_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL, trial_end),
+            ),
+            patch.object(
+                subscription_ui,
+                "get_payment_runtime",
+                return_value=self.runtime(service),
+            ),
+        ):
+            self.run_async(subscription_ui.subscription_trial(call, _State()))
+
+        activate.assert_called_once_with(7)
+        self.assertEqual([], service.create_calls)
+        self.assertNotIn("Пробный период включён", call.message.edits[-1][0])
+        self.assertIn("04.09.2026 12:00", call.message.edits[-1][0])
 
     def test_purchase_disclosure_shows_known_receipt_email_only_in_screen_text(self):
         text = subscription_ui.format_subscription_screen(
@@ -254,6 +328,22 @@ class SubscriptionUiTests(unittest.TestCase):
         )
         self.assertIn("подписка активна до 01.09.2026 09:00", paid)
         self.assertIn("активной подписки нет", expired)
+
+    def test_expired_trial_displays_paid_offer_without_free_trial_action(self):
+        decision = AccessDecision(
+            AccessStatus.EXPIRED,
+            None,
+            AccessEntitlement.EXPIRED_TRIAL,
+        )
+        text = subscription_ui.format_subscription_screen(
+            self.runtime(_PaymentService()), decision, None
+        )
+        callbacks = self.callbacks(subscription_ui._payment_markup(None, decision))
+
+        self.assertIn("Пробные 3 дня закончились", text)
+        self.assertIn("Продолжить — 499 ₽ на 30 дней", text)
+        self.assertIn("subscription:pay", callbacks)
+        self.assertNotIn("subscription:trial", callbacks)
 
     def test_paid_active_hides_pay_and_check_buttons(self):
         paid = result(
@@ -540,14 +630,20 @@ class SubscriptionUiTests(unittest.TestCase):
             self.run_async(subscription_ui.subscription_check(malformed, _State()))
         self.assertTrue(malformed.answers[-1][1]["show_alert"])
 
-    def test_runtime_configuration_error_is_neutral_and_has_no_sdk_in_handler(self):
+    def test_runtime_configuration_error_still_allows_payment_free_trial_screen(self):
         call = _Call()
         with (
             patch.object(subscription_ui.User, "get", return_value=_User()),
             patch.object(subscription_ui, "get_payment_runtime", side_effect=PaymentRuntimeConfigurationError()),
+            patch.object(
+                subscription_ui,
+                "get_access_decision",
+                return_value=AccessDecision(AccessStatus.TRIAL_AVAILABLE, None),
+            ),
         ):
             self.run_async(subscription_ui.subscription_screen(call, _State()))
-        self.assertIn("временно недоступна", call.message.edits[-1][0])
+        self.assertIn("Попробуйте бесплатно — 3 дня", call.message.edits[-1][0])
+        self.assertIn("subscription:trial", self.callbacks(call.message.edits[-1][1]))
         self.assertNotIn("yookassa", subscription_ui.__dict__)
 
     def test_documents_and_support_use_validated_actions_with_safe_back_navigation(self):

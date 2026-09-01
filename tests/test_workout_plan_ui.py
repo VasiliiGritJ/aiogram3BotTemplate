@@ -1,6 +1,7 @@
 import unittest
 
 from handlers.markups import (
+    access_paywall_mkp,
     onboarding_duration_mkp,
     onboarding_environment_mkp,
     onboarding_experience_mkp,
@@ -31,6 +32,13 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
     def test_main_menu_has_workout_plan_action(self) -> None:
         self.assertIn("workout_plan", self.callback_values(start_mkp()))
         self.assertIn("subscription", self.callback_values(start_mkp()))
+
+    def test_access_paywall_distinguishes_free_trial_from_paid_offer(self) -> None:
+        free_text = access_paywall_mkp(trial_available=True).inline_keyboard[0][0].text
+        paid_text = access_paywall_mkp().inline_keyboard[0][0].text
+
+        self.assertEqual("Попробовать бесплатно — 3 дня", free_text)
+        self.assertEqual("Открыть подписку — 499 ₽ / 30 дней", paid_text)
 
     def test_subscription_markup_uses_only_local_payment_actions(self) -> None:
         markup = subscription_mkp(

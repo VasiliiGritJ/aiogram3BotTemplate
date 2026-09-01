@@ -16,7 +16,10 @@ from handlers.markups import (
 )
 from services.access import (
     AccessDecision,
+    AccessEntitlement,
     AccessStatus,
+    TrialActivationError,
+    activate_trial_once,
     as_utc_naive,
     get_access_decision,
     utc_now,
@@ -44,6 +47,7 @@ from storage.states import ReceiptEmail, tryFinish
 
 SUBSCRIPTION_CALLBACK = "subscription"
 SUBSCRIPTION_PAY_CALLBACK = "subscription:pay"
+SUBSCRIPTION_TRIAL_CALLBACK = "subscription:trial"
 SUBSCRIPTION_CHECK_PREFIX = "subscription:check:"
 SUBSCRIPTION_SUPPORT_CALLBACK = "subscription:support"
 SUBSCRIPTION_DOCUMENTS_CALLBACK = "subscription:documents"
@@ -65,28 +69,40 @@ def _format_price(amount_minor: int, currency: str) -> str:
 
 
 def format_subscription_screen(
-    runtime: PaymentRuntime,
+    runtime: PaymentRuntime | None,
     decision: AccessDecision,
     payment: PaymentServiceResult | None,
     receipt_email: str | None = None,
 ) -> str:
     del runtime
     product = LAUNCH_COMMERCIAL_PRODUCT
-    lines = [f"💳 Доступ на {product.period_days} дней", ""]
+    lines = ["💳 Подписка", ""]
     if decision.status is AccessStatus.TRIAL_AVAILABLE:
-        lines.append("Доступ: пробный период ещё не начат.")
+        lines.extend((
+            f"Попробуйте бесплатно — {product.trial_days} дня",
+            "Без карты и автопродления",
+        ))
     elif decision.status is AccessStatus.TRIAL:
-        lines.append(f"Доступ: пробный период до {_format_date(decision.ends_at)}.")
+        lines.append(
+            f"Доступ: пробный период до {_format_date(decision.ends_at)}"
+        )
     elif decision.status is AccessStatus.ACTIVE:
-        lines.append(f"Доступ: подписка активна до {_format_date(decision.ends_at)}.")
+        lines.append(f"Доступ: подписка активна до {_format_date(decision.ends_at)}")
+    elif decision.entitlement is AccessEntitlement.EXPIRED_TRIAL:
+        lines.extend((
+            f"Пробные {product.trial_days} дня закончились",
+            f"Продолжить — {_format_price(product.amount_minor, product.currency)} "
+            f"на {product.period_days} дней",
+        ))
     else:
         lines.append("Доступ: активной подписки нет.")
     lines.extend(
         (
             "",
             f"Стоимость: {_format_price(product.amount_minor, product.currency)}",
-            "Автопродления нет.",
-            "После успешной оплаты доступ активируется на 30 дней.",
+            f"Период: {product.period_days} дней",
+            "Без автопродления",
+            "Пробный период не превращается в платную подписку автоматически",
         )
     )
     if receipt_email is not None:
@@ -168,8 +184,18 @@ def _payment_markup(
     }
     paid_active = _is_paid_active(decision)
     payment_already_committed = paid_active or _is_paid_reserved(payment)
+    show_trial = (
+        decision.status is AccessStatus.TRIAL_AVAILABLE
+        and not payment_already_committed
+    )
+    show_product_entry = decision.has_access
     if payment is None:
-        return subscription_mkp(show_pay=not payment_already_committed, **link_kwargs)
+        return subscription_mkp(
+            show_pay=not payment_already_committed,
+            show_trial=show_trial,
+            show_product_entry=show_product_entry,
+            **link_kwargs,
+        )
     is_active_payment = payment.status in {
         PaymentStatus.CREATING,
         PaymentStatus.PENDING,
@@ -179,6 +205,8 @@ def _payment_markup(
         payment_id=payment.payment_id if is_active_payment else None,
         confirmation_url=payment.confirmation_url if is_active_payment else None,
         show_pay=not payment_already_committed,
+        show_trial=show_trial,
+        show_product_entry=show_product_entry,
         **link_kwargs,
     )
 
@@ -240,15 +268,64 @@ async def subscription_screen(call: types.CallbackQuery, state: FSMContext) -> N
     if user is None:
         await call.message.edit_text("Отправьте /start, чтобы начать.", reply_markup=to_menu_mpk())
     else:
-        runtime = await _load_runtime_or_show_error(call.message)
-        if runtime is not None:
-            payment = runtime.payment_service.get_latest_payment(user.id)
-            decision = get_access_decision(user.id)
-            receipt_email = get_receipt_email(user.id)
-            await call.message.edit_text(
-                format_subscription_screen(runtime, decision, payment, receipt_email),
-                reply_markup=_payment_markup(payment, decision, runtime),
-            )
+        try:
+            runtime = get_payment_runtime()
+        except PaymentRuntimeConfigurationError:
+            runtime = None
+        payment = (
+            None
+            if runtime is None
+            else runtime.payment_service.get_latest_payment(user.id)
+        )
+        decision = get_access_decision(user.id)
+        receipt_email = get_receipt_email(user.id)
+        await call.message.edit_text(
+            format_subscription_screen(runtime, decision, payment, receipt_email),
+            reply_markup=_payment_markup(payment, decision, runtime),
+        )
+    await call.answer()
+
+
+@dp.callback_query(F.data == SUBSCRIPTION_TRIAL_CALLBACK)
+async def subscription_trial(call: types.CallbackQuery, state: FSMContext) -> None:
+    """Start the lifetime trial only after this explicit, server-owned action."""
+    await tryFinish(state)
+    user = User.get(tg_id=call.from_user.id)
+    if user is None:
+        await call.message.edit_text(
+            "Отправьте /start, чтобы начать.",
+            reply_markup=to_menu_mpk(),
+        )
+        await call.answer()
+        return
+    try:
+        activation = activate_trial_once(user.id)
+    except (TrialActivationError, SQLAlchemyError):
+        await call.message.edit_text(
+            "Не удалось включить пробный период. Попробуйте позже.",
+            reply_markup=to_menu_mpk(),
+        )
+        await call.answer()
+        return
+
+    decision = get_access_decision(user.id)
+    try:
+        runtime = get_payment_runtime()
+    except PaymentRuntimeConfigurationError:
+        runtime = None
+    payment = (
+        None
+        if runtime is None
+        else runtime.payment_service.get_latest_payment(user.id)
+    )
+    receipt_email = get_receipt_email(user.id)
+    text = format_subscription_screen(runtime, decision, payment, receipt_email)
+    if activation.activated:
+        text = "✅ Пробный период включён\n\n" + text
+    await call.message.edit_text(
+        text,
+        reply_markup=_payment_markup(payment, decision, runtime),
+    )
     await call.answer()
 
 

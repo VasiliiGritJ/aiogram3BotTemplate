@@ -35,7 +35,7 @@ class ReceiptEmailTests(unittest.TestCase):
         self.database = SqliteSession(
             sqlite_url(Path(self.temporary.name) / "receipt-email.db")
         )
-        self.assertEqual(tuple(range(1, 15)), run_migrations(self.database.engine))
+        self.assertEqual(tuple(range(1, 16)), run_migrations(self.database.engine))
         self.add_user_with_profile(1, email=None)
         self.add_user_with_profile(2, email=None)
 
@@ -167,7 +167,7 @@ class ReceiptEmailTests(unittest.TestCase):
                     "INSERT INTO user_access(user_id, updated_at) VALUES (10, :now)",
                     {"now": BASE_TIME},
                 )
-            self.assertEqual((14,), run_migrations(migration_db.engine))
+            self.assertEqual((14, 15), run_migrations(migration_db.engine))
             self.assertEqual((), run_migrations(migration_db.engine))
             with migration_db.engine.connect() as connection:
                 self.assertEqual("ok", connection.exec_driver_sql("PRAGMA quick_check").scalar_one())
@@ -176,7 +176,7 @@ class ReceiptEmailTests(unittest.TestCase):
                 self.assertIsNone(connection.exec_driver_sql(
                     "SELECT receipt_email FROM fitness_profiles WHERE user_id = 10"
                 ).scalar_one())
-                self.assertEqual(14, connection.exec_driver_sql("SELECT COUNT(*) FROM schema_migrations").scalar_one())
+                self.assertEqual(15, connection.exec_driver_sql("SELECT COUNT(*) FROM schema_migrations").scalar_one())
             self.assertIn("receipt_email", {
                 column["name"]
                 for column in inspect(migration_db.engine).get_columns("fitness_profiles")

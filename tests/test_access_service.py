@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from db.models import UserAccess
-from services.access import AccessStatus, evaluate_access
+from services.access import AccessEntitlement, AccessStatus, evaluate_access
 
 
 BASE_TIME = datetime(2026, 8, 9, 12, 0, 0)
@@ -19,6 +19,11 @@ def make_access(
         user_id=1,
         trial_started_at=trial_started_at,
         trial_ends_at=trial_ends_at,
+        trial_consumed_at=(
+            trial_started_at
+            if trial_started_at is not None or trial_ends_at is not None
+            else None
+        ),
         subscription_started_at=subscription_started_at,
         subscription_ends_at=subscription_ends_at,
         updated_at=BASE_TIME,
@@ -35,6 +40,7 @@ class AccessServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(AccessStatus.TRIAL, decision.status)
+        self.assertEqual(AccessEntitlement.ACTIVE_TRIAL, decision.entitlement)
         self.assertTrue(decision.has_access)
         self.assertEqual(access.trial_ends_at, decision.ends_at)
 
@@ -45,6 +51,7 @@ class AccessServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(AccessStatus.EXPIRED, decision.status)
+        self.assertEqual(AccessEntitlement.EXPIRED_TRIAL, decision.entitlement)
         self.assertFalse(decision.has_access)
 
     def test_trial_is_expired_after_end_boundary(self) -> None:
@@ -65,6 +72,7 @@ class AccessServiceTests(unittest.TestCase):
         decision = evaluate_access(access, BASE_TIME + timedelta(days=1))
 
         self.assertEqual(AccessStatus.ACTIVE, decision.status)
+        self.assertEqual(AccessEntitlement.ACTIVE_PAID, decision.entitlement)
         self.assertEqual(subscription_end, decision.ends_at)
 
     def test_expired_subscription_does_not_grant_active_access(self) -> None:
@@ -77,6 +85,7 @@ class AccessServiceTests(unittest.TestCase):
         decision = evaluate_access(access, BASE_TIME)
 
         self.assertEqual(AccessStatus.EXPIRED, decision.status)
+        self.assertEqual(AccessEntitlement.EXPIRED_PAID, decision.entitlement)
         self.assertFalse(decision.has_access)
 
     def test_expired_paid_history_does_not_restore_trial_available(self) -> None:

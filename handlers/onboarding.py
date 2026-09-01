@@ -348,7 +348,10 @@ async def onboarding_confirm(call: types.CallbackQuery, state: FSMContext):
         else:
             result = save_profile_and_access(user.id, data)
             if result.created:
-                text = "Анкета сохранена. План подготовлен, а пробный период начнётся с первой тренировки."
+                text = (
+                    "Анкета сохранена. "
+                    "Бесплатный период можно включить в разделе «Подписка»."
+                )
             else:
                 text = "Анкета уже была сохранена. Пробный период не изменён."
     except (TypeError, OnboardingPersistenceError, OnboardingValidationError):

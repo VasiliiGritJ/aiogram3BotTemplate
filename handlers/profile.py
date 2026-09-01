@@ -8,7 +8,12 @@ from aiogram import F, types
 from db import User
 from handlers.markups import cancel_mpk, profile_mpk, receipt_email_mpk, to_menu_mpk
 from handlers.onboarding import start_onboarding
-from services.access import AccessStatus, evaluate_access, get_user_access
+from services.access import (
+    AccessEntitlement,
+    AccessStatus,
+    evaluate_access,
+    get_user_access,
+)
 from services.onboarding import (
     EXPERIENCE_LABELS,
     GOAL_LABELS,
@@ -47,6 +52,7 @@ async def profileCall(call: types.CallbackQuery, state: FSMContext):
     access_labels = {
         AccessStatus.ACTIVE: "Активен",
         AccessStatus.TRIAL: "Пробный период",
+        AccessStatus.TRIAL_AVAILABLE: "Пробный период доступен",
         AccessStatus.EXPIRED: "Истёк",
     }
     if decision.ends_at is not None:
@@ -56,6 +62,8 @@ async def profileCall(call: types.CallbackQuery, state: FSMContext):
         )
     else:
         access_text = access_labels[decision.status]
+        if decision.entitlement is AccessEntitlement.EXPIRED_TRIAL:
+            access_text = "Пробный период завершён"
 
     link = await create_start_link(bot, str(call.from_user.id))
     limitations = escape(profile.limitations or "Нет")

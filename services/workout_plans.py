@@ -2027,7 +2027,7 @@ def format_workout_plan_preview(
     profile: FitnessProfile,
     fallback_notes: tuple[str, ...] = (),
 ) -> str:
-    """Render a safe plan preview before the trial has started."""
+    """Render a compact weekly plan preview."""
     lines = ["Ваш персональный план подготовлен."]
     lines.append(f"Цель: {escape(GOAL_NAMES.get(profile.goal, DEFAULT_GOAL))}")
     lines.append(f"Тренировок в неделю: {profile.workouts_per_week}")
@@ -2038,5 +2038,5 @@ def format_workout_plan_preview(
         groups = day_primary_muscle_groups(day)
         lines.append(f"{day.day_number}. {escape(day.title)} — Мышцы: {escape(', '.join(groups))}")
     lines.append("")
-    lines.append("Пробный период начнётся только при запуске первой тренировки.")
+    lines.append("Бесплатный период включается отдельно в разделе «Подписка».")
     return "\n".join(lines)

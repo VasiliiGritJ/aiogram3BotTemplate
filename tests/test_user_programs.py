@@ -13,6 +13,7 @@ from db.models import (
     UserWorkoutPlan,
     UserWorkoutPlanExercise,
 )
+from services.access import activate_trial_once
 from services.workout_execution import get_or_start_workout
 from services.user_programs import (
     AdaptationMode,
@@ -164,6 +165,12 @@ class UserProgramPersistenceTests(unittest.TestCase):
                     self.assertEqual(mode.value, plan.adaptation_mode)
                     self.assertEqual(expected, strategies)
 
+        activated = activate_trial_once(
+            self.user_id,
+            now=datetime(2026, 8, 13, 11, 0),
+            session_factory=self.db,
+        )
+        self.assertTrue(activated.activated)
         started = get_or_start_workout(
             self.user_id,
             datetime(2026, 8, 13, 12, 0),

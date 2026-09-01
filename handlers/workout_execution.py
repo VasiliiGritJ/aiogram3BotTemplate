@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from db import User
 from handlers.markups import (
+    access_paywall_mkp,
     start_mkp,
     to_menu_mpk,
     workout_cancel_confirmation_mkp,
@@ -109,8 +110,6 @@ def workout_entry_action(user_id: int) -> tuple[str, str] | None:
         return "▶️ Продолжить тренировку", WORKOUT_RESUME_CALLBACK
 
     decision = get_access_decision(user_id)
-    if decision.status == AccessStatus.TRIAL_AVAILABLE:
-        return "🏋️ Начать первую тренировку бесплатно", WORKOUT_START_CALLBACK
     if decision.has_access:
         return "🏋️ Начать тренировку", WORKOUT_START_CALLBACK
     return None
@@ -1338,6 +1337,15 @@ async def workout_history(call: types.CallbackQuery, state: FSMContext) -> None:
     if user is None:
         await call.message.edit_text("Отправьте /start, чтобы начать.")
     else:
+        decision = get_access_decision(user.id)
+    if user is not None and not decision.has_access:
+        await call.message.edit_text(
+            "История и прогрессия доступны во время пробного или платного доступа.",
+            reply_markup=access_paywall_mkp(
+                trial_available=decision.status is AccessStatus.TRIAL_AVAILABLE
+            ),
+        )
+    elif user is not None:
         await _show_history_page(call.message, user.id, offset=0)
     await call.answer()
 
@@ -1350,6 +1358,16 @@ async def workout_history_page(call: types.CallbackQuery, state: FSMContext) -> 
     if offset is None or user is None:
         await call.answer("Эта ссылка на историю устарела.", show_alert=True)
         return
+    decision = get_access_decision(user.id)
+    if not decision.has_access:
+        await call.message.edit_text(
+            "Доступ закончился. Откройте раздел «Подписка».",
+            reply_markup=access_paywall_mkp(
+                trial_available=decision.status is AccessStatus.TRIAL_AVAILABLE
+            ),
+        )
+        await call.answer()
+        return
     await _show_history_page(call.message, user.id, offset=offset)
     await call.answer()
 
@@ -1361,6 +1379,16 @@ async def workout_history_detail(call: types.CallbackQuery, state: FSMContext) -
     await state.clear()
     if parsed is None or user is None:
         await call.answer("Эта тренировка недоступна.", show_alert=True)
+        return
+    decision = get_access_decision(user.id)
+    if not decision.has_access:
+        await call.message.edit_text(
+            "Доступ закончился. Откройте раздел «Подписка».",
+            reply_markup=access_paywall_mkp(
+                trial_available=decision.status is AccessStatus.TRIAL_AVAILABLE
+            ),
+        )
+        await call.answer()
         return
     workout_id, offset = parsed
     try:

@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14), applied)
+        self.assertEqual(tuple(range(1, 16)), applied)
         self.assertTrue(
             {
                 "users",
@@ -67,9 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14), first_run)
+        self.assertEqual(tuple(range(1, 16)), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(14, applied_count)
+        self.assertEqual(15, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -110,13 +110,18 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT goal, workouts_per_week FROM fitness_profiles WHERE user_id = 1"
             ).one()
             access = connection.exec_driver_sql(
-                "SELECT trial_started_at, trial_ends_at FROM user_access WHERE user_id = 1"
+                "SELECT trial_started_at, trial_ends_at, trial_consumed_at "
+                "FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual((3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14), applied)
+        self.assertEqual(tuple(range(3, 16)), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
-            ("2026-08-09 12:00:00", "2026-08-12 12:00:00"),
+            (
+                "2026-08-09 12:00:00",
+                "2026-08-12 12:00:00",
+                "2026-08-09 12:00:00",
+            ),
             access,
         )
 
@@ -425,10 +430,12 @@ class DatabaseMigrationTests(unittest.TestCase):
 
         with session.engine.connect() as connection:
             access_before = connection.exec_driver_sql(
-                "SELECT * FROM user_access ORDER BY user_id"
+                "SELECT user_id, trial_started_at, trial_ends_at, "
+                "subscription_started_at, subscription_ends_at, updated_at "
+                "FROM user_access ORDER BY user_id"
             ).fetchall()
 
-        self.assertEqual((8, 9, 10, 11, 12, 13, 14), run_migrations(session.engine))
+        self.assertEqual(tuple(range(8, 16)), run_migrations(session.engine))
         self.assertEqual((), run_migrations(session.engine, target_version=9))
 
         with session.engine.connect() as connection:
@@ -439,7 +446,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                     updated_at FROM fitness_profiles ORDER BY user_id"""
             ).fetchall()
             access_after = connection.exec_driver_sql(
-                "SELECT * FROM user_access ORDER BY user_id"
+                "SELECT user_id, trial_started_at, trial_ends_at, "
+                "subscription_started_at, subscription_ends_at, updated_at "
+                "FROM user_access ORDER BY user_id"
             ).fetchall()
 
         self.assertEqual("intermediate", profiles[0].experience_level)
@@ -642,6 +651,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(
             {
                 "user_id", "trial_started_at", "trial_ends_at",
+                "trial_consumed_at",
                 "subscription_started_at", "subscription_ends_at", "updated_at",
             },
             set(access_columns),
@@ -651,6 +661,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertTrue(access_columns["subscription_ends_at"]["nullable"])
         self.assertTrue(access_columns["trial_started_at"]["nullable"])
         self.assertTrue(access_columns["trial_ends_at"]["nullable"])
+        self.assertTrue(access_columns["trial_consumed_at"]["nullable"])
 
         user_indexes = inspector.get_indexes("users")
         unique_tg_id = [
@@ -658,6 +669,39 @@ class DatabaseMigrationTests(unittest.TestCase):
             if index["column_names"] == ["tg_id"] and index["unique"]
         ]
         self.assertEqual(1, len(unique_tg_id))
+
+    def test_migration_fifteen_backfills_only_historic_started_trials(self) -> None:
+        session = self.make_session("trial-consumption.db")
+        self.assertEqual(tuple(range(1, 15)), run_migrations(session.engine, 14))
+        with session.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO users(id, tg_id, fullname, username, inviter_id) "
+                "VALUES (1, 1501, 'Started', 'started', 0), "
+                "(2, 1502, 'Eligible', 'eligible', 0)"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO user_access(user_id, trial_started_at, trial_ends_at) "
+                "VALUES (1, '2026-08-01 12:00:00', '2026-08-04 12:00:00'), "
+                "(2, NULL, NULL)"
+            )
+
+        self.assertEqual((15,), run_migrations(session.engine))
+        self.assertEqual((), run_migrations(session.engine))
+        with session.engine.connect() as connection:
+            rows = connection.exec_driver_sql(
+                "SELECT user_id, trial_consumed_at FROM user_access ORDER BY user_id"
+            ).fetchall()
+            quick = connection.exec_driver_sql("PRAGMA quick_check").scalar_one()
+            fk_issues = connection.exec_driver_sql(
+                "PRAGMA foreign_key_check"
+            ).fetchall()
+
+        self.assertEqual(
+            [(1, "2026-08-01 12:00:00"), (2, None)],
+            [tuple(row) for row in rows],
+        )
+        self.assertEqual("ok", quick)
+        self.assertEqual([], fk_issues)
 
     def test_foreign_keys_are_enabled_for_connections(self) -> None:
         session = self.make_session()
@@ -778,7 +822,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14), applied)
+        self.assertEqual(tuple(range(1, 16)), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

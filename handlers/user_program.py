@@ -7,12 +7,14 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from db import User
 from handlers.markups import (
+    access_paywall_mkp,
     to_menu_mpk,
     user_program_mode_mkp,
     user_program_preview_mkp,
     workout_plan_mkp,
 )
 from handlers.workout_execution import workout_entry_action
+from services.access import AccessStatus, get_access_decision
 from services.onboarding import get_fitness_profile
 from services.user_programs import (
     AdaptationMode,
@@ -32,6 +34,21 @@ PARSER = DeterministicRussianProgramParser()
 
 @dp.callback_query(F.data == "user_program:start")
 async def user_program_start(call: types.CallbackQuery, state: FSMContext) -> None:
+    user = User.get(tg_id=call.from_user.id)
+    decision = None if user is None else get_access_decision(user.id)
+    if decision is None or not decision.has_access:
+        await state.clear()
+        await call.message.edit_text(
+            "Пользовательские программы доступны во время пробного или платного доступа.",
+            reply_markup=access_paywall_mkp(
+                trial_available=(
+                    decision is not None
+                    and decision.status is AccessStatus.TRIAL_AVAILABLE
+                )
+            ),
+        )
+        await call.answer()
+        return
     await state.clear()
     await state.set_state(UserProgram.choosing_mode)
     await call.message.edit_text(
@@ -69,6 +86,16 @@ async def user_program_text(message: types.Message, state: FSMContext) -> None:
     if user is None or data.get("user_program_mode") is None:
         await state.clear()
         await message.answer("Начните заново из раздела «Мой план».", reply_markup=to_menu_mpk())
+        return
+    decision = get_access_decision(user.id)
+    if not decision.has_access:
+        await state.clear()
+        await message.answer(
+            "Доступ закончился. Откройте раздел «Подписка».",
+            reply_markup=access_paywall_mkp(
+                trial_available=decision.status is AccessStatus.TRIAL_AVAILABLE
+            ),
+        )
         return
     profile = get_fitness_profile(user.id)
     result = PARSER.parse(
@@ -109,6 +136,17 @@ async def user_program_confirm(call: types.CallbackQuery, state: FSMContext) -> 
     if user is None or not isinstance(payload, dict):
         await state.clear()
         await call.answer("Черновик устарел. Введите программу заново.", show_alert=True)
+        return
+    decision = get_access_decision(user.id)
+    if not decision.has_access:
+        await state.clear()
+        await call.message.edit_text(
+            "Доступ закончился. Откройте раздел «Подписка».",
+            reply_markup=access_paywall_mkp(
+                trial_available=decision.status is AccessStatus.TRIAL_AVAILABLE
+            ),
+        )
+        await call.answer()
         return
     try:
         result = assign_user_program(user.id, UserProgramDraft.from_payload(payload))

@@ -89,6 +89,11 @@ class UserProgramUiTests(unittest.TestCase):
         profile = python_types.SimpleNamespace(training_environment="gym")
         with (
             patch.object(ui.User, "get", return_value=python_types.SimpleNamespace(id=7)),
+            patch.object(
+                ui,
+                "get_access_decision",
+                return_value=python_types.SimpleNamespace(has_access=True),
+            ),
             patch.object(ui, "get_fitness_profile", return_value=profile),
             patch.object(ui, "assign_user_program") as assign,
         ):
@@ -108,6 +113,11 @@ class UserProgramUiTests(unittest.TestCase):
         assignment = python_types.SimpleNamespace(plan=object(), created=True)
         with (
             patch.object(ui.User, "get", return_value=python_types.SimpleNamespace(id=7)),
+            patch.object(
+                ui,
+                "get_access_decision",
+                return_value=python_types.SimpleNamespace(has_access=True),
+            ),
             patch.object(ui, "assign_user_program", return_value=assignment) as assign,
             patch.object(ui, "format_workout_plan", return_value="plan"),
             patch.object(ui, "workout_entry_action", return_value=None),

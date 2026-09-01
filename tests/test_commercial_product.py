@@ -1,6 +1,7 @@
 """Tests for one server-owned launch commercial contract."""
 
 import unittest
+from datetime import timedelta
 
 from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
 from services.receipt_domain import NPD_RECEIPT_DESCRIPTION
@@ -15,6 +16,12 @@ class CommercialProductTests(unittest.TestCase):
         self.assertEqual("RUB", product.currency)
         self.assertEqual(30, product.period_days)
         self.assertFalse(product.auto_renew)
+        self.assertEqual(3, product.trial_days)
+        self.assertEqual(timedelta(hours=72), product.trial_duration)
+        self.assertEqual(0, product.trial_price_minor)
+        self.assertFalse(product.trial_requires_payment_method)
+        self.assertFalse(product.trial_auto_renew)
+        self.assertEqual(1, product.trial_lifetime_limit)
         self.assertEqual("Доступ к сервису «Мой AI Тренер» на 30 дней", product.receipt_description)
         self.assertEqual(product.receipt_description, NPD_RECEIPT_DESCRIPTION)
 

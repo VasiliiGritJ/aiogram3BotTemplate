@@ -24,8 +24,6 @@ from db.models import (
     dbSession,
 )
 from services.access import (
-    AccessStatus,
-    activate_trial_once_in_session,
     as_utc_naive,
     evaluate_access,
     utc_now,
@@ -906,15 +904,7 @@ def get_or_start_workout(
 
                 access = session.get(UserAccess, user_id)
                 decision = evaluate_access(access, started_at)
-                trial_activated = False
-                if decision.status == AccessStatus.TRIAL_AVAILABLE:
-                    activation = activate_trial_once_in_session(
-                        user_id,
-                        session,
-                        started_at,
-                    )
-                    trial_activated = activation.activated
-                elif not decision.has_access:
+                if not decision.has_access:
                     raise WorkoutAccessDeniedError(
                         "Current access does not allow a new workout."
                     )
@@ -932,7 +922,7 @@ def get_or_start_workout(
                 return WorkoutStartResult(
                     workout=_load_workout_view(session, workout),
                     created=True,
-                    trial_activated=trial_activated,
+                    trial_activated=False,
                 )
     except IntegrityError:
         # A competing transaction may have inserted the one allowed active

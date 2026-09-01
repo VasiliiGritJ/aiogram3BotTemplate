@@ -1,13 +1,15 @@
 """Centralized access status calculation."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Callable
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from db.models import UserAccess, dbSession
+from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
 
 
 class AccessStatus(StrEnum):
@@ -17,10 +19,21 @@ class AccessStatus(StrEnum):
     EXPIRED = "expired"
 
 
+class AccessEntitlement(StrEnum):
+    NO_ACCESS = "no_access"
+    TRIAL_AVAILABLE = "trial_available"
+    ACTIVE_TRIAL = "active_trial"
+    ACTIVE_PAID = "active_paid"
+    EXPIRED_TRIAL = "expired_trial"
+    EXPIRED_PAID = "expired_paid"
+    INCONSISTENT = "inconsistent"
+
+
 @dataclass(frozen=True)
 class AccessDecision:
     status: AccessStatus
     ends_at: datetime | None
+    entitlement: AccessEntitlement | None = None
 
     @property
     def has_access(self) -> bool:
@@ -46,7 +59,11 @@ def evaluate_access(
     """Calculate access from dates without storing a derived status."""
     current_time = as_utc_naive(now) if now is not None else utc_now()
     if access is None:
-        return AccessDecision(AccessStatus.EXPIRED, None)
+        return AccessDecision(
+            AccessStatus.EXPIRED,
+            None,
+            AccessEntitlement.NO_ACCESS,
+        )
 
     subscription_started_at = access.subscription_started_at
     subscription_ends_at = access.subscription_ends_at
@@ -59,9 +76,15 @@ def evaluate_access(
         return AccessDecision(
             AccessStatus.ACTIVE,
             as_utc_naive(subscription_ends_at),
+            AccessEntitlement.ACTIVE_PAID,
         )
 
-    if access.trial_started_at is None and access.trial_ends_at is None:
+    trial_consumed = (
+        access.trial_consumed_at is not None
+        or access.trial_started_at is not None
+        or access.trial_ends_at is not None
+    )
+    if not trial_consumed:
         # A paid period may be expired, but its persisted dates prove that this
         # user already consumed the first-access lifecycle.  Do not resurrect
         # a trial after paid history.
@@ -69,8 +92,16 @@ def evaluate_access(
             access.subscription_started_at is not None
             or access.subscription_ends_at is not None
         ):
-            return AccessDecision(AccessStatus.EXPIRED, None)
-        return AccessDecision(AccessStatus.TRIAL_AVAILABLE, None)
+            return AccessDecision(
+                AccessStatus.EXPIRED,
+                None,
+                AccessEntitlement.EXPIRED_PAID,
+            )
+        return AccessDecision(
+            AccessStatus.TRIAL_AVAILABLE,
+            None,
+            AccessEntitlement.TRIAL_AVAILABLE,
+        )
 
     if (
         access.trial_started_at is not None
@@ -81,9 +112,16 @@ def evaluate_access(
         return AccessDecision(
             AccessStatus.TRIAL,
             as_utc_naive(access.trial_ends_at),
+            AccessEntitlement.ACTIVE_TRIAL,
         )
 
-    return AccessDecision(AccessStatus.EXPIRED, None)
+    if access.subscription_started_at is not None or access.subscription_ends_at is not None:
+        entitlement = AccessEntitlement.EXPIRED_PAID
+    elif access.trial_started_at is not None and access.trial_ends_at is not None:
+        entitlement = AccessEntitlement.EXPIRED_TRIAL
+    else:
+        entitlement = AccessEntitlement.INCONSISTENT
+    return AccessDecision(AccessStatus.EXPIRED, None, entitlement)
 
 
 @dataclass(frozen=True)
@@ -107,28 +145,35 @@ def activate_trial_once_in_session(
     second write, such as creating the first workout session.
     """
     started_at = as_utc_naive(now) if now is not None else utc_now()
+    trial_ends_at = started_at + LAUNCH_COMMERCIAL_PRODUCT.trial_duration
+    claimed = session.execute(
+        update(UserAccess)
+        .where(
+            UserAccess.user_id == user_id,
+            UserAccess.trial_consumed_at.is_(None),
+            UserAccess.trial_started_at.is_(None),
+            UserAccess.trial_ends_at.is_(None),
+            UserAccess.subscription_started_at.is_(None),
+            UserAccess.subscription_ends_at.is_(None),
+        )
+        .values(
+            trial_consumed_at=started_at,
+            trial_started_at=started_at,
+            trial_ends_at=trial_ends_at,
+            updated_at=started_at,
+        )
+        .execution_options(synchronize_session=False)
+    )
     access = session.get(UserAccess, user_id)
     if access is None:
         raise TrialActivationError("Access record does not exist.")
-    if (
-        access.subscription_started_at is not None
-        and access.subscription_ends_at is not None
-        and as_utc_naive(access.subscription_started_at) <= started_at
-        < as_utc_naive(access.subscription_ends_at)
-    ):
-        return TrialActivationResult(access, activated=False)
-    if (
-        access.subscription_started_at is not None
-        or access.subscription_ends_at is not None
-    ):
-        return TrialActivationResult(access, activated=False)
-    if access.trial_started_at is None and access.trial_ends_at is None:
-        access.trial_started_at = started_at
-        access.trial_ends_at = started_at + timedelta(days=3)
-        access.updated_at = started_at
-        session.flush()
+    session.refresh(access)
+    if claimed.rowcount == 1:
         return TrialActivationResult(access, activated=True)
-    if access.trial_started_at is None or access.trial_ends_at is None:
+    if (
+        access.trial_consumed_at is None
+        and (access.trial_started_at is None) != (access.trial_ends_at is None)
+    ):
         raise TrialActivationError("Trial dates are inconsistent.")
     return TrialActivationResult(access, activated=False)
 
@@ -138,7 +183,7 @@ def activate_trial_once(
     now: datetime | None = None,
     session_factory: Callable[[], Session] = dbSession,
 ) -> TrialActivationResult:
-    """Start a three-day trial once; a started or expired trial is never reset."""
+    """Start the launch trial once; a started or expired trial is never reset."""
     with session_factory() as session:
         with session.begin():
             return activate_trial_once_in_session(user_id, session, now)

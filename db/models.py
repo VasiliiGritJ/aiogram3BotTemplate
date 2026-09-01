@@ -259,6 +259,7 @@ class UserAccess(Base):
     )
     trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    trial_consumed_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
     subscription_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(), nullable=True
     )

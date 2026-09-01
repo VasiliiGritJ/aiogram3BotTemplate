@@ -177,6 +177,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
         self.assertEqual(expected_start, profile.completed_at)
         self.assertIsNone(access.trial_started_at)
         self.assertIsNone(access.trial_ends_at)
+        self.assertIsNone(access.trial_consumed_at)
         self.assertEqual(AccessStatus.TRIAL_AVAILABLE, evaluate_access(access).status)
         self.assertIsNone(access.subscription_started_at)
         self.assertIsNone(access.subscription_ends_at)
@@ -270,6 +271,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
         self.assertFalse(repeated.activated)
         self.assertEqual(confirmed_at, repeated.access.trial_started_at)
         self.assertEqual(confirmed_at + timedelta(days=3), repeated.access.trial_ends_at)
+        self.assertEqual(confirmed_at, repeated.access.trial_consumed_at)
 
     def test_editing_profile_keeps_actual_limitation_description(self) -> None:
         confirmed_at = datetime(2026, 8, 9, 12, 0)

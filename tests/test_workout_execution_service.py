@@ -19,7 +19,7 @@ from db.models import (
     WorkoutSessionExercise,
     WorkoutTemplate,
 )
-from services.access import AccessStatus, get_access_decision
+from services.access import AccessStatus, activate_trial_once, get_access_decision
 from services.workout_execution import (
     WorkoutAccessDeniedError,
     WorkoutExecutionError,
@@ -58,6 +58,7 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
         self.database = SqliteSession(sqlite_url(database_path))
         run_migrations(self.database.engine)
         self.user_id = self._create_user()
+        activate_trial_once(self.user_id, BASE_TIME, self.database)
         self.plan_id = self._create_assigned_plan("initial")
 
     def tearDown(self) -> None:
@@ -183,6 +184,7 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             access = session.get(UserAccess, self.user_id)
             access.trial_started_at = trial_started_at
             access.trial_ends_at = trial_ends_at
+            access.trial_consumed_at = trial_started_at
             access.subscription_started_at = subscription_started_at
             access.subscription_ends_at = subscription_ends_at
             access.updated_at = BASE_TIME
@@ -220,11 +222,11 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             self.database,
         )
 
-    def test_trial_available_start_is_atomic_and_creates_snapshot(self) -> None:
+    def test_active_trial_start_creates_snapshot_without_reactivating_trial(self) -> None:
         result = get_or_start_workout(self.user_id, BASE_TIME, self.database)
 
         self.assertTrue(result.created)
-        self.assertTrue(result.trial_activated)
+        self.assertFalse(result.trial_activated)
         self.assertEqual(1, result.workout.day_number)
         self.assertEqual([1, 2], [item.exercise_order for item in result.workout.exercises])
         self.assertTrue(
@@ -242,6 +244,15 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             (BASE_TIME, BASE_TIME + timedelta(days=3)),
             self._access_dates(),
         )
+
+    def test_workout_start_never_implicitly_activates_available_trial(self) -> None:
+        self._set_access(trial_started_at=None, trial_ends_at=None)
+
+        with self.assertRaises(WorkoutAccessDeniedError):
+            get_or_start_workout(self.user_id, BASE_TIME, self.database)
+
+        self.assertEqual((None, None), self._access_dates())
+        self.assertIsNone(get_active_workout(self.user_id, self.database))
 
     def test_profile_change_refreshes_generated_plan_before_new_workout(self) -> None:
         completed = self._complete_started_workout(BASE_TIME)
@@ -483,7 +494,8 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             get_or_start_workout(self.user_id, BASE_TIME, self.database)
         self.assertIsNone(get_active_workout(self.user_id, self.database))
 
-    def test_snapshot_creation_failure_rolls_back_trial_activation(self) -> None:
+    def test_snapshot_creation_failure_preserves_trial_dates(self) -> None:
+        dates_before = self._access_dates()
         with patch.object(
             workout_execution,
             "_create_workout_session",
@@ -492,7 +504,7 @@ class WorkoutExecutionServiceTests(unittest.TestCase):
             with self.assertRaises(WorkoutExecutionError):
                 get_or_start_workout(self.user_id, BASE_TIME, self.database)
 
-        self.assertEqual((None, None), self._access_dates())
+        self.assertEqual(dates_before, self._access_dates())
         self.assertIsNone(get_active_workout(self.user_id, self.database))
 
     def test_snapshot_is_immutable_after_source_plan_change(self) -> None:

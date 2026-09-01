@@ -1,5 +1,7 @@
 from aiogram import types
 
+from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
+
 # def example_mkp():
 #     btns = [
 #         [
@@ -57,6 +59,8 @@ def subscription_mkp(
     payment_id: int | None = None,
     confirmation_url: str | None = None,
     show_pay: bool = True,
+    show_trial: bool = False,
+    show_product_entry: bool = False,
     public_site_url: str | None = None,
     terms_url: str | None = None,
     privacy_url: str | None = None,
@@ -67,6 +71,21 @@ def subscription_mkp(
     if isinstance(confirmation_url, str) and confirmation_url.startswith("https://"):
         buttons.append(
             [types.InlineKeyboardButton(text="Оплатить в YooKassa", url=confirmation_url)]
+        )
+    if show_trial:
+        trial_days = LAUNCH_COMMERCIAL_PRODUCT.trial_days
+        buttons.append(
+            [types.InlineKeyboardButton(
+                text=f"Попробовать бесплатно — {trial_days} дня",
+                callback_data="subscription:trial",
+            )]
+        )
+    if show_product_entry:
+        buttons.append(
+            [types.InlineKeyboardButton(
+                text="Перейти к тренировкам",
+                callback_data="workout_plan",
+            )]
         )
     if show_pay:
         buttons.append(
@@ -140,6 +159,27 @@ def profile_mpk(*, receipt_email_set: bool = False):
         ],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=btns)
+
+
+def access_paywall_mkp(*, trial_available: bool = False):
+    if trial_available:
+        action_text = (
+            "Попробовать бесплатно — "
+            f"{LAUNCH_COMMERCIAL_PRODUCT.trial_days} дня"
+        )
+    else:
+        product = LAUNCH_COMMERCIAL_PRODUCT
+        action_text = (
+            f"Открыть подписку — {product.amount_minor // 100} ₽ / "
+            f"{product.period_days} дней"
+        )
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text=action_text,
+            callback_data="subscription",
+        )],
+        [types.InlineKeyboardButton(text="🏠 В меню", callback_data="start")],
+    ])
 
 
 def receipt_email_mpk(*, back_callback: str = "profile"):
