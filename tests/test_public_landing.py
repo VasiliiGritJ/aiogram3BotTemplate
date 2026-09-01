@@ -48,7 +48,7 @@ class PublicLandingTests(unittest.TestCase):
             "Не просто список упражнений",
             "499 ₽ не покупают мотивацию",
             "одна персональная тренировка может стоить дороже",
-            "Один обычный поход в кофейню может стоить сопоставимо",
+            "сопоставимо с одним обычным походом в кофейню",
             "≈ 16,6 ₽ / DAY",
             "не является медицинской помощью",
         ):
@@ -178,14 +178,25 @@ class PublicLandingTests(unittest.TestCase):
         styles = STYLES.read_text(encoding="utf-8")
 
         self.assertIn('class="value-proof"', page)
-        self.assertIn("16,6 ₽", page)
-        self.assertIn("одна персональная тренировка может стоить дороже", page)
-        self.assertIn("Один обычный поход в кофейню может стоить сопоставимо", page)
-        self.assertIn("30 дней — 499 ₽", page)
+        daily_start = page.index('<div class="value-proof">')
+        daily_end = page.index('<div class="comparison-trust">', daily_start)
+        daily_block = page[daily_start:daily_end]
+        comparison_start = page.index('<div class="price-compare">')
+        comparison_end = page.index('<div class="value-proof">', comparison_start)
+        comparison_block = page[comparison_start:comparison_end]
+
+        self.assertIn("≈ 16,6 ₽", daily_block)
+        self.assertIn("Чтобы каждый раз знать, что делать дальше", daily_block)
+        self.assertNotIn("кофейн", daily_block.lower())
+        self.assertIn("одна персональная тренировка может стоить дороже", comparison_block)
+        self.assertIn("30 дней — 499 ₽", comparison_block)
+        self.assertIn("499 ₽ за 30 дней", comparison_block)
+        self.assertIn("сопоставимо с одним обычным походом в кофейню", comparison_block)
         self.assertIn("Без карты · без автопродления", page)
         self.assertIn("чек", page.lower())
         self.assertIn(".value-proof", styles)
         self.assertIn(".proof-icon", styles)
+        self.assertIn(".price-compare .current p", styles)
         self.assertIn(".trial-value-strip", styles)
         self.assertIn(".comparison-trust", styles)
         self.assertIn("chrome-sweep", styles)
