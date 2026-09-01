@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LANDING = ROOT / "landing" / "index.html"
 STYLES = ROOT / "landing" / "styles.css"
 SCRIPT = ROOT / "landing" / "app.js"
+HERO_ASSET = ROOT / "landing" / "assets" / "trainer-statue.png"
 
 
 class PublicLandingTests(unittest.TestCase):
@@ -77,6 +78,24 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("data-environment-mode", script)
         self.assertIn("data-chaos-toggle", script)
         self.assertIn("os-cursor", script)
+        self.assertIn("prefers-reduced-motion", script)
+
+    def test_approved_statue_asset_is_decorative_and_integrated_with_the_hero(self) -> None:
+        page = LANDING.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
+        script = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertTrue(HERO_ASSET.is_file())
+        self.assertEqual(b"\x89PNG\r\n\x1a\n", HERO_ASSET.read_bytes()[:8])
+        self.assertIn('src="assets/trainer-statue.png"', page)
+        self.assertIn('width="2448" height="3264" alt=""', page)
+        self.assertIn('class="hero-statue" aria-hidden="true"', page)
+        self.assertIn("statue-data-link", page)
+        self.assertIn(".hero-statue", styles)
+        self.assertIn("statue-reveal", styles)
+        self.assertIn("data-pulse", styles)
+        self.assertIn(".statue-data-link", styles)
+        self.assertIn("hero-statue", script)
         self.assertIn("prefers-reduced-motion", script)
 
     def test_required_legal_sections_and_health_disclaimer_are_reachable(self) -> None:

@@ -158,6 +158,39 @@
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const hasFinePointer = window.matchMedia("(pointer: fine)").matches;
   if (!reduceMotion && hasFinePointer) {
+    const hero = document.querySelector(".hero");
+    const statue = document.querySelector(".hero-statue");
+    const statueDataLink = document.querySelector(".statue-data-link");
+    if (hero && statue && statueDataLink) {
+      hero.addEventListener("pointermove", (event) => {
+        const bounds = hero.getBoundingClientRect();
+        const x = (event.clientX - bounds.left) / bounds.width - 0.5;
+        const y = (event.clientY - bounds.top) / bounds.height - 0.5;
+        statue.style.setProperty("--statue-x", `${x * 12}px`);
+        statue.style.setProperty("--statue-y", `${y * 9}px`);
+        statueDataLink.style.setProperty("--link-x", `${x * 8}px`);
+        statueDataLink.style.setProperty("--link-y", `${y * 6}px`);
+      });
+      hero.addEventListener("pointerleave", () => {
+        statue.style.removeProperty("--statue-x");
+        statue.style.removeProperty("--statue-y");
+        statueDataLink.style.removeProperty("--link-x");
+        statueDataLink.style.removeProperty("--link-y");
+      });
+      let scrollTicking = false;
+      const updateStatueScroll = () => {
+        const offset = Math.max(-1, Math.min(1, hero.getBoundingClientRect().top / window.innerHeight));
+        statue.style.setProperty("--statue-scroll-y", `${offset * 12}px`);
+        scrollTicking = false;
+      };
+      window.addEventListener("scroll", () => {
+        if (scrollTicking) return;
+        scrollTicking = true;
+        window.requestAnimationFrame(updateStatueScroll);
+      }, { passive: true });
+      updateStatueScroll();
+    }
+
     for (const panel of document.querySelectorAll("[data-reactive]")) {
       panel.addEventListener("pointermove", (event) => {
         const bounds = panel.getBoundingClientRect();
