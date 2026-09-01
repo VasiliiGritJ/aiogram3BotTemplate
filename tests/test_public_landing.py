@@ -44,7 +44,7 @@ class PublicLandingTests(unittest.TestCase):
             "Не просто список упражнений",
             "499 ₽ не покупают мотивацию",
             "одна сессия может стоить больше",
-            "Один обычный поход в кофейню может стоить сопоставимо",
+            "Часто меньше одной персональной тренировки",
             "≈ 16,6 ₽ / DAY",
             "не является медицинской помощью",
         ):
@@ -72,6 +72,7 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("pixel-break", styles)
         self.assertIn("scanline", styles)
         self.assertIn("decay-in", styles)
+        self.assertIn("tab-scan", styles)
         self.assertIn("prefers-reduced-motion", styles)
         self.assertIn("trainingStates", script)
         self.assertIn("data-training-tab", script)
@@ -94,9 +95,25 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn(".hero-statue", styles)
         self.assertIn("statue-reveal", styles)
         self.assertIn("data-pulse", styles)
+        self.assertIn("marble-dust-drift", styles)
+        self.assertIn("edge-rgb-instability", styles)
+        self.assertIn("fragment-shimmer", styles)
         self.assertIn(".statue-data-link", styles)
         self.assertIn("hero-statue", script)
         self.assertIn("prefers-reduced-motion", script)
+
+    def test_value_proof_makes_the_fixed_offer_and_trust_terms_prominent(self) -> None:
+        page = LANDING.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
+
+        self.assertIn('class="value-proof"', page)
+        self.assertIn("16,6 ₽", page)
+        self.assertIn("Часто меньше одной персональной тренировки", page)
+        self.assertIn("сопоставимо с обычным походом в кофейню", page)
+        self.assertIn("Автопродления нет", page)
+        self.assertIn("чек", page.lower())
+        self.assertIn(".value-proof", styles)
+        self.assertIn(".proof-icon", styles)
 
     def test_required_legal_sections_and_health_disclaimer_are_reachable(self) -> None:
         page = LANDING.read_text(encoding="utf-8")
