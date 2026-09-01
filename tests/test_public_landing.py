@@ -32,6 +32,53 @@ class PublicLandingTests(unittest.TestCase):
         self.assertTrue(SCRIPT.is_file())
         self.assertTrue((ROOT / "landing" / "validate.py").is_file())
 
+    def test_trainer_os_y2k_redesign_keeps_offer_and_accessible_interaction(self) -> None:
+        page = LANDING.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
+        script = SCRIPT.read_text(encoding="utf-8")
+
+        for phrase in (
+            "TRAINER.OS / ONLINE",
+            "Тренируйся",
+            "Не просто список упражнений",
+            "499 ₽ не покупают мотивацию",
+            "одна сессия может стоить больше",
+            "Один обычный поход в кофейню может стоить сопоставимо",
+            "≈ 16,6 ₽ / DAY",
+            "не является медицинской помощью",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, page)
+
+        for environment in ("gym", "functional", "street", "home"):
+            with self.subTest(environment=environment):
+                self.assertIn(f'data-training-tab="{environment}"', page)
+                self.assertIn(f'data-environment-mode="{environment}"', page)
+
+        self.assertIn("MY_AI_TRAINER.EXE", page)
+        self.assertIn("window-controls", page)
+        self.assertIn("pixel-shards", page)
+        self.assertIn("data-chaos-system", page)
+        self.assertIn("data-chaos-toggle", page)
+        self.assertIn("os-cursor", page)
+        self.assertIn("data-reactive", page)
+        self.assertIn("data-glitch", page)
+        self.assertIn("--chrome", styles)
+        self.assertIn("--ice", styles)
+        self.assertIn("--lime", styles)
+        self.assertIn("--display", styles)
+        self.assertIn("Arial Black", styles)
+        self.assertIn("pixel-break", styles)
+        self.assertIn("scanline", styles)
+        self.assertIn("decay-in", styles)
+        self.assertIn("prefers-reduced-motion", styles)
+        self.assertIn("trainingStates", script)
+        self.assertIn("data-training-tab", script)
+        self.assertIn("data-environment-mode", script)
+        self.assertIn("data-chaos-toggle", script)
+        self.assertIn("os-cursor", script)
+        self.assertIn("prefers-reduced-motion", script)
+
     def test_required_legal_sections_and_health_disclaimer_are_reachable(self) -> None:
         page = LANDING.read_text(encoding="utf-8")
         for section in ("terms", "privacy", "refund", "seller", "support"):
