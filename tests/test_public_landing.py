@@ -1,5 +1,6 @@
 """Static landing and production publication-gate tests without a web server."""
 
+from html.parser import HTMLParser
 from pathlib import Path
 import unittest
 
@@ -25,7 +26,7 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("Мой AI Тренер", page)
         self.assertIn("499 ₽", page)
         self.assertIn("30 дней", page)
-        self.assertIn("Автопродления нет", page)
+        self.assertIn("Без карты · без автопродления", page)
         self.assertIn("ПОПРОБОВАТЬ БЕСПЛАТНО — 3 ДНЯ", page)
         self.assertIn("Без карты", page)
         self.assertIn("затем 499 ₽ / 30 дней", page.lower())
@@ -46,8 +47,8 @@ class PublicLandingTests(unittest.TestCase):
             "Тренируйся",
             "Не просто список упражнений",
             "499 ₽ не покупают мотивацию",
-            "одна сессия может стоить больше",
-            "Часто меньше одной персональной тренировки",
+            "одна персональная тренировка может стоить дороже",
+            "Один обычный поход в кофейню может стоить сопоставимо",
             "≈ 16,6 ₽ / DAY",
             "не является медицинской помощью",
         ):
@@ -67,6 +68,7 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("os-cursor", page)
         self.assertIn("data-reactive", page)
         self.assertIn("data-glitch", page)
+        self.assertIn("mirror-chrome", page)
         self.assertIn("--chrome", styles)
         self.assertIn("--ice", styles)
         self.assertIn("--lime", styles)
@@ -84,6 +86,48 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("os-cursor", script)
         self.assertIn("prefers-reduced-motion", script)
 
+    def test_final_free_trial_conversion_and_copy_freeze(self) -> None:
+        page = LANDING.read_text(encoding="utf-8")
+
+        for phrase in (
+            "ПОПРОБОВАТЬ БЕСПЛАТНО — 3 ДНЯ",
+            "Без карты · без автопродления",
+            "Затем 499 ₽ / 30 дней",
+            "3 дня знакомства с системой",
+            "Подойдёт — продолжишь за 499 ₽ / 30 дней",
+            "Не вместо хорошего тренера",
+            "а вместо ситуации, когда ты остаёшься без плана",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, page)
+
+        class MarketingCopyParser(HTMLParser):
+            checked_tags = {"h1", "h2", "h3", "p", "strong", "span", "small", "li"}
+
+            def __init__(self):
+                super().__init__()
+                self.current_tag = None
+                self.in_legal = False
+                self.trailing_periods = []
+
+            def handle_starttag(self, tag, attrs):
+                if dict(attrs).get("id") == "legal":
+                    self.in_legal = True
+                self.current_tag = tag
+
+            def handle_data(self, data):
+                text = data.strip()
+                if (
+                    not self.in_legal
+                    and self.current_tag in self.checked_tags
+                    and text.endswith(".")
+                ):
+                    self.trailing_periods.append(text)
+
+        parser = MarketingCopyParser()
+        parser.feed(page)
+        self.assertEqual([], parser.trailing_periods)
+
     def test_approved_statue_asset_is_decorative_and_integrated_with_the_hero(self) -> None:
         page = LANDING.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
@@ -95,12 +139,22 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn('width="2448" height="3264" alt=""', page)
         self.assertIn('class="hero-statue" aria-hidden="true"', page)
         self.assertIn("statue-data-link", page)
+        self.assertIn("statue-decay", page)
+        self.assertIn("marble-dust", page)
+        self.assertIn("pixel-decay", page)
+        self.assertIn("geometry-drift", page)
+        self.assertIn("data-fragments", page)
         self.assertIn(".hero-statue", styles)
         self.assertIn("statue-reveal", styles)
         self.assertIn("data-pulse", styles)
         self.assertIn("marble-dust-drift", styles)
         self.assertIn("edge-rgb-instability", styles)
         self.assertIn("fragment-shimmer", styles)
+        self.assertIn("dust-out-a", styles)
+        self.assertIn("pixel-drift", styles)
+        self.assertIn("geometry-float", styles)
+        self.assertIn("edge-slice", styles)
+        self.assertIn("corruption-pulse", styles)
         self.assertIn(".statue-data-link", styles)
         self.assertIn("hero-statue", script)
         self.assertIn("prefers-reduced-motion", script)
@@ -111,12 +165,16 @@ class PublicLandingTests(unittest.TestCase):
 
         self.assertIn('class="value-proof"', page)
         self.assertIn("16,6 ₽", page)
-        self.assertIn("Часто меньше одной персональной тренировки", page)
-        self.assertIn("сопоставимо с обычным походом в кофейню", page)
-        self.assertIn("Автопродления нет", page)
+        self.assertIn("одна персональная тренировка может стоить дороже", page)
+        self.assertIn("Один обычный поход в кофейню может стоить сопоставимо", page)
+        self.assertIn("30 дней — 499 ₽", page)
+        self.assertIn("Без карты · без автопродления", page)
         self.assertIn("чек", page.lower())
         self.assertIn(".value-proof", styles)
         self.assertIn(".proof-icon", styles)
+        self.assertIn(".trial-value-strip", styles)
+        self.assertIn(".comparison-trust", styles)
+        self.assertIn("chrome-sweep", styles)
 
     def test_required_legal_sections_and_health_disclaimer_are_reachable(self) -> None:
         page = LANDING.read_text(encoding="utf-8")
