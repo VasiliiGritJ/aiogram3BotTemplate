@@ -128,6 +128,20 @@ class PublicLandingTests(unittest.TestCase):
         parser.feed(page)
         self.assertEqual([], parser.trailing_periods)
 
+    def test_primary_actions_use_lime_while_system_controls_remain_chrome(self) -> None:
+        page = LANDING.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
+
+        self.assertGreaterEqual(page.count('class="button primary"'), 3)
+        self.assertIn(".button.primary", styles)
+        self.assertIn("var(--lime) 45%", styles)
+        self.assertIn("color: #111b00", styles)
+        self.assertIn(".header-cta", styles)
+        self.assertIn("#dfffa0", styles)
+        self.assertIn(".button.ghost", styles)
+        self.assertIn(".chaos-trigger", styles)
+        self.assertIn("color: #edf6ff", styles)
+
     def test_approved_statue_asset_is_decorative_and_integrated_with_the_hero(self) -> None:
         page = LANDING.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
