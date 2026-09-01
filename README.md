@@ -158,3 +158,20 @@ polling, закрывает Telegram session, DB resources и single-instance gu
 
 Runtime `db.db`, `db.db-wal`, `db.db-shm`, backups и `storage/.env` никогда не
 должны попадать в Git staging или deployment через Git.
+
+## Публичная landing-страница
+
+Каталог `landing/` содержит лёгкую русскоязычную статическую страницу «Мой AI
+Тренер»: она нужна одновременно для маркетинга и будущей payment compliance
+review. Она не запускает bot, не содержит payment credentials и пока не
+публикуется. Страница фиксирует launch offer: 499 ₽ за 30 дней доступа без
+автопродления, а также условия, приватность, возврат, поддержку и краткое
+fitness safety disclosure.
+
+Перед будущей production-публикацией обязательны публичные `PUBLIC_SITE_URL`,
+`TELEGRAM_BOT_URL`, `SELLER_FULL_NAME`, `SELLER_INN` и `SUPPORT_EMAIL`. Проверка
+`python -m landing.validate --production` использует только process environment
+и fail-closed при отсутствующих или некорректных значениях; настоящие ФИО, ИНН,
+домен, Telegram URL и support contact не коммитятся. Landing нужно опубликовать
+за HTTPS до финального PayAnyWay compliance review; интеграция PayAnyWay остаётся
+отдельным утверждаемым этапом.

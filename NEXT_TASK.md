@@ -74,6 +74,20 @@
 - Конкретный payment/NPD provider, реальные public URLs, merchant/legal
   approvals и hosting остаются внешней границей; PayAnyWay не интегрирован.
 
+### Stage 8E1 technical checkpoint
+
+- Подготовлена статическая русскоязычная landing-страница «Мой AI Тренер» для
+  будущего маркетинга и payment compliance: продукт 499 ₽ / 30 дней / без
+  автопродления, реальные функции MVP, FAQ, условия, приватность, возврат,
+  реквизиты, поддержку и краткое fitness safety disclosure.
+- Production publication fail-closed требует публичные `PUBLIC_SITE_URL`,
+  `TELEGRAM_BOT_URL`, `SELLER_FULL_NAME`, `SELLER_INN`, `SUPPORT_EMAIL`; в Git
+  остаются только пустые placeholders. Без подтверждённых seller details и URL
+  страница не считается готовой для коммерческой публикации.
+- Landing не запущен и не опубликован; PayAnyWay не интегрирован. Следующая
+  граница — owner visual review, затем отдельные решения о домене, hosting/TLS и
+  финальном compliance review.
+
 ### Порядок решений и работ
 
 1. Зафиксировано: 499 RUB, 30 дней, без автопродления; server-side receipt item —
