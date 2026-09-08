@@ -163,6 +163,10 @@ h1 em, h2 em { color: var(--ice-bright); font-style: normal; background: linear-
 }
 .price-compare .current p { max-width: 23rem; margin: 3px 0 0; padding-top: 9px; color: #d1dfeb; border-top: 1px solid rgba(184,210,255,.24); font-size: .73rem; font-weight: 700; line-height: 1.34; }
 
+.hero-community-link { grid-template-columns: 34px minmax(0, 1fr); gap: 10px; align-items: center; padding: 8px 11px; border-color: var(--lime); box-shadow: inset 1px 1px rgba(235,246,255,.16), inset -1px -1px rgba(0,0,0,.5), 0 0 15px rgba(199,255,61,.16), 0 5px 13px rgba(0,0,0,.18); transition: filter .16s ease, transform .16s ease, box-shadow .16s ease; }.telegram-plane { display: block; width: 34px; height: 34px; padding: 6px; color: #bceaff; border: 1px inset #72b9e4; background: linear-gradient(145deg, #395b78, #102131); box-shadow: inset 1px 1px rgba(255,255,255,.32), 0 0 10px rgba(126,207,255,.28); }.telegram-plane path { fill: currentColor; }.hero-community-link span { display: grid; gap: 4px; min-width: 0; }.hero-community-link b { color: var(--ice-bright); font: inherit; }.hero-community-link:hover { filter: brightness(1.12); transform: translateY(-1px); box-shadow: inset 1px 1px rgba(235,246,255,.24), inset -1px -1px rgba(0,0,0,.5), 0 0 21px rgba(199,255,61,.3), 0 7px 15px rgba(0,0,0,.24); }
+
+@media (max-width: 640px) { .hero-community-link { width: 100%; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
   .os-cursor { display: none !important; }.has-os-cursor, .has-os-cursor a, .has-os-cursor button { cursor: auto; }.hero-machine, .hero-machine:hover { transform: none; }.hero-statue { transform: none; }.mirror-chrome::after, .statue-decay::before, .statue-decay::after { display:none; }.marble-dust i, .pixel-decay i, .data-fragments span { animation:none !important; opacity:.18; transform:none !important; }.geometry-drift { animation:none !important; opacity:.3; }
