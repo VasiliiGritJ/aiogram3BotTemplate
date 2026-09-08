@@ -169,9 +169,18 @@ review. Она не запускает bot, не содержит payment creden
 fitness safety disclosure.
 
 Перед будущей production-публикацией обязательны публичные `PUBLIC_SITE_URL`,
-`TELEGRAM_BOT_URL`, `SELLER_FULL_NAME`, `SELLER_INN` и `SUPPORT_EMAIL`. Проверка
+`TELEGRAM_BOT_URL`, `TELEGRAM_CHANNEL_URL`, `TERMS_URL`, `PRIVACY_URL`,
+`REFUND_URL`, `SELLER_FULL_NAME`, `SELLER_INN` и `SUPPORT_EMAIL`. Проверка
 `python -m landing.validate --production` использует только process environment
 и fail-closed при отсутствующих или некорректных значениях; настоящие ФИО, ИНН,
-домен, Telegram URL и support contact не коммитятся. Landing нужно опубликовать
-за HTTPS до финального PayAnyWay compliance review; интеграция PayAnyWay остаётся
-отдельным утверждаемым этапом.
+домен и support contact не коммитятся.
+
+Для upload-ready артефакта обычного HTTPS hosting/CDN используется только process
+environment и команда `python -m landing.build --output <absolute-empty-directory>`.
+Она создаёт `index.html`, `styles.css`, `app.js` и `assets/` с production-подстановками.
+Публичные Telegram-адреса зафиксированы как `https://t.me/GritJBot` и
+`https://t.me/traineros`; legal URL для одностраничной архитектуры должны быть
+`https://<domain>/#terms`, `https://<domain>/#privacy` и
+`https://<domain>/#refund`. Landing нужно опубликовать за HTTPS до финального
+PayAnyWay compliance review; интеграция PayAnyWay остаётся отдельным утверждаемым
+этапом.

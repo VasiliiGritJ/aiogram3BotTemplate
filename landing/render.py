@@ -18,6 +18,7 @@ _SUPPORT_PLACEHOLDER = (
     "По вопросам доступа, оплаты, чека или возврата используйте контакт "
     "поддержки, опубликованный в production-версии сайта."
 )
+_LAUNCH_STATUS_PLACEHOLDER = "ПУБЛИЧНАЯ ССЫЛКА НА БОТА ПОДКЛЮЧАЕТСЯ ПЕРЕД ЗАПУСКОМ"
 
 
 def render_production_landing(config: LandingPublicConfig) -> str:
@@ -47,10 +48,13 @@ def render_production_landing(config: LandingPublicConfig) -> str:
         html.replace('<html lang="ru">', f'<html lang="ru" data-telegram-url="{escape(config.telegram_bot_url, quote=True)}">')
         .replace('<meta name="robots" content="noindex, nofollow">', '<meta name="robots" content="index, follow">')
         .replace('<!-- canonical-url -->', f'<link rel="canonical" href="{escape(config.public_site_url, quote=True)}">')
+        .replace('<!-- og-url -->', f'<meta property="og:url" content="{escape(config.public_site_url, quote=True)}">')
+        .replace('href="#telegram-launch"', f'href="{escape(config.telegram_bot_url, quote=True)}"')
         .replace('https://t.me/traineros', escape(config.telegram_channel_url, quote=True))
         .replace('href="#terms"', f'href="{escape(config.terms_url, quote=True)}"')
         .replace('href="#privacy"', f'href="{escape(config.privacy_url, quote=True)}"')
         .replace('href="#refund"', f'href="{escape(config.refund_url, quote=True)}"')
         .replace(_SELLER_PLACEHOLDER, seller)
         .replace(_SUPPORT_PLACEHOLDER, support)
+        .replace(_LAUNCH_STATUS_PLACEHOLDER, "ПУБЛИЧНАЯ ССЫЛКА НА БОТА АКТИВНА")
     )

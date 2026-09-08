@@ -2,10 +2,17 @@
 
 from html.parser import HTMLParser
 from pathlib import Path
+import tempfile
 import unittest
 
+from landing.build import LandingBuildError, build_production_artifact
 from landing.render import render_production_landing
-from landing.site_config import LandingConfigurationError, build_landing_public_config
+from landing.site_config import (
+    OFFICIAL_TELEGRAM_BOT_URL,
+    OFFICIAL_TELEGRAM_CHANNEL_URL,
+    LandingConfigurationError,
+    build_landing_public_config,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +26,20 @@ class PublicLandingTests(unittest.TestCase):
     @staticmethod
     def values(mapping: dict[str, str]):
         return mapping.get
+
+    @staticmethod
+    def production_values() -> dict[str, str]:
+        return {
+            "PUBLIC_SITE_URL": "https://trainer.example",
+            "TELEGRAM_BOT_URL": OFFICIAL_TELEGRAM_BOT_URL,
+            "TELEGRAM_CHANNEL_URL": OFFICIAL_TELEGRAM_CHANNEL_URL,
+            "TERMS_URL": "https://trainer.example/#terms",
+            "PRIVACY_URL": "https://trainer.example/#privacy",
+            "REFUND_URL": "https://trainer.example/#refund",
+            "SELLER_FULL_NAME": "Иванов Иван Иванович",
+            "SELLER_INN": "123456789012",
+            "SUPPORT_EMAIL": "support@example.invalid",
+        }
 
     def test_page_contains_frozen_offer_cta_and_mobile_metadata(self) -> None:
         page = LANDING.read_text(encoding="utf-8")
@@ -235,17 +256,7 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIsNone(config.seller_full_name)
 
     def test_production_config_rejects_each_missing_required_public_value(self) -> None:
-        valid = {
-            "PUBLIC_SITE_URL": "https://trainer.example",
-            "TELEGRAM_BOT_URL": "https://t.me/trainer_example_bot",
-            "TELEGRAM_CHANNEL_URL": "https://t.me/trainer_example_channel",
-            "TERMS_URL": "https://trainer.example/terms",
-            "PRIVACY_URL": "https://trainer.example/privacy",
-            "REFUND_URL": "https://trainer.example/refund",
-            "SELLER_FULL_NAME": "Иванов Иван Иванович",
-            "SELLER_INN": "123456789012",
-            "SUPPORT_EMAIL": "support@example.invalid",
-        }
+        valid = self.production_values()
         for name in valid:
             with self.subTest(name=name):
                 values = dict(valid)
@@ -256,31 +267,23 @@ class PublicLandingTests(unittest.TestCase):
                 self.assertNotIn("support@example.invalid", str(error.exception))
 
     def test_production_config_accepts_only_valid_public_details(self) -> None:
-        valid = {
-            "PUBLIC_SITE_URL": "https://trainer.example",
-            "TELEGRAM_BOT_URL": "https://t.me/trainer_example_bot",
-            "TELEGRAM_CHANNEL_URL": "https://t.me/trainer_example_channel",
-            "TERMS_URL": "https://trainer.example/terms",
-            "PRIVACY_URL": "https://trainer.example/privacy",
-            "REFUND_URL": "https://trainer.example/refund",
-            "SELLER_FULL_NAME": "Иванов Иван Иванович",
-            "SELLER_INN": "123456789012",
-            "SUPPORT_EMAIL": "Support@Example.Invalid",
-        }
+        valid = self.production_values()
+        valid["SUPPORT_EMAIL"] = "Support@Example.Invalid"
         config = build_landing_public_config(self.values(valid), production=True)
         self.assertTrue(config.production_ready)
-        self.assertEqual("https://t.me/trainer_example_channel", config.telegram_channel_url)
-        self.assertEqual("https://trainer.example/terms", config.terms_url)
-        self.assertEqual("https://trainer.example/privacy", config.privacy_url)
-        self.assertEqual("https://trainer.example/refund", config.refund_url)
+        self.assertEqual(OFFICIAL_TELEGRAM_BOT_URL, config.telegram_bot_url)
+        self.assertEqual(OFFICIAL_TELEGRAM_CHANNEL_URL, config.telegram_channel_url)
+        self.assertEqual("https://trainer.example/#terms", config.terms_url)
+        self.assertEqual("https://trainer.example/#privacy", config.privacy_url)
+        self.assertEqual("https://trainer.example/#refund", config.refund_url)
         self.assertEqual("support@example.invalid", config.support_email)
         for name, value in (
-            ("PUBLIC_SITE_URL", "http://trainer.example"),
-            ("TELEGRAM_BOT_URL", "https://example.invalid/not-a-bot"),
-            ("TELEGRAM_CHANNEL_URL", "https://example.invalid/not-a-channel"),
-            ("TERMS_URL", "http://trainer.example/terms"),
-            ("PRIVACY_URL", "http://trainer.example/privacy"),
-            ("REFUND_URL", "http://trainer.example/refund"),
+            ("PUBLIC_SITE_URL", "https://trainer.example/landing"),
+            ("TELEGRAM_BOT_URL", "https://t.me/other_bot"),
+            ("TELEGRAM_CHANNEL_URL", "https://t.me/other_channel"),
+            ("TERMS_URL", "https://trainer.example/terms"),
+            ("PRIVACY_URL", "https://legal.example/#privacy"),
+            ("REFUND_URL", "https://trainer.example/#terms"),
             ("SELLER_INN", "not-an-inn"),
             ("SUPPORT_EMAIL", "private contact@example.invalid"),
         ):
@@ -294,29 +297,21 @@ class PublicLandingTests(unittest.TestCase):
 
     def test_production_render_uses_only_verified_public_values_and_activates_cta(self) -> None:
         config = build_landing_public_config(
-            self.values(
-                {
-                    "PUBLIC_SITE_URL": "https://trainer.example",
-                    "TELEGRAM_BOT_URL": "https://t.me/trainer_example_bot",
-                    "TELEGRAM_CHANNEL_URL": "https://t.me/trainer_example_channel",
-                    "TERMS_URL": "https://trainer.example/terms",
-                    "PRIVACY_URL": "https://trainer.example/privacy",
-                    "REFUND_URL": "https://trainer.example/refund",
-                    "SELLER_FULL_NAME": "Иванов Иван Иванович",
-                    "SELLER_INN": "123456789012",
-                    "SUPPORT_EMAIL": "support@example.invalid",
-                }
-            ),
+            self.values(self.production_values()),
             production=True,
         )
         page = render_production_landing(config)
-        self.assertIn('data-telegram-url="https://t.me/trainer_example_bot"', page)
-        self.assertIn('href="https://t.me/trainer_example_channel"', page)
+        self.assertIn(f'data-telegram-url="{OFFICIAL_TELEGRAM_BOT_URL}"', page)
+        self.assertIn(f'href="{OFFICIAL_TELEGRAM_BOT_URL}"', page)
+        self.assertNotIn('href="#telegram-launch"', page)
+        self.assertIn(f'href="{OFFICIAL_TELEGRAM_CHANNEL_URL}"', page)
         self.assertIn('<link rel="canonical" href="https://trainer.example">', page)
-        self.assertIn('href="https://trainer.example/terms"', page)
-        self.assertIn('href="https://trainer.example/privacy"', page)
-        self.assertIn('href="https://trainer.example/refund"', page)
+        self.assertIn('<meta property="og:url" content="https://trainer.example">', page)
+        self.assertIn('href="https://trainer.example/#terms"', page)
+        self.assertIn('href="https://trainer.example/#privacy"', page)
+        self.assertIn('href="https://trainer.example/#refund"', page)
         self.assertIn('content="index, follow"', page)
+        self.assertIn("ПУБЛИЧНАЯ ССЫЛКА НА БОТА АКТИВНА", page)
         self.assertIn("Иванов Иван Иванович", page)
         self.assertIn("123456789012", page)
         self.assertIn("Контакт: support@example.invalid.", page)
@@ -329,6 +324,37 @@ class PublicLandingTests(unittest.TestCase):
             page,
         )
         self.assertNotIn("YOOKASSA_SECRET", page)
+
+    def test_production_build_creates_complete_relative_static_artifact(self) -> None:
+        config = build_landing_public_config(
+            self.values(self.production_values()),
+            production=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "trainer-os-public"
+            result = build_production_artifact(config, output)
+
+            self.assertEqual(output, result)
+            self.assertTrue((output / "index.html").is_file())
+            self.assertTrue((output / "styles.css").is_file())
+            self.assertTrue((output / "app.js").is_file())
+            self.assertEqual(
+                HERO_ASSET.read_bytes(),
+                (output / "assets" / "trainer-statue.png").read_bytes(),
+            )
+            page = (output / "index.html").read_text(encoding="utf-8")
+            self.assertIn('href="styles.css"', page)
+            self.assertIn('src="app.js"', page)
+            self.assertIn('src="assets/trainer-statue.png"', page)
+            self.assertIn('<link rel="icon" href="data:image/svg+xml,', page)
+            self.assertIn('<meta property="og:url" content="https://trainer.example">', page)
+            self.assertNotIn("file://", page)
+            self.assertNotIn("localhost", page)
+            self.assertNotIn("noindex, nofollow", page)
+            self.assertNotIn("<!-- canonical-url -->", page)
+            self.assertNotIn("ПУБЛИЧНАЯ ССЫЛКА НА БОТА ПОДКЛЮЧАЕТСЯ", page)
+            with self.assertRaises(LandingBuildError):
+                build_production_artifact(config, output)
 
     def test_production_render_rejects_incomplete_config(self) -> None:
         with self.assertRaises(ValueError):

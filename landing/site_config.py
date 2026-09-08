@@ -9,6 +9,10 @@ from urllib.parse import urlparse
 from services.receipt_email import normalize_receipt_email
 
 
+OFFICIAL_TELEGRAM_BOT_URL = "https://t.me/GritJBot"
+OFFICIAL_TELEGRAM_CHANNEL_URL = "https://t.me/traineros"
+
+
 class LandingConfigurationError(RuntimeError):
     """Public landing configuration is incomplete without echoing its values."""
 
@@ -64,7 +68,7 @@ def build_landing_public_config(
             "SUPPORT_EMAIL",
         )
     }
-    public_site_url = _validate_https_url(
+    public_site_url = _validate_public_site_url(
         values["PUBLIC_SITE_URL"],
         "PUBLIC_SITE_URL",
         production,
@@ -73,18 +77,31 @@ def build_landing_public_config(
         values["TELEGRAM_BOT_URL"],
         "TELEGRAM_BOT_URL",
         production,
+        expected_url=OFFICIAL_TELEGRAM_BOT_URL if production else None,
     )
     telegram_channel_url = _validate_telegram_url(
         values["TELEGRAM_CHANNEL_URL"],
         "TELEGRAM_CHANNEL_URL",
         production,
+        expected_url=OFFICIAL_TELEGRAM_CHANNEL_URL if production else None,
     )
-    terms_url = _validate_https_url(values["TERMS_URL"], "TERMS_URL", production)
-    privacy_url = _validate_https_url(
-        values["PRIVACY_URL"], "PRIVACY_URL", production
+    terms_url = _validate_legal_anchor_url(
+        values["TERMS_URL"],
+        "TERMS_URL",
+        public_site_url,
+        "terms",
     )
-    refund_url = _validate_https_url(
-        values["REFUND_URL"], "REFUND_URL", production
+    privacy_url = _validate_legal_anchor_url(
+        values["PRIVACY_URL"],
+        "PRIVACY_URL",
+        public_site_url,
+        "privacy",
+    )
+    refund_url = _validate_legal_anchor_url(
+        values["REFUND_URL"],
+        "REFUND_URL",
+        public_site_url,
+        "refund",
     )
     seller_full_name = _validate_seller_name(
         values["SELLER_FULL_NAME"],
@@ -144,10 +161,26 @@ def _validate_https_url(
     return value
 
 
+def _validate_public_site_url(
+    value: str | None,
+    name: str,
+    production: bool,
+) -> str | None:
+    value = _validate_https_url(value, name, production)
+    if value is None:
+        return None
+    parsed = urlparse(value)
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise LandingConfigurationError(f"Landing configuration is invalid: {name}.")
+    return f"https://{parsed.netloc}"
+
+
 def _validate_telegram_url(
     value: str | None,
     name: str,
     production: bool,
+    *,
+    expected_url: str | None,
 ) -> str | None:
     if value is None:
         return None
@@ -165,6 +198,27 @@ def _validate_telegram_url(
         raise LandingConfigurationError(
             f"Landing configuration is invalid: {name}."
         )
+    if expected_url is not None and value != expected_url:
+        raise LandingConfigurationError(
+            f"Landing configuration is invalid: {name}."
+        )
+    return value
+
+
+def _validate_legal_anchor_url(
+    value: str | None,
+    name: str,
+    public_site_url: str | None,
+    anchor: str,
+) -> str | None:
+    value = _validate_https_url(value, name, production=public_site_url is not None)
+    if value is None:
+        return None
+    if public_site_url is None:
+        return value
+    expected_url = f"{public_site_url}/#{anchor}"
+    if value != expected_url:
+        raise LandingConfigurationError(f"Landing configuration is invalid: {name}.")
     return value
 
 
