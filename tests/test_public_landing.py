@@ -208,6 +208,7 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn(".trial-value-strip", styles)
         self.assertIn(".comparison-trust", styles)
         self.assertIn(".community-link", styles)
+        self.assertIn(".legal-grid #safety { grid-column: 1 / -1; }", styles)
         self.assertIn("chrome-sweep", styles)
 
     def test_required_legal_sections_and_health_disclaimer_are_reachable(self) -> None:
@@ -318,6 +319,15 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn('content="index, follow"', page)
         self.assertIn("Иванов Иван Иванович", page)
         self.assertIn("123456789012", page)
+        self.assertIn("Контакт: support@example.invalid.", page)
+        self.assertIn(
+            "По вопросам доступа, оплаты, чека или возврата: support@example.invalid.",
+            page,
+        )
+        self.assertNotIn(
+            "используйте контакт поддержки, опубликованный в production-версии сайта",
+            page,
+        )
         self.assertNotIn("YOOKASSA_SECRET", page)
 
     def test_production_render_rejects_incomplete_config(self) -> None:
