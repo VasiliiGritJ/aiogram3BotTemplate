@@ -19,6 +19,10 @@ class LandingPublicConfig:
 
     public_site_url: str | None = None
     telegram_bot_url: str | None = None
+    telegram_channel_url: str | None = None
+    terms_url: str | None = None
+    privacy_url: str | None = None
+    refund_url: str | None = None
     seller_full_name: str | None = None
     seller_inn: str | None = None
     support_email: str | None = None
@@ -29,6 +33,10 @@ class LandingPublicConfig:
             (
                 self.public_site_url,
                 self.telegram_bot_url,
+                self.telegram_channel_url,
+                self.terms_url,
+                self.privacy_url,
+                self.refund_url,
                 self.seller_full_name,
                 self.seller_inn,
                 self.support_email,
@@ -47,6 +55,10 @@ def build_landing_public_config(
         for name in (
             "PUBLIC_SITE_URL",
             "TELEGRAM_BOT_URL",
+            "TELEGRAM_CHANNEL_URL",
+            "TERMS_URL",
+            "PRIVACY_URL",
+            "REFUND_URL",
             "SELLER_FULL_NAME",
             "SELLER_INN",
             "SUPPORT_EMAIL",
@@ -59,7 +71,20 @@ def build_landing_public_config(
     )
     telegram_bot_url = _validate_telegram_url(
         values["TELEGRAM_BOT_URL"],
+        "TELEGRAM_BOT_URL",
         production,
+    )
+    telegram_channel_url = _validate_telegram_url(
+        values["TELEGRAM_CHANNEL_URL"],
+        "TELEGRAM_CHANNEL_URL",
+        production,
+    )
+    terms_url = _validate_https_url(values["TERMS_URL"], "TERMS_URL", production)
+    privacy_url = _validate_https_url(
+        values["PRIVACY_URL"], "PRIVACY_URL", production
+    )
+    refund_url = _validate_https_url(
+        values["REFUND_URL"], "REFUND_URL", production
     )
     seller_full_name = _validate_seller_name(
         values["SELLER_FULL_NAME"],
@@ -70,6 +95,10 @@ def build_landing_public_config(
     return LandingPublicConfig(
         public_site_url=public_site_url,
         telegram_bot_url=telegram_bot_url,
+        telegram_channel_url=telegram_channel_url,
+        terms_url=terms_url,
+        privacy_url=privacy_url,
+        refund_url=refund_url,
         seller_full_name=seller_full_name,
         seller_inn=seller_inn,
         support_email=support_email,
@@ -115,7 +144,11 @@ def _validate_https_url(
     return value
 
 
-def _validate_telegram_url(value: str | None, production: bool) -> str | None:
+def _validate_telegram_url(
+    value: str | None,
+    name: str,
+    production: bool,
+) -> str | None:
     if value is None:
         return None
     parsed = urlparse(value)
@@ -130,7 +163,7 @@ def _validate_telegram_url(value: str | None, production: bool) -> str | None:
         or any(character.isspace() or ord(character) < 32 for character in value)
     ):
         raise LandingConfigurationError(
-            "Landing configuration is invalid: TELEGRAM_BOT_URL."
+            f"Landing configuration is invalid: {name}."
         )
     return value
 

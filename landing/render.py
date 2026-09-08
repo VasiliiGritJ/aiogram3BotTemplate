@@ -26,6 +26,10 @@ def render_production_landing(config: LandingPublicConfig) -> str:
         raise ValueError("Production landing configuration is incomplete.")
     assert config.public_site_url is not None
     assert config.telegram_bot_url is not None
+    assert config.telegram_channel_url is not None
+    assert config.terms_url is not None
+    assert config.privacy_url is not None
+    assert config.refund_url is not None
     assert config.seller_full_name is not None
     assert config.seller_inn is not None
     assert config.support_email is not None
@@ -43,6 +47,10 @@ def render_production_landing(config: LandingPublicConfig) -> str:
         html.replace('<html lang="ru">', f'<html lang="ru" data-telegram-url="{escape(config.telegram_bot_url, quote=True)}">')
         .replace('<meta name="robots" content="noindex, nofollow">', '<meta name="robots" content="index, follow">')
         .replace('<!-- canonical-url -->', f'<link rel="canonical" href="{escape(config.public_site_url, quote=True)}">')
+        .replace('https://t.me/traineros', escape(config.telegram_channel_url, quote=True))
+        .replace('href="#terms"', f'href="{escape(config.terms_url, quote=True)}"')
+        .replace('href="#privacy"', f'href="{escape(config.privacy_url, quote=True)}"')
+        .replace('href="#refund"', f'href="{escape(config.refund_url, quote=True)}"')
         .replace(_SELLER_PLACEHOLDER, seller)
         .replace(_SUPPORT_PLACEHOLDER, support)
     )

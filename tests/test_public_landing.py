@@ -29,6 +29,7 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("Без карты · без автопродления", page)
         self.assertIn("ПОПРОБОВАТЬ БЕСПЛАТНО — 3 ДНЯ", page)
         self.assertIn("Без карты", page)
+        self.assertIn("3 дня / 72 часа", page)
         self.assertIn("затем 499 ₽ / 30 дней", page.lower())
         self.assertIn("не превращается в платную подписку автоматически", page)
         self.assertIn("TELEGRAM / TRAINER.OS ↗", page)
@@ -215,8 +216,10 @@ class PublicLandingTests(unittest.TestCase):
             with self.subTest(section=section):
                 self.assertIn(f'id="{section}"', page)
                 self.assertIn(f'href="#{section}"', page)
+        self.assertIn('id="payment"', page)
         self.assertIn("не является медицинской помощью", page)
         self.assertIn("Данные банковских карт обрабатывает платёжный провайдер", page)
+        self.assertIn("Доступ открывается только после подтверждения оплаты", page)
 
     def test_no_payment_secret_or_real_seller_details_are_embedded(self) -> None:
         page = LANDING.read_text(encoding="utf-8").lower()
@@ -234,6 +237,10 @@ class PublicLandingTests(unittest.TestCase):
         valid = {
             "PUBLIC_SITE_URL": "https://trainer.example",
             "TELEGRAM_BOT_URL": "https://t.me/trainer_example_bot",
+            "TELEGRAM_CHANNEL_URL": "https://t.me/trainer_example_channel",
+            "TERMS_URL": "https://trainer.example/terms",
+            "PRIVACY_URL": "https://trainer.example/privacy",
+            "REFUND_URL": "https://trainer.example/refund",
             "SELLER_FULL_NAME": "Иванов Иван Иванович",
             "SELLER_INN": "123456789012",
             "SUPPORT_EMAIL": "support@example.invalid",
@@ -251,16 +258,28 @@ class PublicLandingTests(unittest.TestCase):
         valid = {
             "PUBLIC_SITE_URL": "https://trainer.example",
             "TELEGRAM_BOT_URL": "https://t.me/trainer_example_bot",
+            "TELEGRAM_CHANNEL_URL": "https://t.me/trainer_example_channel",
+            "TERMS_URL": "https://trainer.example/terms",
+            "PRIVACY_URL": "https://trainer.example/privacy",
+            "REFUND_URL": "https://trainer.example/refund",
             "SELLER_FULL_NAME": "Иванов Иван Иванович",
             "SELLER_INN": "123456789012",
             "SUPPORT_EMAIL": "Support@Example.Invalid",
         }
         config = build_landing_public_config(self.values(valid), production=True)
         self.assertTrue(config.production_ready)
+        self.assertEqual("https://t.me/trainer_example_channel", config.telegram_channel_url)
+        self.assertEqual("https://trainer.example/terms", config.terms_url)
+        self.assertEqual("https://trainer.example/privacy", config.privacy_url)
+        self.assertEqual("https://trainer.example/refund", config.refund_url)
         self.assertEqual("support@example.invalid", config.support_email)
         for name, value in (
             ("PUBLIC_SITE_URL", "http://trainer.example"),
             ("TELEGRAM_BOT_URL", "https://example.invalid/not-a-bot"),
+            ("TELEGRAM_CHANNEL_URL", "https://example.invalid/not-a-channel"),
+            ("TERMS_URL", "http://trainer.example/terms"),
+            ("PRIVACY_URL", "http://trainer.example/privacy"),
+            ("REFUND_URL", "http://trainer.example/refund"),
             ("SELLER_INN", "not-an-inn"),
             ("SUPPORT_EMAIL", "private contact@example.invalid"),
         ):
@@ -278,6 +297,10 @@ class PublicLandingTests(unittest.TestCase):
                 {
                     "PUBLIC_SITE_URL": "https://trainer.example",
                     "TELEGRAM_BOT_URL": "https://t.me/trainer_example_bot",
+                    "TELEGRAM_CHANNEL_URL": "https://t.me/trainer_example_channel",
+                    "TERMS_URL": "https://trainer.example/terms",
+                    "PRIVACY_URL": "https://trainer.example/privacy",
+                    "REFUND_URL": "https://trainer.example/refund",
                     "SELLER_FULL_NAME": "Иванов Иван Иванович",
                     "SELLER_INN": "123456789012",
                     "SUPPORT_EMAIL": "support@example.invalid",
@@ -287,7 +310,11 @@ class PublicLandingTests(unittest.TestCase):
         )
         page = render_production_landing(config)
         self.assertIn('data-telegram-url="https://t.me/trainer_example_bot"', page)
+        self.assertIn('href="https://t.me/trainer_example_channel"', page)
         self.assertIn('<link rel="canonical" href="https://trainer.example">', page)
+        self.assertIn('href="https://trainer.example/terms"', page)
+        self.assertIn('href="https://trainer.example/privacy"', page)
+        self.assertIn('href="https://trainer.example/refund"', page)
         self.assertIn('content="index, follow"', page)
         self.assertIn("Иванов Иван Иванович", page)
         self.assertIn("123456789012", page)
