@@ -3,7 +3,7 @@
 import unittest
 from datetime import timedelta
 
-from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
+from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT, OFFICIAL_CHANNEL_URL
 from services.receipt_domain import NPD_RECEIPT_DESCRIPTION
 
 
@@ -32,6 +32,9 @@ class CommercialProductTests(unittest.TestCase):
         self.assertEqual(product.amount_minor, payment_product.amount_minor)
         self.assertEqual(product.currency, payment_product.currency)
         self.assertEqual(product.period_days, payment_product.period_days)
+
+    def test_official_community_channel_is_a_fixed_public_product_link(self) -> None:
+        self.assertEqual("https://t.me/traineros", OFFICIAL_CHANNEL_URL)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,9 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("Без карты", page)
         self.assertIn("затем 499 ₽ / 30 дней", page.lower())
         self.assertIn("не превращается в платную подписку автоматически", page)
+        self.assertIn("TRAINER.OS / UPDATE FEED", page)
+        self.assertIn("https://t.me/traineros", page)
+        self.assertIn("Обновления продукта · тренировки · разработка · мемы", page)
         self.assertIn('href="styles.css"', page)
         self.assertIn('src="app.js"', page)
         self.assertTrue(STYLES.is_file())
@@ -199,6 +202,7 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn(".price-compare .current p", styles)
         self.assertIn(".trial-value-strip", styles)
         self.assertIn(".comparison-trust", styles)
+        self.assertIn(".community-link", styles)
         self.assertIn("chrome-sweep", styles)
 
     def test_required_legal_sections_and_health_disclaimer_are_reachable(self) -> None:

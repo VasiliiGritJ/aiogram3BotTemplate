@@ -12,6 +12,7 @@ TRIAL_PRICE_MINOR = 0
 TRIAL_REQUIRES_PAYMENT_METHOD = False
 TRIAL_AUTO_RENEW = False
 TRIAL_LIFETIME_LIMIT = 1
+OFFICIAL_CHANNEL_URL = "https://t.me/traineros"
 
 
 @dataclass(frozen=True)

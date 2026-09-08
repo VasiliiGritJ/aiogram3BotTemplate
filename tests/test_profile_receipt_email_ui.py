@@ -7,6 +7,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 from services.access import AccessDecision, AccessStatus
+from services.commercial_product import OFFICIAL_CHANNEL_URL
 from services.receipt_email import ReceiptEmailValidationError
 
 
@@ -87,6 +88,13 @@ class ProfileReceiptEmailUiTests(unittest.TestCase):
         self.assertEqual("Добавить email для чеков", absent.inline_keyboard[1][0].text)
         self.assertEqual("Изменить email для чеков", present.inline_keyboard[1][0].text)
         self.assertIn("subscription:documents", self.callbacks(absent))
+        channel = next(
+            button
+            for row in absent.inline_keyboard
+            for button in row
+            if button.text == "📡 TRAINER.OS / UPDATE FEED"
+        )
+        self.assertEqual(OFFICIAL_CHANNEL_URL, channel.url)
         email_markup = profile_ui.receipt_email_mpk()
         self.assertEqual(["profile", "start"], self.callbacks(email_markup))
 

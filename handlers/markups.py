@@ -1,6 +1,6 @@
 from aiogram import types
 
-from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
+from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT, OFFICIAL_CHANNEL_URL
 
 # def example_mkp():
 #     btns = [
@@ -149,6 +149,12 @@ def profile_mpk(*, receipt_email_set: bool = False):
         [
             types.InlineKeyboardButton(
                 text="📄 Документы и поддержка", callback_data="subscription:documents"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="📡 TRAINER.OS / UPDATE FEED",
+                url=OFFICIAL_CHANNEL_URL,
             )
         ],
         [
