@@ -202,6 +202,61 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("hero-statue", script)
         self.assertIn("prefers-reduced-motion", script)
 
+    def test_responsive_hero_keeps_the_statue_in_its_own_first_viewport_layer(self) -> None:
+        page = LANDING.read_text(encoding="utf-8")
+        styles = STYLES.read_text(encoding="utf-8")
+
+        # The original desktop composition stays untouched; responsive overrides
+        # begin only below the desktop breakpoint.
+        self.assertIn(
+            ".hero-statue { position: absolute; z-index: 0; top: -94px;",
+            styles,
+        )
+        self.assertIn("@media (max-width: 1100px)", styles)
+        self.assertIn(
+            ".hero { grid-template-columns: 1fr; min-height: 0; padding-top: 68px; overflow: clip; }",
+            styles,
+        )
+
+        # Tablet art is top-anchored in the hero instead of being pushed below
+        # the normal-flow training-console card.
+        self.assertIn("@media (min-width: 641px) and (max-width: 1100px)", styles)
+        self.assertIn(
+            ".hero-statue { top: clamp(160px, 21vw, 240px);",
+            styles,
+        )
+        self.assertIn(
+            ".statue-decay { top: clamp(205px, 25vw, 300px);",
+            styles,
+        )
+
+        # Mobile uses the same hero-relative, absolute layer. It deliberately
+        # never falls back to the old bottom placement tied to the full hero.
+        self.assertIn(
+            ".hero-statue { top: clamp(228px, 63vw, 306px); right: -37%; bottom: auto;",
+            styles,
+        )
+        self.assertIn(
+            ".statue-decay { top: clamp(292px, 78vw, 370px); right:-3%; bottom:auto;",
+            styles,
+        )
+        self.assertIn(
+            ".statue-data-link { top: clamp(340px, 91vw, 440px); right: 3%; bottom: auto;",
+            styles,
+        )
+        self.assertNotIn(".hero-statue { top: auto; right: -37%; bottom: -6%;", styles)
+
+        # Content and the interactive Trainer OS remain above the decorative
+        # layer, and the document order keeps the art inside the hero before
+        # the console rather than moving it with the console.
+        self.assertIn(".hero-copy { position: relative; z-index: 4; }", styles)
+        self.assertIn(".hero-machine { z-index: 2;", styles)
+        self.assertLess(
+            page.index('class="hero-statue"'),
+            page.index('class="hero-machine os-window"'),
+        )
+        self.assertIn("@media (prefers-reduced-motion: reduce)", styles)
+
     def test_value_proof_makes_the_fixed_offer_and_trust_terms_prominent(self) -> None:
         page = LANDING.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
