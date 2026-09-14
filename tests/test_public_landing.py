@@ -230,21 +230,38 @@ class PublicLandingTests(unittest.TestCase):
             styles,
         )
 
-        # Mobile uses the same hero-relative, absolute layer. It deliberately
-        # never falls back to the old bottom placement tied to the full hero.
+        # Mobile deliberately recomposes the existing artwork into the reading
+        # flow: headline, artwork, then the offer. The single statue element is
+        # reused; tablet and desktop keep their absolute-art composition.
         self.assertIn(
-            ".hero-statue { top: clamp(228px, 63vw, 306px); right: -37%; bottom: auto;",
+            ".hero { display: flex; flex-direction: column; align-items: stretch; gap: 0; }",
             styles,
         )
         self.assertIn(
-            ".statue-decay { top: clamp(292px, 78vw, 370px); right:-3%; bottom:auto;",
+            ".hero-copy { display: contents; }",
             styles,
         )
         self.assertIn(
-            ".statue-data-link { top: clamp(340px, 91vw, 440px); right: 3%; bottom: auto;",
+            ".system-label { position: relative; z-index: 4; order: 1; }",
             styles,
         )
-        self.assertNotIn(".hero-statue { top: auto; right: -37%; bottom: -6%;", styles)
+        self.assertIn(
+            ".hero-copy h1 { position: relative; z-index: 4; order: 2;",
+            styles,
+        )
+        self.assertIn(
+            ".hero-statue { position: relative; z-index: 3; order: 3; top: auto; right: auto; bottom: auto;",
+            styles,
+        )
+        self.assertIn(
+            ".hero-lead { position: relative; z-index: 4; order: 4;",
+            styles,
+        )
+        self.assertIn(
+            ".hero-actions { position: relative; z-index: 4; order: 5; }",
+            styles,
+        )
+        self.assertIn(".statue-decay, .statue-data-link { display: none; }", styles)
 
         # Content and the interactive Trainer OS remain above the decorative
         # layer, and the document order keeps the art inside the hero before
