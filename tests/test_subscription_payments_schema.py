@@ -19,7 +19,7 @@ class SubscriptionPaymentsSchemaTests(unittest.TestCase):
         self.database = Path(self.temp_directory.name) / "payments.db"
         self.session = SqliteSession(sqlite_url(self.database))
         self.assertEqual(
-            tuple(range(1, 16)),
+            tuple(range(1, 17)),
             run_migrations(self.session.engine),
         )
         with self.session.engine.begin() as connection:
@@ -65,6 +65,7 @@ class SubscriptionPaymentsSchemaTests(unittest.TestCase):
         self.assertTrue(
             {
                 "id", "user_id", "provider", "provider_payment_id",
+                "merchant_transaction_id",
                 "idempotency_key", "product_code", "amount_minor", "currency",
                 "period_days", "status", "confirmation_url", "provider_expires_at",
                 "cancellation_code", "failure_code", "created_at", "updated_at",
@@ -95,6 +96,25 @@ class SubscriptionPaymentsSchemaTests(unittest.TestCase):
     def test_multiple_null_provider_payment_ids_are_allowed(self) -> None:
         self.insert_payment(idempotency_key="key-1", status="canceled")
         self.insert_payment(idempotency_key="key-2", status="failed")
+
+    def test_payanyway_provider_and_merchant_transaction_identity_are_supported(self) -> None:
+        self.insert_payment(
+            provider="payanyway",
+            merchant_transaction_id="merchant-order-1",
+        )
+        with self.assertRaises(IntegrityError):
+            self.insert_payment(
+                provider="payanyway",
+                merchant_transaction_id="merchant-order-1",
+                idempotency_key="key-2",
+                status="canceled",
+            )
+        with self.assertRaises(IntegrityError):
+            self.insert_payment(
+                provider="unsupported",
+                idempotency_key="key-3",
+                status="canceled",
+            )
 
     def test_only_one_active_payment_exists_per_user_and_product(self) -> None:
         self.insert_payment(idempotency_key="key-1", status="creating")
@@ -137,6 +157,61 @@ class SubscriptionPaymentsSchemaTests(unittest.TestCase):
             (1, "legacy-payment", "https://example.invalid/legacy", "pending"),
             legacy_row,
         )
+
+    def test_payanyway_migration_preserves_payment_and_receipt_history(self) -> None:
+        migration_database = SqliteSession(
+            sqlite_url(Path(self.temp_directory.name) / "migration-16.db")
+        )
+        try:
+            self.assertEqual(
+                tuple(range(1, 16)),
+                run_migrations(migration_database.engine, target_version=15),
+            )
+            with migration_database.engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "INSERT INTO users(id, tg_id, fullname, username, inviter_id) "
+                    "VALUES (1, 9901, 'Historic', 'historic', 0)"
+                )
+                connection.exec_driver_sql(
+                    """INSERT INTO subscription_payments(
+                        id, user_id, provider, provider_payment_id,
+                        idempotency_key, product_code, amount_minor, currency,
+                        period_days, status
+                    ) VALUES (
+                        1, 1, 'yookassa', 'historic-provider', 'historic-key',
+                        'monthly_30d_v1', 49900, 'RUB', 30, 'succeeded'
+                    )"""
+                )
+                connection.exec_driver_sql(
+                    """INSERT INTO payment_receipts(
+                        subscription_payment_id, idempotency_key, status,
+                        attempts, product_code, amount_minor, currency,
+                        service_period_days, item_description,
+                        payment_reference, income_received_at
+                    ) VALUES (
+                        1, 'receipt-key', 'pending', 0, 'monthly_30d_v1',
+                        49900, 'RUB', 30, 'Service', 'historic-provider',
+                        '2026-09-01 12:00:00'
+                    )"""
+                )
+            self.assertEqual((16,), run_migrations(migration_database.engine))
+            with migration_database.engine.connect() as connection:
+                payment = connection.exec_driver_sql(
+                    "SELECT provider, provider_payment_id, amount_minor "
+                    "FROM subscription_payments WHERE id = 1"
+                ).one()
+                receipt = connection.exec_driver_sql(
+                    "SELECT subscription_payment_id, payment_reference "
+                    "FROM payment_receipts WHERE id = 1"
+                ).one()
+                fk_issues = connection.exec_driver_sql(
+                    "PRAGMA foreign_key_check"
+                ).fetchall()
+            self.assertEqual(("yookassa", "historic-provider", 49900), payment)
+            self.assertEqual((1, "historic-provider"), receipt)
+            self.assertEqual([], fk_issues)
+        finally:
+            migration_database.dispose()
 
 
 if __name__ == "__main__":

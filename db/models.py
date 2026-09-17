@@ -275,7 +275,7 @@ class SubscriptionPayment(Base):
     __tablename__ = "subscription_payments"
     __table_args__ = (
         CheckConstraint(
-            "provider = 'yookassa'",
+            "provider IN ('yookassa', 'payanyway')",
             name="ck_subscription_payments_provider",
         ),
         CheckConstraint(
@@ -312,6 +312,13 @@ class SubscriptionPayment(Base):
             sqlite_where=text("provider_payment_id IS NOT NULL"),
         ),
         Index(
+            "uq_subscription_payments_merchant_transaction_id",
+            "provider",
+            "merchant_transaction_id",
+            unique=True,
+            sqlite_where=text("merchant_transaction_id IS NOT NULL"),
+        ),
+        Index(
             "uq_subscription_payments_active_user_product",
             "user_id",
             "product_code",
@@ -335,6 +342,7 @@ class SubscriptionPayment(Base):
         Text(), server_default="yookassa"
     )
     provider_payment_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    merchant_transaction_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(Text())
     product_code: Mapped[str] = mapped_column(Text())
     amount_minor: Mapped[int] = mapped_column(Integer())

@@ -105,6 +105,7 @@ class PaymentService:
         before_access_apply: Callable[[], None] | None = None,
         expected_test_mode: bool | None = None,
         receipt_email_required: Callable[[int], bool] | None = None,
+        provider_name: str = "yookassa",
     ) -> None:
         validation = validate_payment_spec(product.spec)
         if not validation.is_valid:
@@ -122,6 +123,9 @@ class PaymentService:
             raise ValueError("expected_test_mode must be a boolean or None")
         self._expected_test_mode = expected_test_mode
         self._receipt_email_required = receipt_email_required
+        if provider_name not in {"yookassa", "payanyway"}:
+            raise ValueError("Unsupported payment provider.")
+        self._provider_name = provider_name
 
     def get_or_create_payment(self, user_id: int) -> PaymentServiceResult:
         """Return the one active payment or create one local request safely."""
@@ -226,6 +230,28 @@ class PaymentService:
             payment_id = payment.id
         return self.reconcile_payment(payment_id)
 
+    def confirm_authoritative_payment(
+        self,
+        payment_id: int,
+        *,
+        provider: str,
+        provider_payment: ProviderPayment,
+    ) -> PaymentServiceResult:
+        """Apply a payment already authenticated by a provider callback.
+
+        This boundary performs the same server-owned amount, currency,
+        product and exactly-once checks as pull reconciliation, but never
+        calls a provider API.  The caller must authenticate the callback
+        before invoking it.
+        """
+        with self._session_factory() as session:
+            payment = session.get(SubscriptionPayment, payment_id)
+            if payment is None:
+                raise LookupError(PaymentServiceReason.PAYMENT_NOT_FOUND.value)
+            if payment.provider != provider or provider != self._provider_name:
+                raise PermissionError(PaymentServiceReason.OWNERSHIP_MISMATCH.value)
+        return self._reconcile_provider_payment(payment_id, provider_payment)
+
     def get_latest_payment(self, user_id: int) -> PaymentServiceResult | None:
         """Read the latest local payment for the configured product only."""
         with self._session_factory() as session:
@@ -250,7 +276,7 @@ class PaymentService:
                         return active.id, False
                     payment = SubscriptionPayment(
                         user_id=user_id,
-                        provider="yookassa",
+                        provider=self._provider_name,
                         idempotency_key=self._idempotency_key_factory(),
                         product_code=self._product.product_code,
                         amount_minor=self._product.amount_minor,

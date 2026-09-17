@@ -38,7 +38,7 @@ class PaymentServiceTests(unittest.TestCase):
         )
         self._key_number = 0
         self.assertEqual(
-            tuple(range(1, 16)),
+            tuple(range(1, 17)),
             run_migrations(self.database.engine),
         )
         with self.database.engine.begin() as connection:
