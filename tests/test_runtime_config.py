@@ -13,7 +13,11 @@ from storage.runtime_config import (
     build_webhook_role_config,
     process_environment_settings,
 )
-from storage.payment_runtime import PaymentMode
+from storage.payment_runtime import (
+    PaymentMode,
+    PaymentProviderName,
+    PaymentRuntime,
+)
 from storage.receipt_runtime import ReceiptMode, build_receipt_runtime_config
 from storage.runtime_bootstrap import validate_payment_environment
 
@@ -95,18 +99,45 @@ class RuntimeConfigTests(unittest.TestCase):
                     "PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1",
                     "PAYMENT_WEBHOOK_BIND_PORT": "8081",
                     "PAYMENT_WEBHOOK_PATH": "/internal/payment",
+                    "PAYMENT_WEBHOOK_PUBLIC_URL": "https://payments.traineros.ru/internal/payment",
                 }
             ),
             expected_environment=ApplicationEnvironment.PRODUCTION,
         )
         self.assertEqual(Path(database), config.database_path)
         self.assertEqual(8081, config.bind_port)
+        self.assertEqual(
+            "https://payments.traineros.ru/internal/payment",
+            config.public_url,
+        )
 
         with self.assertRaises(RuntimeConfigurationError):
             build_webhook_role_config(
                 settings({"APP_ENV": "production", "DATABASE_PATH": database}),
                 expected_environment=ApplicationEnvironment.PRODUCTION,
             )
+
+        for public_url in (
+            "http://payments.traineros.ru/internal/payment",
+            "https://payments.traineros.ru/other",
+            "https://user:secret@payments.traineros.ru/internal/payment",
+        ):
+            with self.subTest(public_url=public_url), self.assertRaises(
+                RuntimeConfigurationError
+            ):
+                build_webhook_role_config(
+                    settings(
+                        {
+                            "APP_ENV": "production",
+                            "DATABASE_PATH": database,
+                            "PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1",
+                            "PAYMENT_WEBHOOK_BIND_PORT": "8081",
+                            "PAYMENT_WEBHOOK_PATH": "/internal/payment",
+                            "PAYMENT_WEBHOOK_PUBLIC_URL": public_url,
+                        }
+                    ),
+                    expected_environment=ApplicationEnvironment.PRODUCTION,
+                )
 
     def test_maintenance_role_needs_only_database_path(self) -> None:
         config = build_maintenance_role_config(
@@ -144,6 +175,58 @@ class RuntimeConfigTests(unittest.TestCase):
                     expected_environment=ApplicationEnvironment.DEVELOPMENT,
                 )
         builder.assert_not_called()
+
+    def test_production_bot_accepts_payanyway_as_the_receipt_delivery_adapter(self) -> None:
+        import bot as bot_entrypoint
+
+        values = {
+            "APP_ENV": "production",
+            "DATABASE_PATH": str(Path("runtime.db").resolve()),
+            "BOT_TOKEN": "123456:test-token",
+            "PAYMENTS_MODE": "production",
+            "RECEIPTS_MODE": "production",
+            "RECEIPT_PROVIDER": "payanyway",
+        }
+        payment_runtime = PaymentRuntime(
+            object(),
+            object(),
+            PaymentMode.PRODUCTION,
+            provider=PaymentProviderName.PAYANYWAY,
+        )
+        with (
+            patch.object(
+                bot_entrypoint,
+                "build_payment_runtime",
+                return_value=payment_runtime,
+            ),
+            patch.object(bot_entrypoint, "initialize_database_runtime") as database,
+            patch.object(bot_entrypoint, "configure_payment_runtime") as configure,
+            patch.object(bot_entrypoint.bot_registry, "configure_bot_role") as bot_role,
+            patch.object(bot_entrypoint.importlib, "import_module"),
+        ):
+            database.return_value.validation.migration_versions = tuple(range(1, 17))
+            runtime = bot_entrypoint.build_bot_application(
+                settings(values),
+                expected_environment=ApplicationEnvironment.PRODUCTION,
+            )
+
+        self.assertIs(ApplicationEnvironment.PRODUCTION, runtime.environment)
+        configure.assert_called_once_with(payment_runtime)
+        bot_role.assert_called_once()
+
+        values["RECEIPT_PROVIDER"] = "other"
+        with (
+            patch.object(
+                bot_entrypoint,
+                "build_payment_runtime",
+                return_value=payment_runtime,
+            ),
+            self.assertRaises(RuntimeConfigurationError),
+        ):
+            bot_entrypoint.build_bot_application(
+                settings(values),
+                expected_environment=ApplicationEnvironment.PRODUCTION,
+            )
 
     def test_configuration_errors_never_echo_reader_secret(self) -> None:
         reader = SettingsReader(

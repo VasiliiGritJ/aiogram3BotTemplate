@@ -18,6 +18,8 @@ from services.payanyway import (
     PayAnyWayConfig,
     PayAnyWayService,
 )
+from services.payment_domain import PaymentStatus
+from services.payment_service import PaymentServiceReason
 
 
 BASE_TIME = datetime(2026, 9, 17, 12, 0, 0)
@@ -153,6 +155,33 @@ class PayAnyWayCoreTests(unittest.TestCase):
         with self.database() as session:
             count = session.scalar(select(func.count(SubscriptionPayment.id)))
         self.assertEqual(1, count)
+
+    def test_provider_neutral_telegram_adapter_uses_saved_email_and_local_state(self) -> None:
+        created = self.service.get_or_create_payment(1)
+        reused = self.service.get_or_create_payment(1)
+
+        self.assertEqual(PaymentServiceReason.CREATED, created.reason)
+        self.assertEqual(PaymentStatus.PENDING, created.status)
+        self.assertTrue(created.created)
+        self.assertEqual(PaymentServiceReason.ACTIVE_PAYMENT_REUSED, reused.reason)
+        self.assertEqual(created.payment_id, reused.payment_id)
+        self.assertEqual(created.confirmation_url, reused.confirmation_url)
+
+        pending = self.service.reconcile_payment(created.payment_id, user_id=1)
+        self.assertEqual(PaymentServiceReason.NOT_SUCCEEDED, pending.reason)
+        self.assertFalse(pending.access_applied)
+
+        self.service.process_payurl(self.signed_callback())
+        confirmed = self.service.reconcile_payment(created.payment_id, user_id=1)
+        self.assertEqual(PaymentStatus.SUCCEEDED, confirmed.status)
+        self.assertEqual(
+            PaymentServiceReason.ACCESS_ALREADY_APPLIED, confirmed.reason
+        )
+        self.assertTrue(confirmed.access_applied)
+        self.assertEqual(confirmed, self.service.get_latest_payment(1))
+
+        with self.assertRaises(PermissionError):
+            self.service.reconcile_payment(created.payment_id, user_id=999)
 
     def test_valid_payurl_confirms_and_issues_exactly_thirty_days_once(self) -> None:
         self.create_order()

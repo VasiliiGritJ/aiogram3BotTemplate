@@ -2,8 +2,8 @@
 
 Русскоязычный Telegram-бот персонального фитнес-тренера на Python 3.12,
 aiogram 3, SQLAlchemy и SQLite. Проект включает детерминированные тренировочные
-программы, журнал и прогрессию, trial/подписку YooKassa и отдельный HTTP runtime
-для платёжных уведомлений.
+программы, журнал и прогрессию, trial/подписку и отдельный HTTP runtime
+для уведомлений выбранного платёжного провайдера.
 
 ## Локальная разработка
 
@@ -32,8 +32,9 @@ Telegram client и не запускает сеть.
 
 Production получает настройки только из переменных окружения процесса.
 Наличие credentials само по себе не включает production: одновременно требуются
-`APP_ENV=production` и `PAYMENTS_MODE=production`. Несовпадение test/production
-shop проверяется через существующий fail-closed provider guard до создания
+`APP_ENV=production`, `PAYMENTS_MODE=production` и явный
+`PAYMENT_PROVIDER=payanyway|yookassa`. Для PayAnyWay режим входит в подпись
+запроса и PayURL; для YooKassa тип магазина проверяется fail-closed до создания
 платежа.
 
 Bot role (`python bot.py --production`) требует:
@@ -41,8 +42,9 @@ Bot role (`python bot.py --production`) требует:
 - `APP_ENV`, абсолютный `DATABASE_PATH`;
 - `BOT_TOKEN`; опционально `TELEGRAM_PROXY_URL`;
 - опциональные `ADMIN_IDS`, `SYSTEMD_SERVICE_NAME`, `DEBUG_MODE`;
-- `PAYMENTS_MODE`, `YOOKASSA_RETURN_URL`, `YOOKASSA_SHOP_ID`,
-  `YOOKASSA_SECRET_TOKEN`;
+- `PAYMENTS_MODE`, явный `PAYMENT_PROVIDER` и настройки выбранного провайдера:
+  `PAYANYWAY_MNT_ID`, `PAYANYWAY_INTEGRITY_CODE`, `PAYANYWAY_SUCCESS_URL`,
+  `PAYANYWAY_FAIL_URL`, `PAYANYWAY_RETURN_URL` либо прежние YooKassa values;
 - для paid production launch обязательны публичные HTTPS-значения
   `PUBLIC_SITE_URL`, `TERMS_URL`, `PRIVACY_URL`, `REFUND_URL` и валидный
   `SUPPORT_EMAIL`. Их отсутствие или некорректный формат останавливают startup
@@ -54,7 +56,14 @@ Webhook role (`python payment_webhook_server.py`) требует:
 - `APP_ENV=production`, абсолютный `DATABASE_PATH`;
 - все payment-переменные выше;
 - `PAYMENT_WEBHOOK_BIND_HOST`, `PAYMENT_WEBHOOK_BIND_PORT`,
-  `PAYMENT_WEBHOOK_PATH`.
+  `PAYMENT_WEBHOOK_PATH`, `PAYMENT_WEBHOOK_PUBLIC_URL`. Публичный URL обязан
+  быть HTTPS и иметь тот же path, который слушает приватный HTTP role через
+  reverse proxy.
+
+Для PayAnyWay один и тот же endpoint принимает настроенный в кабинете Pay URL
+методом GET или POST form-urlencoded. Только валидная подпись PayURL меняет
+платёж и доступ; browser Success/Fail/Return URL ведут на статический landing и
+сами по себе подписку не активируют.
 
 Maintenance role не читает Telegram/YooKassa credentials: ему передаётся только
 явный путь к БД. Ошибки bootstrap не содержат значения секретов.
@@ -84,17 +93,18 @@ receipt provider сохраняет `disabled`. Production runtime fail-closed, 
 код `monthly_30d_v1` не используется как пользовательское описание. До перехода
 к оплате бот показывает стоимость, период, отсутствие автопродления, известный
 email для чека и ссылки на условия, приватность, возврат и поддержку. Реальные
-URL и контакт поддержки не коммитятся: конкретный payment/NPD provider всё ещё
-ожидает отдельного compliance-решения.
+URL и контакт поддержки не коммитятся: production values передаются только
+окружением процессов.
 
 Email для доставки чеков не входит в fitness onboarding. При первом переходе к
 оплате бот запрашивает его один раз, валидирует и сохраняет в профиле как
 `receipt_email`; позже его можно посмотреть или изменить в разделе профиля. Этот
 адрес используется только для платёжных/receipt-сообщений текущего MVP, без
 маркетинговых рассылок. Новый receipt intent получает неизменяемый snapshot
-адреса; изменение профиля не переписывает уже созданный intent. Конкретный
-платёжный или НПД-провайдер по-прежнему не выбран — PayAnyWay здесь не
-интегрирован.
+адреса; изменение профиля не переписывает уже созданный intent. Для PayAnyWay
+email передаётся как CUSTOMER, а неизменяемая серверная позиция — как INVENTORY.
+Полный подписанный MNT_RESPONSE возвращает эти значения для НПД; отдельный
+outbox остаётся durable audit intent и не блокирует выдачу доступа.
 
 ## SQLite: два процесса
 

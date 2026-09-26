@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from storage.payment_runtime import (
     PaymentMode,
+    PaymentProviderName,
     PaymentRuntimeConfigurationError,
     build_payment_runtime,
 )
@@ -61,6 +62,7 @@ class PaymentRuntimeSandboxTests(unittest.TestCase):
                 }
                 if expected_mode is PaymentMode.PRODUCTION:
                     settings.update({
+                        "PAYMENT_PROVIDER": "yookassa",
                         "PUBLIC_SITE_URL": "https://example.invalid",
                         "TERMS_URL": "https://example.invalid/terms",
                         "PRIVACY_URL": "https://example.invalid/privacy",
@@ -162,6 +164,7 @@ class PaymentRuntimeSandboxTests(unittest.TestCase):
             **valid_public,
             "PAYMENTS_MODE": "production",
             "PAYMENTS_TEST_MODE": "false",
+            "PAYMENT_PROVIDER": "yookassa",
         }
         required_public_names = (
             "PUBLIC_SITE_URL",
@@ -205,6 +208,7 @@ class PaymentRuntimeSandboxTests(unittest.TestCase):
                     **valid_public,
                     "PAYMENTS_MODE": "production",
                     "PAYMENTS_TEST_MODE": "false",
+                    "PAYMENT_PROVIDER": "yookassa",
                     name: value,
                 }
                 with self.assertRaises(PaymentRuntimeConfigurationError) as error:
@@ -218,6 +222,7 @@ class PaymentRuntimeSandboxTests(unittest.TestCase):
             **VALID_SETTINGS,
             "PAYMENTS_MODE": "production",
             "PAYMENTS_TEST_MODE": "false",
+            "PAYMENT_PROVIDER": "yookassa",
             "PUBLIC_SITE_URL": "https://example.invalid",
             "TERMS_URL": "https://example.invalid/terms",
             "PRIVACY_URL": "https://example.invalid/privacy",
@@ -230,6 +235,36 @@ class PaymentRuntimeSandboxTests(unittest.TestCase):
         self.assertEqual("https://example.invalid", runtime.commercial_public.public_site_url)
         self.assertEqual("https://example.invalid/terms", runtime.commercial_public.terms_url)
         self.assertEqual("support@example.invalid", runtime.commercial_public.support_email)
+
+    def test_production_provider_is_explicit_and_payanyway_uses_same_ui_runtime(self) -> None:
+        commercial = {
+            "PUBLIC_SITE_URL": "https://www.traineros.ru",
+            "TERMS_URL": "https://www.traineros.ru/#terms",
+            "PRIVACY_URL": "https://www.traineros.ru/#privacy",
+            "REFUND_URL": "https://www.traineros.ru/#refund",
+            "SUPPORT_EMAIL": "support@example.invalid",
+        }
+        values = {
+            **commercial,
+            "PAYMENTS_MODE": "production",
+            "PAYMENTS_TEST_MODE": "false",
+            "PAYMENT_PROVIDER": "payanyway",
+            "PAYANYWAY_MNT_ID": "12345678",
+            "PAYANYWAY_INTEGRITY_CODE": "fixture-secret",
+            "PAYANYWAY_SUCCESS_URL": "https://www.traineros.ru/?payment=success#payment",
+            "PAYANYWAY_FAIL_URL": "https://www.traineros.ru/?payment=fail#payment",
+            "PAYANYWAY_RETURN_URL": "https://www.traineros.ru/#payment",
+        }
+        with patch("storage.payment_runtime.PayAnyWayService") as service_class:
+            runtime = build_payment_runtime(self.reader(values))
+
+        self.assertIs(PaymentProviderName.PAYANYWAY, runtime.provider)
+        self.assertIs(service_class.return_value, runtime.payment_service)
+        self.assertFalse(service_class.call_args.args[0].test_mode)
+
+        values.pop("PAYMENT_PROVIDER")
+        with self.assertRaises(PaymentRuntimeConfigurationError):
+            build_payment_runtime(self.reader(values))
 
     def test_reader_exceptions_are_normalized_without_secret_text(self) -> None:
         def failing_reader(name: str) -> str:

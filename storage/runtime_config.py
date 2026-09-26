@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 from environs import Env
 
@@ -71,6 +72,7 @@ class WebhookRoleConfig:
     bind_host: str
     bind_port: int
     path: str
+    public_url: str | None
 
 
 def local_development_settings(
@@ -122,7 +124,13 @@ def build_webhook_role_config(
     bind_host = settings.optional("PAYMENT_WEBHOOK_BIND_HOST")
     bind_port = settings.optional("PAYMENT_WEBHOOK_BIND_PORT")
     path = settings.optional("PAYMENT_WEBHOOK_PATH")
-    if production and (bind_host is None or bind_port is None or path is None):
+    public_url = settings.optional("PAYMENT_WEBHOOK_PUBLIC_URL")
+    if production and (
+        bind_host is None
+        or bind_port is None
+        or path is None
+        or public_url is None
+    ):
         raise RuntimeConfigurationError("Production webhook configuration is incomplete.")
     bind_host = bind_host or "127.0.0.1"
     bind_port = bind_port or "8080"
@@ -135,12 +143,26 @@ def build_webhook_role_config(
         raise RuntimeConfigurationError("Webhook port is invalid.")
     if not path.startswith("/") or path.startswith("//") or "\\" in path:
         raise RuntimeConfigurationError("Webhook path is invalid.")
+    if public_url is not None:
+        parsed_public_url = urlparse(public_url)
+        if (
+            parsed_public_url.scheme != "https"
+            or not parsed_public_url.netloc
+            or parsed_public_url.path != path
+            or parsed_public_url.params
+            or parsed_public_url.query
+            or parsed_public_url.fragment
+            or parsed_public_url.username is not None
+            or parsed_public_url.password is not None
+        ):
+            raise RuntimeConfigurationError("Webhook public URL is invalid.")
     return WebhookRoleConfig(
         environment=environment,
         database_path=_database_path(settings, production=production),
         bind_host=bind_host,
         bind_port=port,
         path=path,
+        public_url=public_url,
     )
 
 

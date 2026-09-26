@@ -1,4 +1,4 @@
-"""Explicit entrypoint for the separate YooKassa webhook HTTP role."""
+"""Explicit entrypoint for the selected payment provider HTTP role."""
 
 from __future__ import annotations
 

@@ -22,8 +22,10 @@ from services.payment_webhook import (
     SUPPORTED_PAYMENT_EVENTS,
     YooKassaWebhookProcessor,
 )
+from services.payanyway import PayAnyWayCallbackResult, PayAnyWayService
 from storage.payment_runtime import (
     PaymentMode,
+    PaymentProviderName,
     PaymentRuntimeConfigurationError,
     build_payment_runtime,
     read_payment_mode,
@@ -42,6 +44,7 @@ from storage.runtime_config import (
 
 
 PAYMENT_WEBHOOK_PATH = "/webhooks/yookassa/payment"
+PAYANYWAY_WEBHOOK_PATH = "/webhooks/payanyway/payurl"
 PAYMENT_WEBHOOK_MAX_BODY_BYTES = 64 * 1024
 PAYMENT_WEBHOOK_LIVENESS_PATH = "/health/live"
 PAYMENT_WEBHOOK_READINESS_PATH = "/health/ready"
@@ -151,21 +154,72 @@ def create_payment_webhook_app(
     return app
 
 
+def create_payanyway_webhook_handler(
+    service: PayAnyWayService,
+) -> Callable[[web.Request], object]:
+    """Accept the configured PayURL form without trusting browser state."""
+
+    async def handle(request: web.Request) -> web.Response:
+        started_at = perf_counter()
+        try:
+            if request.method == "GET":
+                payload = _single_value_mapping(request.query)
+            elif request.content_type == "application/x-www-form-urlencoded":
+                payload = _single_value_mapping(await request.post())
+            else:
+                return _payanyway_transport_error(
+                    "unsupported_media_type", 415, started_at
+                )
+        except web.HTTPRequestEntityTooLarge:
+            return _payanyway_transport_error("payload_too_large", 413, started_at)
+        except (web.HTTPBadRequest, UnicodeDecodeError, ValueError, TypeError):
+            return _payanyway_transport_error("malformed_request", 400, started_at)
+        if payload is None:
+            return _payanyway_transport_error("duplicate_field", 400, started_at)
+        try:
+            result = await asyncio.to_thread(service.process_payurl, payload)
+        except Exception:
+            return _payanyway_transport_error(
+                "temporarily_unavailable", 503, started_at
+            )
+        logger.info(
+            "payment_webhook provider=payanyway outcome=%s status=200 duration_ms=%s",
+            result.reason.value,
+            round((perf_counter() - started_at) * 1000),
+        )
+        return _payanyway_xml_response(result)
+
+    return handle
+
+
+def create_payanyway_webhook_app(
+    service: PayAnyWayService,
+    config: PaymentWebhookServerConfig,
+) -> web.Application:
+    app = web.Application(client_max_size=config.max_body_bytes)
+    app.router.add_get(PAYMENT_WEBHOOK_LIVENESS_PATH, _liveness_handler)
+    app.router.add_get(PAYMENT_WEBHOOK_READINESS_PATH, _readiness_handler)
+    handler = create_payanyway_webhook_handler(service)
+    app.router.add_get(config.path, handler)
+    app.router.add_post(config.path, handler)
+    return app
+
+
 def build_payment_webhook_http_runtime(
     read_required: Callable[[str], str],
 ) -> PaymentWebhookHttpRuntime:
     """Compose the separate deploy process from injected server-side config."""
     try:
         payment_runtime = build_payment_runtime(read_required)
-        config = _build_server_config(read_required, payment_runtime.mode)
+        config = _build_server_config(
+            read_required, payment_runtime.mode, payment_runtime.provider
+        )
     except (PaymentRuntimeConfigurationError, ValueError, TypeError):
         raise PaymentWebhookHttpConfigurationError(
             "Payment webhook configuration is invalid."
         ) from None
-    processor = YooKassaWebhookProcessor(payment_runtime.payment_service)
     return PaymentWebhookHttpRuntime(
-        create_payment_webhook_app(processor, config),
-        config,
+        _create_provider_app(payment_runtime, config), config
     )
 
 
@@ -182,8 +236,21 @@ def build_deployed_payment_webhook_runtime(
         )
         payment_mode = read_payment_mode(settings)
         validate_payment_environment(role.environment, payment_mode)
-        build_receipt_runtime_config(settings, environment=role.environment)
         payment_runtime = build_payment_runtime(settings)
+        receipt_config = build_receipt_runtime_config(
+            settings,
+            environment=role.environment,
+            provider_adapter_available=(
+                payment_runtime.provider is PaymentProviderName.PAYANYWAY
+            ),
+        )
+        if (
+            payment_runtime.provider is PaymentProviderName.PAYANYWAY
+            and receipt_config.provider_code != PaymentProviderName.PAYANYWAY.value
+        ):
+            raise RuntimeConfigurationError(
+                "Receipt provider does not match the payment provider."
+            )
         database = initialize_database_runtime(role.database_path)
         config = PaymentWebhookServerConfig(
             role.bind_host,
@@ -207,10 +274,21 @@ def build_deployed_payment_webhook_runtime(
         database.validation.migration_versions[-1],
         os.getpid(),
     )
-    processor = YooKassaWebhookProcessor(payment_runtime.payment_service)
-    app = create_payment_webhook_app(processor, config)
+    app = _create_provider_app(payment_runtime, config)
     app.on_cleanup.append(_close_database_runtime)
     return PaymentWebhookHttpRuntime(app, config)
+
+
+def _create_provider_app(payment_runtime, config: PaymentWebhookServerConfig):
+    if payment_runtime.provider is PaymentProviderName.PAYANYWAY:
+        service = payment_runtime.payment_service
+        if not isinstance(service, PayAnyWayService):
+            raise PaymentWebhookHttpConfigurationError(
+                "Payment webhook composition is invalid."
+            )
+        return create_payanyway_webhook_app(service, config)
+    processor = YooKassaWebhookProcessor(payment_runtime.payment_service)
+    return create_payment_webhook_app(processor, config)
 
 
 async def _close_database_runtime(app: web.Application) -> None:
@@ -221,6 +299,7 @@ async def _close_database_runtime(app: web.Application) -> None:
 def _build_server_config(
     read_required: Callable[[str], str],
     payment_mode: PaymentMode,
+    payment_provider: PaymentProviderName,
 ) -> PaymentWebhookServerConfig:
     """Allow loopback defaults only in test/local mode, never in production."""
     if payment_mode is PaymentMode.PRODUCTION:
@@ -233,7 +312,11 @@ def _build_server_config(
         path = _read_optional(read_required, "PAYMENT_WEBHOOK_PATH")
         bind_host = bind_host or LOCAL_SAFE_BIND_HOST
         bind_port_value = bind_port_value or str(LOCAL_SAFE_BIND_PORT)
-        path = path or PAYMENT_WEBHOOK_PATH
+        path = path or (
+            PAYANYWAY_WEBHOOK_PATH
+            if payment_provider is PaymentProviderName.PAYANYWAY
+            else PAYMENT_WEBHOOK_PATH
+        )
     return PaymentWebhookServerConfig(bind_host, int(bind_port_value), path)
 
 
@@ -277,6 +360,39 @@ def _result_response(result: PaymentWebhookResult) -> web.Response:
 
 def _response(status: int, outcome: str) -> web.Response:
     return web.json_response({"status": outcome}, status=status)
+
+
+def _single_value_mapping(values: Mapping[str, str]) -> dict[str, str] | None:
+    result: dict[str, str] = {}
+    for name in values:
+        if hasattr(values, "getall") and len(values.getall(name)) != 1:
+            return None
+        value = values.get(name)
+        if not isinstance(value, str):
+            return None
+        result[name] = value
+    return result
+
+
+def _payanyway_xml_response(result: PayAnyWayCallbackResult) -> web.Response:
+    return web.Response(
+        text=result.response_xml,
+        status=200,
+        content_type="application/xml",
+        charset="utf-8",
+    )
+
+
+def _payanyway_transport_error(
+    outcome: str, status: int, started_at: float
+) -> web.Response:
+    logger.info(
+        "payment_webhook provider=payanyway outcome=%s status=%s duration_ms=%s",
+        outcome,
+        status,
+        round((perf_counter() - started_at) * 1000),
+    )
+    return web.Response(text=outcome, status=status, content_type="text/plain")
 
 
 async def _liveness_handler(request: web.Request) -> web.Response:

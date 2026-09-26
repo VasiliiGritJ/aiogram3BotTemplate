@@ -28,8 +28,16 @@ from services.access import as_utc_naive, utc_now
 from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
 from services.payment_domain import PaymentStatus
 from services.payment_provider import PaymentProviderError, ProviderPayment
-from services.payment_service import PaymentService, PaymentServiceReason
-from services.receipt_email import normalize_receipt_email, receipt_email_in_session
+from services.payment_service import (
+    PaymentService,
+    PaymentServiceReason,
+    PaymentServiceResult,
+)
+from services.receipt_email import (
+    ReceiptEmailRequired,
+    normalize_receipt_email,
+    receipt_email_in_session,
+)
 
 
 PAYANYWAY_PROVIDER = "payanyway"
@@ -214,6 +222,46 @@ class PayAnyWayService:
             payment = session.get(SubscriptionPayment, payment_id)
             assert payment is not None
             return self._order_from_payment(payment, email, created=True)
+
+    def get_or_create_payment(self, user_id: int) -> PaymentServiceResult:
+        """Adapter used by the provider-neutral Telegram purchase flow."""
+        with self._session_factory() as session:
+            customer_email = receipt_email_in_session(session, user_id)
+        if customer_email is None:
+            raise ReceiptEmailRequired("Receipt email is required.")
+        order = self.create_order(user_id, customer_email)
+        return self._result_from_order(order)
+
+    def get_latest_payment(self, user_id: int) -> PaymentServiceResult | None:
+        """Return local state only; PayAnyWay has no pull status endpoint."""
+        with self._session_factory() as session:
+            payment = session.scalar(
+                select(SubscriptionPayment)
+                .where(
+                    SubscriptionPayment.user_id == user_id,
+                    SubscriptionPayment.product_code == self._product.product_code,
+                    (
+                        (SubscriptionPayment.provider == PAYANYWAY_PROVIDER)
+                        | (SubscriptionPayment.status == PaymentStatus.SUCCEEDED.value)
+                    ),
+                )
+                .order_by(SubscriptionPayment.id.desc())
+            )
+            if payment is None:
+                return None
+            return self._result_from_payment(payment)
+
+    def reconcile_payment(
+        self, payment_id: int, *, user_id: int | None = None
+    ) -> PaymentServiceResult:
+        """Read PayURL-confirmed local state without inventing a status API."""
+        with self._session_factory() as session:
+            payment = session.get(SubscriptionPayment, payment_id)
+            if payment is None or payment.provider != PAYANYWAY_PROVIDER:
+                raise LookupError(PaymentServiceReason.PAYMENT_NOT_FOUND.value)
+            if user_id is not None and payment.user_id != user_id:
+                raise PermissionError(PaymentServiceReason.OWNERSHIP_MISMATCH.value)
+            return self._result_from_payment(payment)
 
     def process_payurl(self, payload: Mapping[str, object]) -> PayAnyWayCallbackResult:
         """Authenticate a PayURL report and confirm its order exactly once."""
@@ -455,6 +503,39 @@ class PayAnyWayService:
             self._inventory_json(),
             PaymentStatus(payment.status),
             created,
+        )
+
+    @staticmethod
+    def _result_from_order(order: PayAnyWayOrder) -> PaymentServiceResult:
+        return PaymentServiceResult(
+            payment_id=order.payment_id,
+            status=order.status,
+            confirmation_url=order.payment_url,
+            reason=(
+                PaymentServiceReason.CREATED
+                if order.created
+                else PaymentServiceReason.ACTIVE_PAYMENT_REUSED
+            ),
+            created=order.created,
+        )
+
+    @staticmethod
+    def _result_from_payment(payment: SubscriptionPayment) -> PaymentServiceResult:
+        status = PaymentStatus(payment.status)
+        reason = (
+            PaymentServiceReason.ACCESS_ALREADY_APPLIED
+            if status is PaymentStatus.SUCCEEDED
+            and payment.access_applied_at is not None
+            else PaymentServiceReason.NOT_SUCCEEDED
+        )
+        return PaymentServiceResult(
+            payment_id=payment.id,
+            status=status,
+            confirmation_url=payment.confirmation_url,
+            reason=reason,
+            access_applied=payment.access_applied_at is not None,
+            grant_started_at=payment.grant_started_at,
+            grant_ends_at=payment.grant_ends_at,
         )
 
     def _build_payment_url(

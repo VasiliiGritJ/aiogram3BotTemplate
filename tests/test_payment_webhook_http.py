@@ -8,20 +8,29 @@ from unittest.mock import patch
 
 from aiohttp import web
 from aiohttp.test_utils import make_mocked_request
+from multidict import MultiDict
 
+from services.payanyway import PayAnyWayCallbackReason, PayAnyWayCallbackResult
 from services.payment_webhook import PaymentWebhookReason, PaymentWebhookResult
 from storage.payment_webhook_http import (
     PAYMENT_WEBHOOK_MAX_BODY_BYTES,
+    PAYANYWAY_WEBHOOK_PATH,
     PAYMENT_WEBHOOK_PATH,
     PAYMENT_WEBHOOK_LIVENESS_PATH,
     PAYMENT_WEBHOOK_READINESS_PATH,
     PaymentWebhookHttpConfigurationError,
     PaymentWebhookServerConfig,
     build_payment_webhook_http_runtime,
+    create_payanyway_webhook_app,
+    create_payanyway_webhook_handler,
     create_payment_webhook_app,
     create_payment_webhook_handler,
 )
-from storage.payment_runtime import PaymentMode, PaymentRuntime
+from storage.payment_runtime import (
+    PaymentMode,
+    PaymentProviderName,
+    PaymentRuntime,
+)
 
 
 class _Request:
@@ -47,6 +56,30 @@ class _Processor:
         if isinstance(result, Exception):
             raise result
         return result
+
+
+class _PayAnyWayService:
+    def __init__(self, *results):
+        self._results = list(results)
+        self.payloads = []
+
+    def process_payurl(self, payload):
+        self.payloads.append(payload)
+        result = self._results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class _PayAnyWayRequest:
+    def __init__(self, method, values, content_type="application/x-www-form-urlencoded"):
+        self.method = method
+        self.query = MultiDict(values)
+        self.content_type = content_type
+        self._values = MultiDict(values)
+
+    async def post(self):
+        return self._values
 
 
 def decode(response: web.Response):
@@ -174,6 +207,79 @@ class PaymentWebhookHttpTests(unittest.TestCase):
         self.assertIsNone(post_match.http_exception)
         self.assertEqual(PAYMENT_WEBHOOK_MAX_BODY_BYTES, app._client_max_size)
 
+    def test_payanyway_route_accepts_get_and_post_and_returns_provider_xml(self) -> None:
+        xml = "<?xml version=\"1.0\"?><MNT_RESPONSE></MNT_RESPONSE>"
+        service = _PayAnyWayService(
+            PayAnyWayCallbackResult(
+                True, PayAnyWayCallbackReason.CONFIRMED, xml, payment_id=1
+            ),
+            PayAnyWayCallbackResult(
+                True, PayAnyWayCallbackReason.ALREADY_CONFIRMED, xml, payment_id=1
+            ),
+        )
+        handler = create_payanyway_webhook_handler(service)
+        values = [("MNT_TRANSACTION_ID", "order-1")]
+
+        get_response = self.run_async(
+            handler(_PayAnyWayRequest("GET", values))
+        )
+        post_response = self.run_async(
+            handler(_PayAnyWayRequest("POST", values))
+        )
+
+        self.assertEqual(200, get_response.status)
+        self.assertEqual(200, post_response.status)
+        self.assertEqual("application/xml", get_response.content_type)
+        self.assertEqual(xml, get_response.text)
+        self.assertEqual(
+            [{"MNT_TRANSACTION_ID": "order-1"}] * 2,
+            service.payloads,
+        )
+
+        app = create_payanyway_webhook_app(
+            service, PaymentWebhookServerConfig("127.0.0.1", 8080)
+        )
+        for method in ("GET", "POST"):
+            match = self.run_async(
+                app.router.resolve(make_mocked_request(method, PAYMENT_WEBHOOK_PATH))
+            )
+            self.assertIsNone(match.http_exception)
+
+    def test_payanyway_transport_rejects_ambiguous_or_wrong_content_without_secret(self) -> None:
+        service = _PayAnyWayService()
+        handler = create_payanyway_webhook_handler(service)
+        duplicate = self.run_async(
+            handler(
+                _PayAnyWayRequest(
+                    "GET",
+                    [("MNT_SIGNATURE", "secret-one"), ("MNT_SIGNATURE", "secret-two")],
+                )
+            )
+        )
+        wrong_type = self.run_async(
+            handler(_PayAnyWayRequest("POST", [], content_type="application/json"))
+        )
+
+        self.assertEqual(400, duplicate.status)
+        self.assertEqual(415, wrong_type.status)
+        self.assertNotIn("secret", duplicate.text)
+        self.assertEqual([], service.payloads)
+
+    def test_payanyway_unexpected_failure_is_retryable_without_secret_leakage(self) -> None:
+        secret = "integrity-secret-must-not-leak"
+        service = _PayAnyWayService(RuntimeError(secret))
+        handler = create_payanyway_webhook_handler(service)
+        with self.assertLogs("storage.payment_webhook_http", level="INFO") as logs:
+            response = self.run_async(
+                handler(_PayAnyWayRequest("GET", [("MNT_ID", "12345678")]))
+            )
+
+        combined = "\n".join(logs.output)
+        self.assertEqual(503, response.status)
+        self.assertEqual("temporarily_unavailable", response.text)
+        self.assertNotIn(secret, combined)
+        self.assertNotIn(secret, response.text)
+
     def test_liveness_and_readiness_are_local_and_non_sensitive(self) -> None:
         processor = _Processor(RuntimeError("provider-must-not-be-called"))
         app = create_payment_webhook_app(
@@ -231,6 +337,31 @@ class PaymentWebhookHttpTests(unittest.TestCase):
                 {"PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1"}.__getitem__
             )
 
+    def test_runtime_composition_selects_payanyway_http_boundary(self) -> None:
+        values = {
+            "PAYMENT_WEBHOOK_BIND_HOST": "127.0.0.1",
+            "PAYMENT_WEBHOOK_BIND_PORT": "8081",
+            "PAYMENT_WEBHOOK_PATH": "/webhooks/payanyway/payurl",
+        }
+        payment_runtime = PaymentRuntime(
+            object(), object(), PaymentMode.TEST, provider=PaymentProviderName.PAYANYWAY
+        )
+        sentinel_app = object()
+        with (
+            patch(
+                "storage.payment_webhook_http.build_payment_runtime",
+                return_value=payment_runtime,
+            ),
+            patch(
+                "storage.payment_webhook_http._create_provider_app",
+                return_value=sentinel_app,
+            ) as app_builder,
+        ):
+            runtime = build_payment_webhook_http_runtime(values.__getitem__)
+
+        self.assertIs(sentinel_app, runtime.app)
+        app_builder.assert_called_once_with(payment_runtime, runtime.config)
+
     def test_test_mode_allows_only_loopback_safe_defaults(self) -> None:
         payment_runtime = PaymentRuntime(object(), object(), PaymentMode.TEST)
         with patch(
@@ -241,6 +372,24 @@ class PaymentWebhookHttpTests(unittest.TestCase):
         self.assertEqual("127.0.0.1", runtime.config.bind_host)
         self.assertEqual(8080, runtime.config.bind_port)
         self.assertEqual(PAYMENT_WEBHOOK_PATH, runtime.config.path)
+
+    def test_payanyway_test_runtime_uses_provider_specific_safe_default_path(self) -> None:
+        payment_runtime = PaymentRuntime(
+            object(), object(), PaymentMode.TEST, provider=PaymentProviderName.PAYANYWAY
+        )
+        sentinel_app = object()
+        with (
+            patch(
+                "storage.payment_webhook_http.build_payment_runtime",
+                return_value=payment_runtime,
+            ),
+            patch(
+                "storage.payment_webhook_http._create_provider_app",
+                return_value=sentinel_app,
+            ),
+        ):
+            runtime = build_payment_webhook_http_runtime({}.__getitem__)
+        self.assertEqual(PAYANYWAY_WEBHOOK_PATH, runtime.config.path)
 
     def test_production_mode_fails_closed_without_all_runtime_values(self) -> None:
         payment_runtime = PaymentRuntime(object(), object(), PaymentMode.PRODUCTION)

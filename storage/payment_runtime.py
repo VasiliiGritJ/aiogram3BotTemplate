@@ -7,11 +7,16 @@ commercial value explicitly, so a price is never silently invented.
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Callable
+from typing import Callable, Protocol
 from urllib.parse import urlparse
 
 from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
-from services.payment_service import PaymentService, SubscriptionProduct
+from services.payment_service import (
+    PaymentService,
+    PaymentServiceResult,
+    SubscriptionProduct,
+)
+from services.payanyway import PayAnyWayConfig, PayAnyWayService
 from services.receipt_email import get_receipt_email, normalize_receipt_email
 from services.yookassa_provider import YooKassaCredentials, YooKassaProvider
 
@@ -35,6 +40,21 @@ class PaymentMode(StrEnum):
         return self is PaymentMode.TEST
 
 
+class PaymentProviderName(StrEnum):
+    YOOKASSA = "yookassa"
+    PAYANYWAY = "payanyway"
+
+
+class PaymentCheckoutService(Protocol):
+    def get_or_create_payment(self, user_id: int) -> PaymentServiceResult: ...
+
+    def get_latest_payment(self, user_id: int) -> PaymentServiceResult | None: ...
+
+    def reconcile_payment(
+        self, payment_id: int, *, user_id: int | None = None
+    ) -> PaymentServiceResult: ...
+
+
 @dataclass(frozen=True)
 class CommercialPublicConfig:
     """Public, non-secret links exposed by commercial screens only."""
@@ -49,9 +69,10 @@ class CommercialPublicConfig:
 @dataclass(frozen=True)
 class PaymentRuntime:
     product: SubscriptionProduct
-    payment_service: PaymentService
+    payment_service: PaymentCheckoutService
     mode: PaymentMode
     commercial_public: CommercialPublicConfig = CommercialPublicConfig()
+    provider: PaymentProviderName = PaymentProviderName.YOOKASSA
 
 
 _configured_runtime: PaymentRuntime | None = None
@@ -64,6 +85,32 @@ def build_payment_runtime(read_required: Callable[[str], str]) -> PaymentRuntime
         read_required,
         production=mode is PaymentMode.PRODUCTION,
     )
+    provider_name = read_payment_provider(
+        read_required, production=mode is PaymentMode.PRODUCTION
+    )
+    if provider_name is PaymentProviderName.PAYANYWAY:
+        try:
+            config = PayAnyWayConfig(
+                merchant_id=_read_required(read_required, "PAYANYWAY_MNT_ID"),
+                integrity_code=_read_required(
+                    read_required, "PAYANYWAY_INTEGRITY_CODE"
+                ),
+                test_mode=mode is PaymentMode.TEST,
+                success_url=_read_required(read_required, "PAYANYWAY_SUCCESS_URL"),
+                fail_url=_read_required(read_required, "PAYANYWAY_FAIL_URL"),
+                return_url=_read_required(read_required, "PAYANYWAY_RETURN_URL"),
+            )
+        except (ValueError, TypeError):
+            raise PaymentRuntimeConfigurationError(
+                "Subscription configuration is invalid."
+            ) from None
+        return PaymentRuntime(
+            LAUNCH_COMMERCIAL_PRODUCT.payment_product,
+            PayAnyWayService(config),
+            mode,
+            commercial_public,
+            provider_name,
+        )
     return_url = _read_required(read_required, "YOOKASSA_RETURN_URL")
     parsed_return_url = urlparse(return_url)
     if parsed_return_url.scheme not in {"http", "https"} or not parsed_return_url.netloc:
@@ -91,7 +138,31 @@ def build_payment_runtime(read_required: Callable[[str], str]) -> PaymentRuntime
         raise PaymentRuntimeConfigurationError(
             "Subscription configuration is invalid."
         ) from error
-    return PaymentRuntime(product, payment_service, mode, commercial_public)
+    return PaymentRuntime(
+        product,
+        payment_service,
+        mode,
+        commercial_public,
+        provider_name,
+    )
+
+
+def read_payment_provider(
+    read_required: Callable[[str], str], *, production: bool
+) -> PaymentProviderName:
+    raw_value = _read_optional(read_required, "PAYMENT_PROVIDER")
+    if raw_value is None:
+        if production:
+            raise PaymentRuntimeConfigurationError(
+                "Payment provider configuration is missing."
+            )
+        return PaymentProviderName.YOOKASSA
+    try:
+        return PaymentProviderName(raw_value)
+    except ValueError:
+        raise PaymentRuntimeConfigurationError(
+            "Payment provider configuration is invalid."
+        ) from None
 
 
 def build_commercial_public_config(

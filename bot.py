@@ -12,6 +12,7 @@ from aiogram import Bot, Dispatcher
 
 import storage.config as bot_registry
 from storage.payment_runtime import (
+    PaymentProviderName,
     build_payment_runtime,
     configure_payment_runtime,
     read_payment_mode,
@@ -24,6 +25,7 @@ from storage.runtime_bootstrap import (
 from storage.receipt_runtime import build_receipt_runtime_config
 from storage.runtime_config import (
     ApplicationEnvironment,
+    RuntimeConfigurationError,
     SettingsReader,
     build_bot_role_config,
     local_development_settings,
@@ -65,8 +67,21 @@ def build_bot_application(
     config = build_bot_role_config(settings, expected_environment=expected_environment)
     payment_mode = read_payment_mode(settings)
     validate_payment_environment(config.environment, payment_mode)
-    build_receipt_runtime_config(settings, environment=config.environment)
     payment_runtime = build_payment_runtime(settings)
+    receipt_config = build_receipt_runtime_config(
+        settings,
+        environment=config.environment,
+        provider_adapter_available=(
+            payment_runtime.provider is PaymentProviderName.PAYANYWAY
+        ),
+    )
+    if (
+        payment_runtime.provider is PaymentProviderName.PAYANYWAY
+        and receipt_config.provider_code != PaymentProviderName.PAYANYWAY.value
+    ):
+        raise RuntimeConfigurationError(
+            "Receipt provider does not match the payment provider."
+        )
     database = initialize_database_runtime(config.database_path)
     configure_payment_runtime(payment_runtime)
     bot = bot_registry.configure_bot_role(config)
