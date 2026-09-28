@@ -44,9 +44,11 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
         markup = subscription_mkp(
             payment_id=12,
             confirmation_url="https://example.invalid/pay",
+            show_pay=False,
         )
-        self.assertIn("subscription:pay", self.callback_values(markup))
+        self.assertNotIn("subscription:pay", self.callback_values(markup))
         self.assertIn("subscription:check:12", self.callback_values(markup))
+        self.assertNotIn("YooKassa", str(markup.inline_keyboard))
         urls = [
             button.url
             for row in markup.inline_keyboard

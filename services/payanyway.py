@@ -50,6 +50,31 @@ _TRANSACTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 _OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 
 
+def build_payment_request_signature(
+    merchant_id: str,
+    transaction_id: str,
+    amount: str,
+    currency: str,
+    subscriber_id: str,
+    test_mode: str,
+    integrity_code: str,
+) -> str:
+    """Return the MONETA.Assistant payment-form signature.
+
+    Values are concatenated in the provider-defined order before any URL/form
+    encoding. Empty optional values therefore contribute an empty string.
+    """
+    return _md5_hex(
+        merchant_id,
+        transaction_id,
+        amount,
+        currency,
+        subscriber_id,
+        test_mode,
+        integrity_code,
+    )
+
+
 class PayAnyWayConfigurationError(ValueError):
     """PayAnyWay configuration is incomplete or unsafe."""
 
@@ -179,7 +204,7 @@ class PayAnyWayService:
         existing = self._find_active_order(user_id)
         if existing is not None:
             self._assert_customer(existing.id, user_id, email)
-            return self._order_from_payment(existing, email, created=False)
+            return self._refresh_active_order(existing.id, email)
 
         transaction_id = self._transaction_id_factory()
         if not isinstance(transaction_id, str) or not _TRANSACTION_ID.fullmatch(
@@ -216,7 +241,7 @@ class PayAnyWayService:
             if existing is None:
                 raise
             self._assert_customer(existing.id, user_id, email)
-            return self._order_from_payment(existing, email, created=False)
+            return self._refresh_active_order(existing.id, email)
 
         with self._session_factory() as session:
             payment = session.get(SubscriptionPayment, payment_id)
@@ -478,6 +503,28 @@ class PayAnyWayService:
                 raise PermissionError("Payment ownership mismatch.")
             self._assert_user_and_customer(session, user_id, email)
 
+    def _refresh_active_order(
+        self, payment_id: int, email: str
+    ) -> PayAnyWayOrder:
+        """Re-sign a reusable pending order with the current runtime secret."""
+        with self._session_factory() as session:
+            with session.begin():
+                payment = session.get(SubscriptionPayment, payment_id)
+                if payment is None or payment.provider != PAYANYWAY_PROVIDER:
+                    raise LookupError("PayAnyWay payment does not exist.")
+                if payment.status not in {
+                    PaymentStatus.CREATING.value,
+                    PaymentStatus.PENDING.value,
+                    PaymentStatus.WAITING_FOR_CAPTURE.value,
+                }:
+                    raise RuntimeError("PayAnyWay payment is no longer active.")
+                payment_url = self._build_payment_url(payment, email)
+                if payment.confirmation_url != payment_url:
+                    payment.confirmation_url = payment_url
+                    payment.updated_at = self._now()
+                order = self._order_from_payment(payment, email, created=False)
+            return order
+
     @staticmethod
     def _assert_user_and_customer(
         session: Session, user_id: int, email: str
@@ -566,7 +613,7 @@ class PayAnyWayService:
     def _payment_request_signature(
         self, transaction_id: str, subscriber_id: str
     ) -> str:
-        return _md5_hex(
+        return build_payment_request_signature(
             self._config.merchant_id,
             transaction_id,
             self._amount_text(),

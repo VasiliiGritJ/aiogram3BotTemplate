@@ -69,8 +69,9 @@ def subscription_mkp(
 ) -> types.InlineKeyboardMarkup:
     buttons = []
     if isinstance(confirmation_url, str) and confirmation_url.startswith("https://"):
+        price = LAUNCH_COMMERCIAL_PRODUCT.amount_minor // 100
         buttons.append(
-            [types.InlineKeyboardButton(text="Оплатить в YooKassa", url=confirmation_url)]
+            [types.InlineKeyboardButton(text=f"Оплатить {price} ₽", url=confirmation_url)]
         )
     if show_trial:
         trial_days = LAUNCH_COMMERCIAL_PRODUCT.trial_days

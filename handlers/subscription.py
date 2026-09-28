@@ -204,7 +204,10 @@ def _payment_markup(
     return subscription_mkp(
         payment_id=payment.payment_id if is_active_payment else None,
         confirmation_url=payment.confirmation_url if is_active_payment else None,
-        show_pay=not payment_already_committed,
+        show_pay=(
+            not payment_already_committed
+            and not (is_active_payment and payment.confirmation_url)
+        ),
         show_trial=show_trial,
         show_product_entry=show_product_entry,
         **link_kwargs,

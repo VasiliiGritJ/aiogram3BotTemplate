@@ -161,6 +161,10 @@ class SubscriptionUiTests(unittest.TestCase):
     def callbacks(markup):
         return [button.callback_data for row in markup.inline_keyboard for button in row]
 
+    @staticmethod
+    def buttons(markup):
+        return [button for row in markup.inline_keyboard for button in row]
+
     def test_menu_is_visible_and_displays_server_owned_purchase_disclosure(self):
         service = _PaymentService()
         runtime = self.runtime(service)
@@ -440,7 +444,13 @@ class SubscriptionUiTests(unittest.TestCase):
         text, markup = call.message.edits[-1]
         self.assertIn("Оплата ожидает подтверждения", text)
         self.assertIn("subscription:check:11", self.callbacks(markup))
-        self.assertIn("subscription:pay", self.callbacks(markup))
+        self.assertNotIn("subscription:pay", self.callbacks(markup))
+        payment_buttons = [
+            button
+            for button in self.buttons(markup)
+            if button.url == "https://example.invalid/pay"
+        ]
+        self.assertEqual(["Оплатить 499 ₽"], [button.text for button in payment_buttons])
 
     def test_restart_style_recreation_reads_the_same_durable_payment(self):
         pending = result()
@@ -545,8 +555,17 @@ class SubscriptionUiTests(unittest.TestCase):
             AccessDecision(AccessStatus.TRIAL_AVAILABLE, None),
         )
         self.assertEqual("https://example.invalid/pay", markup.inline_keyboard[0][0].url)
+        payment_buttons = [
+            button
+            for button in self.buttons(markup)
+            if button.url == "https://example.invalid/pay"
+            or button.callback_data == "subscription:pay"
+        ]
+        self.assertEqual(1, len(payment_buttons))
+        self.assertEqual("Оплатить 499 ₽", payment_buttons[0].text)
+        self.assertNotIn("YooKassa", str(markup.inline_keyboard))
         self.assertIn("subscription:check:11", self.callbacks(markup))
-        self.assertIn("subscription:pay", self.callbacks(markup))
+        self.assertNotIn("subscription:pay", self.callbacks(markup))
 
     def test_check_callback_rejects_product_or_price_fields(self):
         self.assertEqual(11, subscription_ui._safe_payment_id("subscription:check:11"))

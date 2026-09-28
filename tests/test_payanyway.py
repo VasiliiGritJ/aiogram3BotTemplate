@@ -17,6 +17,7 @@ from services.payanyway import (
     PayAnyWayCallbackReason,
     PayAnyWayConfig,
     PayAnyWayService,
+    build_payment_request_signature,
 )
 from services.payment_domain import PaymentStatus
 from services.payment_service import PaymentServiceReason
@@ -145,6 +146,97 @@ class PayAnyWayCoreTests(unittest.TestCase):
             self.assertEqual(49_900, payment.amount_minor)
             self.assertEqual(30, payment.period_days)
             self.assertEqual("pending", payment.status)
+
+    def test_official_payment_request_signature_fixture(self) -> None:
+        self.assertEqual(
+            "c8222aef6362c7f1239ccdc729d1a200",
+            build_payment_request_signature(
+                "54600817",
+                "FF790ABCD",
+                "120.25",
+                "RUB",
+                "",
+                "0",
+                "QWERTY",
+            ),
+        )
+
+    def test_signature_distinguishes_mode_and_integrity_secret(self) -> None:
+        production = build_payment_request_signature(
+            MERCHANT_ID, TRANSACTION_ID, "499.00", "RUB", "1", "0", SECRET
+        )
+        test_mode = build_payment_request_signature(
+            MERCHANT_ID, TRANSACTION_ID, "499.00", "RUB", "1", "1", SECRET
+        )
+        rotated = build_payment_request_signature(
+            MERCHANT_ID,
+            TRANSACTION_ID,
+            "499.00",
+            "RUB",
+            "1",
+            "0",
+            "rotated-integrity-code",
+        )
+        self.assertNotEqual(production, test_mode)
+        self.assertNotEqual(production, rotated)
+
+    def test_url_encoding_happens_after_signature_generation(self) -> None:
+        order = self.create_order()
+        parsed = urlparse(order.payment_url)
+        query = {key: value[0] for key, value in parse_qs(parsed.query).items()}
+        expected = build_payment_request_signature(
+            MERCHANT_ID,
+            TRANSACTION_ID,
+            "499.00",
+            "RUB",
+            "1",
+            "0",
+            SECRET,
+        )
+        self.assertEqual(expected, query["MNT_SIGNATURE"])
+        self.assertIn("MNT_CUSTOM1=buyer%40example.com", parsed.query)
+
+    def test_reused_pending_order_is_resigned_after_secret_rotation(self) -> None:
+        first = self.create_order()
+        rotated_service = PayAnyWayService(
+            PayAnyWayConfig(
+                MERCHANT_ID,
+                "rotated-integrity-code",
+                False,
+                "https://www.traineros.ru/payment/success",
+                "https://www.traineros.ru/payment/fail",
+                "https://www.traineros.ru/payment/return",
+            ),
+            session_factory=self.database,
+            now_factory=lambda: BASE_TIME + timedelta(minutes=1),
+            transaction_id_factory=lambda: "must-not-create-a-second-order",
+        )
+        reused = rotated_service.create_order(1, "buyer@example.com")
+
+        self.assertFalse(reused.created)
+        self.assertEqual(first.payment_id, reused.payment_id)
+        self.assertNotEqual(first.payment_url, reused.payment_url)
+        query = {
+            key: value[0]
+            for key, value in parse_qs(urlparse(reused.payment_url).query).items()
+        }
+        self.assertEqual(
+            build_payment_request_signature(
+                MERCHANT_ID,
+                TRANSACTION_ID,
+                "499.00",
+                "RUB",
+                "1",
+                "0",
+                "rotated-integrity-code",
+            ),
+            query["MNT_SIGNATURE"],
+        )
+        with self.database() as session:
+            self.assertEqual(1, session.scalar(select(func.count(SubscriptionPayment.id))))
+            payment = session.scalar(select(SubscriptionPayment))
+            assert payment is not None
+            self.assertEqual(reused.payment_url, payment.confirmation_url)
 
     def test_second_creation_reuses_one_active_order(self) -> None:
         first = self.create_order()
