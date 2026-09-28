@@ -238,6 +238,33 @@ class PayAnyWayCoreTests(unittest.TestCase):
             assert payment is not None
             self.assertEqual(reused.payment_url, payment.confirmation_url)
 
+    def test_reopening_pending_payment_resigns_checkout_without_new_order(self) -> None:
+        first = self.create_order()
+        rotated_service = PayAnyWayService(
+            PayAnyWayConfig(
+                MERCHANT_ID,
+                "rotated-integrity-code",
+                False,
+                "https://www.traineros.ru/payment/success",
+                "https://www.traineros.ru/payment/fail",
+                "https://www.traineros.ru/payment/return",
+            ),
+            session_factory=self.database,
+            now_factory=lambda: BASE_TIME + timedelta(minutes=1),
+        )
+
+        reopened = rotated_service.get_latest_payment(1)
+
+        assert reopened is not None
+        self.assertEqual(first.payment_id, reopened.payment_id)
+        self.assertNotEqual(first.payment_url, reopened.confirmation_url)
+        self.assertEqual(
+            PaymentServiceReason.ACTIVE_PAYMENT_REUSED,
+            reopened.reason,
+        )
+        with self.database() as session:
+            self.assertEqual(1, session.scalar(select(func.count(SubscriptionPayment.id))))
+
     def test_second_creation_reuses_one_active_order(self) -> None:
         first = self.create_order()
         second = self.create_order()

@@ -258,7 +258,31 @@ class PayAnyWayService:
         return self._result_from_order(order)
 
     def get_latest_payment(self, user_id: int) -> PaymentServiceResult | None:
-        """Return local state only; PayAnyWay has no pull status endpoint."""
+        """Return local state and re-sign a reusable checkout when necessary."""
+        payment = self._find_latest_payment(user_id)
+        if payment is None:
+            return None
+        if payment.status in {
+            PaymentStatus.CREATING.value,
+            PaymentStatus.PENDING.value,
+            PaymentStatus.WAITING_FOR_CAPTURE.value,
+        }:
+            with self._session_factory() as session:
+                customer_email = receipt_email_in_session(session, user_id)
+            if customer_email is not None:
+                try:
+                    order = self._refresh_active_order(payment.id, customer_email)
+                except (LookupError, RuntimeError):
+                    payment = self._find_latest_payment(user_id)
+                    return (
+                        None
+                        if payment is None
+                        else self._result_from_payment(payment)
+                    )
+                return self._result_from_order(order)
+        return self._result_from_payment(payment)
+
+    def _find_latest_payment(self, user_id: int) -> SubscriptionPayment | None:
         with self._session_factory() as session:
             payment = session.scalar(
                 select(SubscriptionPayment)
@@ -274,7 +298,8 @@ class PayAnyWayService:
             )
             if payment is None:
                 return None
-            return self._result_from_payment(payment)
+            session.expunge(payment)
+            return payment
 
     def reconcile_payment(
         self, payment_id: int, *, user_id: int | None = None
