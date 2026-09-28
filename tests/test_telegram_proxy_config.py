@@ -17,11 +17,12 @@ class TelegramProxyConfigTests(unittest.TestCase):
     def close_bot(self, bot) -> None:
         asyncio.run(bot.session.close())
 
-    def test_missing_proxy_uses_the_default_direct_session(self) -> None:
+    def test_missing_proxy_uses_a_fresh_connection_direct_session(self) -> None:
         bot = create_telegram_bot(TEST_TOKEN, None)
         try:
             self.assertIsInstance(bot.session, AiohttpSession)
             self.assertIsNone(bot.session._proxy)
+            self.assertTrue(bot.session._connector_init["force_close"])
         finally:
             self.close_bot(bot)
 
@@ -32,6 +33,7 @@ class TelegramProxyConfigTests(unittest.TestCase):
         bot = create_telegram_bot(TEST_TOKEN, "   ")
         try:
             self.assertIsNone(bot.session._proxy)
+            self.assertTrue(bot.session._connector_init["force_close"])
         finally:
             self.close_bot(bot)
 
@@ -43,6 +45,7 @@ class TelegramProxyConfigTests(unittest.TestCase):
             self.assertEqual(proxy_url, bot.session._proxy)
             self.assertEqual("aiohttp_socks.connector", bot.session._connector_type.__module__)
             self.assertTrue(bot.session._connector_init["rdns"])
+            self.assertNotIn("force_close", bot.session._connector_init)
         finally:
             self.close_bot(bot)
 

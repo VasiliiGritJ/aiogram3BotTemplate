@@ -22,11 +22,15 @@ def create_telegram_bot(bot_token: str, proxy_url: str | None = None) -> Bot:
     local networking settings.
     """
     normalized_proxy = normalize_proxy_url(proxy_url)
-    session = (
-        AiohttpSession(proxy=normalized_proxy)
-        if normalized_proxy is not None
-        else None
-    )
+    if normalized_proxy is not None:
+        session = AiohttpSession(proxy=normalized_proxy)
+    else:
+        session = AiohttpSession()
+        # Long polling keeps a connection busy continuously.  On direct
+        # production routes, an idle pooled connection can become unusable
+        # while a fresh TLS connection still works.  Never reuse that stale
+        # connection for replies to real user updates.
+        session._connector_init["force_close"] = True
     return Bot(
         bot_token,
         session=session,
