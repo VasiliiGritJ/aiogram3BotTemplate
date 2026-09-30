@@ -332,7 +332,9 @@ class PublicLandingTests(unittest.TestCase):
 
     def test_production_config_rejects_each_missing_required_public_value(self) -> None:
         valid = self.production_values()
-        for name in valid:
+        required = dict(valid)
+        required.pop("WEBSITE_PURCHASE_URL")
+        for name in required:
             with self.subTest(name=name):
                 values = dict(valid)
                 values.pop(name)
@@ -386,6 +388,9 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn('href="https://trainer.example/#terms"', page)
         self.assertIn('href="https://trainer.example/#privacy"', page)
         self.assertIn('href="https://trainer.example/#refund"', page)
+        self.assertIn('href="https://trainer.example/#payment"', page)
+        self.assertIn('href="https://trainer.example/#seller"', page)
+        self.assertIn('href="https://trainer.example/#support"', page)
         self.assertIn('content="index, follow"', page)
         self.assertIn("ПУБЛИЧНАЯ ССЫЛКА НА БОТА АКТИВНА", page)
         self.assertIn("Иванов Иван Иванович", page)
@@ -400,6 +405,65 @@ class PublicLandingTests(unittest.TestCase):
             page,
         )
         self.assertNotIn("YOOKASSA_SECRET", page)
+
+    def test_production_hides_pending_website_purchase_cta_until_endpoint_is_live(self) -> None:
+        values = self.production_values()
+        values.pop("WEBSITE_PURCHASE_URL")
+        config = build_landing_public_config(self.values(values), production=True)
+        self.assertTrue(config.production_ready)
+        self.assertIsNone(config.website_purchase_url)
+        page = render_production_landing(config)
+        self.assertNotIn("data-purchase-cta", page)
+        self.assertNotIn('href="#website-purchase"', page)
+        self.assertIn(f'href="{OFFICIAL_TELEGRAM_BOT_URL}"', page)
+
+    def test_footer_legal_links_always_have_real_targets(self) -> None:
+        config = build_landing_public_config(
+            self.values(self.production_values()),
+            production=True,
+        )
+        page = render_production_landing(config)
+
+        class LinkParser(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.ids: set[str] = set()
+                self.links: list[tuple[str, str]] = []
+                self.in_footer = False
+
+            def handle_starttag(self, tag, attrs) -> None:
+                values = dict(attrs)
+                if values.get("id"):
+                    self.ids.add(values["id"])
+                if tag == "footer":
+                    self.in_footer = True
+                if tag == "a" and self.in_footer:
+                    self.links.append((values.get("href", ""), values.get("class", "")))
+
+            def handle_endtag(self, tag) -> None:
+                if tag == "footer":
+                    self.in_footer = False
+
+        parser = LinkParser()
+        parser.feed(page)
+        self.assertGreater(len(parser.links), 1)
+        for href, _ in parser.links:
+            with self.subTest(href=href):
+                self.assertTrue(href)
+                self.assertNotIn(href, {"#", "javascript:void(0)"})
+                if href.startswith("#"):
+                    self.assertIn(href[1:], parser.ids)
+
+        footer_targets = {href for href, _ in parser.links}
+        for target in (
+            "https://trainer.example/#terms",
+            "https://trainer.example/#privacy",
+            "https://trainer.example/#refund",
+            "https://trainer.example/#payment",
+            "https://trainer.example/#seller",
+            "https://trainer.example/#support",
+        ):
+            self.assertIn(target, footer_targets)
 
     def test_production_build_creates_complete_relative_static_artifact(self) -> None:
         config = build_landing_public_config(

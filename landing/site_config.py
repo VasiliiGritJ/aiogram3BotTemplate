@@ -45,7 +45,6 @@ class LandingPublicConfig:
                 self.seller_full_name,
                 self.seller_inn,
                 self.support_email,
-                self.website_purchase_url,
             )
         )
 
@@ -68,7 +67,6 @@ def build_landing_public_config(
             "SELLER_FULL_NAME",
             "SELLER_INN",
             "SUPPORT_EMAIL",
-            "WEBSITE_PURCHASE_URL",
         )
     }
     public_site_url = _validate_public_site_url(
@@ -113,7 +111,8 @@ def build_landing_public_config(
     seller_inn = _validate_inn(values["SELLER_INN"], production)
     support_email = _validate_support_email(values["SUPPORT_EMAIL"], production)
     website_purchase_url = _validate_purchase_url(
-        values["WEBSITE_PURCHASE_URL"], production
+        _read_value(read_optional, "WEBSITE_PURCHASE_URL", production=False),
+        production,
     )
     return LandingPublicConfig(
         public_site_url=public_site_url,
