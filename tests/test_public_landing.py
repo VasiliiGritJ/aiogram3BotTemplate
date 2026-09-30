@@ -39,6 +39,7 @@ class PublicLandingTests(unittest.TestCase):
             "SELLER_FULL_NAME": "Иванов Иван Иванович",
             "SELLER_INN": "123456789012",
             "SUPPORT_EMAIL": "support@example.invalid",
+            "WEBSITE_PURCHASE_URL": "https://payments.traineros.ru/buy",
         }
 
     def test_page_contains_frozen_offer_cta_and_mobile_metadata(self) -> None:
@@ -49,6 +50,8 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn("30 дней", page)
         self.assertIn("Без карты · без автопродления", page)
         self.assertIn("ПОПРОБОВАТЬ БЕСПЛАТНО — 3 ДНЯ", page)
+        self.assertIn("Купить доступ - 499 ₽", page)
+        self.assertIn('data-purchase-cta href="#website-purchase"', page)
         self.assertIn("Без карты", page)
         self.assertIn("3 дня / 72 часа", page)
         self.assertIn("затем 499 ₽ / 30 дней", page.lower())
@@ -377,6 +380,7 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn(f'href="{OFFICIAL_TELEGRAM_BOT_URL}"', page)
         self.assertNotIn('href="#telegram-launch"', page)
         self.assertIn(f'href="{OFFICIAL_TELEGRAM_CHANNEL_URL}"', page)
+        self.assertIn('href="https://payments.traineros.ru/buy"', page)
         self.assertIn('<link rel="canonical" href="https://trainer.example">', page)
         self.assertIn('<meta property="og:url" content="https://trainer.example">', page)
         self.assertIn('href="https://trainer.example/#terms"', page)

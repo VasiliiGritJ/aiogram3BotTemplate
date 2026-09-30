@@ -123,7 +123,7 @@ class PaymentService:
             raise ValueError("expected_test_mode must be a boolean or None")
         self._expected_test_mode = expected_test_mode
         self._receipt_email_required = receipt_email_required
-        if provider_name not in {"yookassa", "payanyway"}:
+        if provider_name not in {"yookassa", "payanyway", "prodamus"}:
             raise ValueError("Unsupported payment provider.")
         self._provider_name = provider_name
 

@@ -34,6 +34,7 @@ def render_production_landing(config: LandingPublicConfig) -> str:
     assert config.seller_full_name is not None
     assert config.seller_inn is not None
     assert config.support_email is not None
+    assert config.website_purchase_url is not None
     html = _TEMPLATE.read_text(encoding="utf-8")
     seller = (
         f"Продавец: {escape(config.seller_full_name)}. "
@@ -50,6 +51,7 @@ def render_production_landing(config: LandingPublicConfig) -> str:
         .replace('<!-- canonical-url -->', f'<link rel="canonical" href="{escape(config.public_site_url, quote=True)}">')
         .replace('<!-- og-url -->', f'<meta property="og:url" content="{escape(config.public_site_url, quote=True)}">')
         .replace('href="#telegram-launch"', f'href="{escape(config.telegram_bot_url, quote=True)}"')
+        .replace('href="#website-purchase"', f'href="{escape(config.website_purchase_url, quote=True)}"')
         .replace('https://t.me/traineros', escape(config.telegram_channel_url, quote=True))
         .replace('href="#terms"', f'href="{escape(config.terms_url, quote=True)}"')
         .replace('href="#privacy"', f'href="{escape(config.privacy_url, quote=True)}"')

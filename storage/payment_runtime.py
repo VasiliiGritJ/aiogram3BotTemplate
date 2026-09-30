@@ -64,6 +64,7 @@ class CommercialPublicConfig:
     privacy_url: str | None = None
     refund_url: str | None = None
     support_email: str | None = None
+    website_purchase_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class PaymentRuntime:
     mode: PaymentMode
     commercial_public: CommercialPublicConfig = CommercialPublicConfig()
     provider: PaymentProviderName = PaymentProviderName.YOOKASSA
+    website_first: bool = False
 
 
 _configured_runtime: PaymentRuntime | None = None
@@ -110,6 +112,7 @@ def build_payment_runtime(read_required: Callable[[str], str]) -> PaymentRuntime
             mode,
             commercial_public,
             provider_name,
+            commercial_public.website_purchase_url is not None,
         )
     return_url = _read_required(read_required, "YOOKASSA_RETURN_URL")
     parsed_return_url = urlparse(return_url)
@@ -144,6 +147,7 @@ def build_payment_runtime(read_required: Callable[[str], str]) -> PaymentRuntime
         mode,
         commercial_public,
         provider_name,
+        commercial_public.website_purchase_url is not None,
     )
 
 
@@ -199,7 +203,18 @@ def build_commercial_public_config(
             raise PaymentRuntimeConfigurationError(
                 "Commercial configuration is invalid: SUPPORT_EMAIL."
             ) from None
-    return CommercialPublicConfig(**values, support_email=support_email)
+    raw_website_purchase_url = _read_optional(read_required, "WEBSITE_PURCHASE_URL")
+    if raw_website_purchase_url is None:
+        website_purchase_url = None
+    else:
+        website_purchase_url = _validate_public_url(
+            raw_website_purchase_url, "WEBSITE_PURCHASE_URL", production
+        )
+    return CommercialPublicConfig(
+        **values,
+        support_email=support_email,
+        website_purchase_url=website_purchase_url,
+    )
 
 
 def _read_commercial_value(

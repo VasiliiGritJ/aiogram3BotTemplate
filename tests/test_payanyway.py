@@ -40,7 +40,7 @@ class PayAnyWayCoreTests(unittest.TestCase):
         self.database = SqliteSession(
             sqlite_url(Path(self.temporary.name) / "payanyway.db")
         )
-        self.assertEqual(tuple(range(1, 17)), run_migrations(self.database.engine))
+        self.assertEqual(tuple(range(1, 18)), run_migrations(self.database.engine))
         with self.database.engine.begin() as connection:
             connection.exec_driver_sql(
                 """INSERT INTO users(id, tg_id, fullname, username, inviter_id)

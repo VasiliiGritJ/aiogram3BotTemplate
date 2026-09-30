@@ -81,7 +81,8 @@ def ensure_receipt_intent(
         service_period_days=payment.period_days,
         item_description=NPD_RECEIPT_DESCRIPTION,
         payment_reference=payment.provider_payment_id,
-        buyer_contact=receipt_email_in_session(session, payment.user_id),
+        buyer_contact=payment.buyer_email
+        or receipt_email_in_session(session, payment.user_id),
         income_received_at=income_received_at,
         created_at=now,
         updated_at=now,

@@ -74,7 +74,6 @@ def format_subscription_screen(
     payment: PaymentServiceResult | None,
     receipt_email: str | None = None,
 ) -> str:
-    del runtime
     product = LAUNCH_COMMERCIAL_PRODUCT
     lines = ["💳 Подписка", ""]
     if decision.status is AccessStatus.TRIAL_AVAILABLE:
@@ -107,6 +106,8 @@ def format_subscription_screen(
     )
     if receipt_email is not None:
         lines.extend(("", f"Чек отправим на: {receipt_email}"))
+    if runtime is not None and runtime.website_first:
+        lines.extend(("", "Платный доступ оформляется на сайте TRAINER.OS"))
     if _is_paid_reserved(payment):
         lines.extend(
             (
@@ -189,9 +190,10 @@ def _payment_markup(
         and not payment_already_committed
     )
     show_product_entry = decision.has_access
+    website_first = runtime is not None and runtime.website_first
     if payment is None:
         return subscription_mkp(
-            show_pay=not payment_already_committed,
+            show_pay=not website_first and not payment_already_committed,
             show_trial=show_trial,
             show_product_entry=show_product_entry,
             **link_kwargs,
@@ -203,9 +205,14 @@ def _payment_markup(
     }
     return subscription_mkp(
         payment_id=payment.payment_id if is_active_payment else None,
-        confirmation_url=payment.confirmation_url if is_active_payment else None,
+        confirmation_url=(
+            payment.confirmation_url
+            if is_active_payment and not website_first
+            else None
+        ),
         show_pay=(
-            not payment_already_committed
+            not website_first
+            and not payment_already_committed
             and not (is_active_payment and payment.confirmation_url)
         ),
         show_trial=show_trial,
@@ -342,6 +349,15 @@ async def subscription_pay(call: types.CallbackQuery, state: FSMContext) -> None
         return
     runtime = await _load_runtime_or_show_error(call.message)
     if runtime is None:
+        await call.answer()
+        return
+    if runtime.website_first:
+        decision = get_access_decision(user.id)
+        receipt_email = get_receipt_email(user.id)
+        await call.message.edit_text(
+            format_subscription_screen(runtime, decision, None, receipt_email),
+            reply_markup=_payment_markup(None, decision, runtime),
+        )
         await call.answer()
         return
     payment = runtime.payment_service.get_latest_payment(user.id)

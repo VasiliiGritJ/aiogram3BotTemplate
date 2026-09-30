@@ -26,7 +26,7 @@ class ReceiptOutboxSchemaTests(unittest.TestCase):
 
     def test_clean_migration_creates_receipt_constraints_and_indexes(self) -> None:
         applied = run_migrations(self.database.engine)
-        self.assertEqual(tuple(range(1, 17)), applied)
+        self.assertEqual(tuple(range(1, 18)), applied)
         inspector = inspect(self.database.engine)
         self.assertIn("payment_receipts", inspector.get_table_names())
         columns = {column["name"] for column in inspector.get_columns("payment_receipts")}
@@ -73,7 +73,7 @@ class ReceiptOutboxSchemaTests(unittest.TestCase):
                 )"""
             )
 
-        self.assertEqual((13, 14, 15, 16), run_migrations(self.database.engine))
+        self.assertEqual((13, 14, 15, 16, 17), run_migrations(self.database.engine))
         self.assertEqual((), run_migrations(self.database.engine))
         with self.database.engine.connect() as connection:
             receipt_count = connection.exec_driver_sql(

@@ -30,6 +30,7 @@ class LandingPublicConfig:
     seller_full_name: str | None = None
     seller_inn: str | None = None
     support_email: str | None = None
+    website_purchase_url: str | None = None
 
     @property
     def production_ready(self) -> bool:
@@ -44,6 +45,7 @@ class LandingPublicConfig:
                 self.seller_full_name,
                 self.seller_inn,
                 self.support_email,
+                self.website_purchase_url,
             )
         )
 
@@ -66,6 +68,7 @@ def build_landing_public_config(
             "SELLER_FULL_NAME",
             "SELLER_INN",
             "SUPPORT_EMAIL",
+            "WEBSITE_PURCHASE_URL",
         )
     }
     public_site_url = _validate_public_site_url(
@@ -109,6 +112,9 @@ def build_landing_public_config(
     )
     seller_inn = _validate_inn(values["SELLER_INN"], production)
     support_email = _validate_support_email(values["SUPPORT_EMAIL"], production)
+    website_purchase_url = _validate_purchase_url(
+        values["WEBSITE_PURCHASE_URL"], production
+    )
     return LandingPublicConfig(
         public_site_url=public_site_url,
         telegram_bot_url=telegram_bot_url,
@@ -119,6 +125,7 @@ def build_landing_public_config(
         seller_full_name=seller_full_name,
         seller_inn=seller_inn,
         support_email=support_email,
+        website_purchase_url=website_purchase_url,
     )
 
 
@@ -249,3 +256,15 @@ def _validate_support_email(value: str | None, production: bool) -> str | None:
         raise LandingConfigurationError(
             "Landing configuration is invalid: SUPPORT_EMAIL."
         ) from None
+
+
+def _validate_purchase_url(value: str | None, production: bool) -> str | None:
+    value = _validate_https_url(value, "WEBSITE_PURCHASE_URL", production)
+    if value is None:
+        return None
+    parsed = urlparse(value)
+    if parsed.query or parsed.fragment or parsed.path != "/buy":
+        raise LandingConfigurationError(
+            "Landing configuration is invalid: WEBSITE_PURCHASE_URL."
+        )
+    return value

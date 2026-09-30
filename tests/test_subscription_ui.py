@@ -665,6 +665,28 @@ class SubscriptionUiTests(unittest.TestCase):
         self.assertIn("subscription:trial", self.callbacks(call.message.edits[-1][1]))
         self.assertNotIn("yookassa", subscription_ui.__dict__)
 
+    def test_website_first_runtime_shows_no_external_rub_provider_action(self):
+        runtime = PaymentRuntime(
+            PRODUCT,
+            _PaymentService(),
+            PaymentMode.TEST,
+            CommercialPublicConfig(website_purchase_url="https://payments.traineros.ru/buy"),
+            website_first=True,
+        )
+        markup = subscription_ui._payment_markup(
+            None, AccessDecision(AccessStatus.EXPIRED, None), runtime
+        )
+        self.assertEqual(
+            [],
+            [button for button in self.buttons(markup) if "Оплатить" in button.text],
+        )
+        self.assertNotIn(
+            "Оплатить",
+            subscription_ui.format_subscription_screen(
+                runtime, AccessDecision(AccessStatus.EXPIRED, None), None
+            ),
+        )
+
     def test_documents_and_support_use_validated_actions_with_safe_back_navigation(self):
         runtime = self.runtime(
             _PaymentService(),

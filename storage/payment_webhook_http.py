@@ -41,6 +41,12 @@ from storage.runtime_config import (
     RuntimeConfigurationError,
     build_webhook_role_config,
 )
+from storage.website_purchase_http import add_website_purchase_routes
+from storage.website_purchase_runtime import (
+    WebsitePurchaseRuntimeConfigurationError,
+    build_website_purchase_runtime,
+    website_purchase_enabled,
+)
 
 
 PAYMENT_WEBHOOK_PATH = "/webhooks/yookassa/payment"
@@ -252,6 +258,11 @@ def build_deployed_payment_webhook_runtime(
                 "Receipt provider does not match the payment provider."
             )
         database = initialize_database_runtime(role.database_path)
+        website_runtime = (
+            build_website_purchase_runtime(settings)
+            if website_purchase_enabled(settings)
+            else None
+        )
         config = PaymentWebhookServerConfig(
             role.bind_host,
             role.bind_port,
@@ -260,6 +271,7 @@ def build_deployed_payment_webhook_runtime(
     except (
         PaymentRuntimeConfigurationError,
         RuntimeConfigurationError,
+        WebsitePurchaseRuntimeConfigurationError,
         ValueError,
         TypeError,
     ):
@@ -275,6 +287,8 @@ def build_deployed_payment_webhook_runtime(
         os.getpid(),
     )
     app = _create_provider_app(payment_runtime, config)
+    if website_runtime is not None:
+        add_website_purchase_routes(app, website_runtime)
     app.on_cleanup.append(_close_database_runtime)
     return PaymentWebhookHttpRuntime(app, config)
 

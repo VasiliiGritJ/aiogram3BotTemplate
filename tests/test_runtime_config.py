@@ -204,7 +204,7 @@ class RuntimeConfigTests(unittest.TestCase):
             patch.object(bot_entrypoint.bot_registry, "configure_bot_role") as bot_role,
             patch.object(bot_entrypoint.importlib, "import_module"),
         ):
-            database.return_value.validation.migration_versions = tuple(range(1, 17))
+            database.return_value.validation.migration_versions = tuple(range(1, 18))
             runtime = bot_entrypoint.build_bot_application(
                 settings(values),
                 expected_environment=ApplicationEnvironment.PRODUCTION,

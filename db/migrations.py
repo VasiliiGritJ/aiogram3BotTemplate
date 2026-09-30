@@ -1063,6 +1063,179 @@ def _add_payanyway_payment_identity(connection: Connection) -> None:
     )
 
 
+def _add_website_checkout_support(connection: Connection) -> None:
+    """Add Prodamus while retaining payment/receipt history and foreign keys."""
+    connection.exec_driver_sql(
+        """CREATE TABLE subscription_payments_v17 (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            provider TEXT NOT NULL DEFAULT 'yookassa',
+            provider_payment_id TEXT,
+            merchant_transaction_id TEXT,
+            buyer_email TEXT,
+            idempotency_key TEXT NOT NULL,
+            product_code TEXT NOT NULL,
+            amount_minor INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            period_days INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'creating',
+            confirmation_url TEXT,
+            provider_expires_at DATETIME,
+            cancellation_code TEXT,
+            failure_code TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            confirmed_at DATETIME,
+            last_checked_at DATETIME,
+            access_applied_at DATETIME,
+            grant_started_at DATETIME,
+            grant_ends_at DATETIME,
+            CONSTRAINT ck_subscription_payments_provider
+                CHECK (provider IN ('yookassa', 'payanyway', 'prodamus')),
+            CONSTRAINT ck_subscription_payments_amount_minor CHECK (amount_minor > 0),
+            CONSTRAINT ck_subscription_payments_currency
+                CHECK (length(currency) = 3 AND currency = upper(currency)),
+            CONSTRAINT ck_subscription_payments_period_days CHECK (period_days > 0),
+            CONSTRAINT ck_subscription_payments_status CHECK (status IN (
+                'creating', 'pending', 'waiting_for_capture', 'succeeded',
+                'canceled', 'expired', 'failed'
+            )),
+            CONSTRAINT ck_subscription_payments_grant_order CHECK (
+                grant_ends_at IS NULL OR grant_started_at IS NULL
+                OR grant_ends_at >= grant_started_at
+            ),
+            CONSTRAINT uq_subscription_payments_idempotency_key
+                UNIQUE (idempotency_key),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )"""
+    )
+    connection.exec_driver_sql(
+        """INSERT INTO subscription_payments_v17 (
+            id, user_id, provider, provider_payment_id, merchant_transaction_id,
+            idempotency_key, product_code, amount_minor, currency, period_days,
+            status, confirmation_url, provider_expires_at, cancellation_code,
+            failure_code, created_at, updated_at, confirmed_at, last_checked_at,
+            access_applied_at, grant_started_at, grant_ends_at
+        ) SELECT
+            id, user_id, provider, provider_payment_id, merchant_transaction_id,
+            idempotency_key, product_code, amount_minor, currency, period_days,
+            status, confirmation_url, provider_expires_at, cancellation_code,
+            failure_code, created_at, updated_at, confirmed_at, last_checked_at,
+            access_applied_at, grant_started_at, grant_ends_at
+        FROM subscription_payments"""
+    )
+    connection.exec_driver_sql(
+        """CREATE TABLE payment_receipts_v17 (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            subscription_payment_id INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at DATETIME,
+            processing_started_at DATETIME,
+            claim_token TEXT,
+            provider_receipt_id TEXT,
+            product_code TEXT NOT NULL,
+            amount_minor INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            service_period_days INTEGER NOT NULL,
+            item_description TEXT NOT NULL,
+            payment_reference TEXT NOT NULL,
+            buyer_contact TEXT,
+            income_received_at DATETIME NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            succeeded_at DATETIME,
+            last_error_code TEXT,
+            CONSTRAINT ck_payment_receipts_status CHECK (status IN (
+                'pending', 'processing', 'succeeded', 'retryable_failed',
+                'permanent_failed', 'voided'
+            )),
+            CONSTRAINT ck_payment_receipts_attempts CHECK (attempts >= 0),
+            CONSTRAINT ck_payment_receipts_amount_minor CHECK (amount_minor > 0),
+            CONSTRAINT ck_payment_receipts_currency CHECK (
+                length(currency) = 3 AND currency = upper(currency)
+            ),
+            CONSTRAINT ck_payment_receipts_period_days CHECK (service_period_days > 0),
+            CONSTRAINT ck_payment_receipts_description CHECK (length(item_description) > 0),
+            CONSTRAINT uq_payment_receipts_subscription_payment UNIQUE (subscription_payment_id),
+            CONSTRAINT uq_payment_receipts_idempotency UNIQUE (idempotency_key),
+            FOREIGN KEY(subscription_payment_id)
+                REFERENCES subscription_payments_v17(id) ON DELETE RESTRICT
+        )"""
+    )
+    connection.exec_driver_sql(
+        """INSERT INTO payment_receipts_v17 (
+            id, subscription_payment_id, idempotency_key, status, attempts,
+            next_attempt_at, processing_started_at, claim_token,
+            provider_receipt_id, product_code, amount_minor, currency,
+            service_period_days, item_description, payment_reference,
+            buyer_contact, income_received_at, created_at, updated_at,
+            succeeded_at, last_error_code
+        ) SELECT
+            id, subscription_payment_id, idempotency_key, status, attempts,
+            next_attempt_at, processing_started_at, claim_token,
+            provider_receipt_id, product_code, amount_minor, currency,
+            service_period_days, item_description, payment_reference,
+            buyer_contact, income_received_at, created_at, updated_at,
+            succeeded_at, last_error_code
+        FROM payment_receipts"""
+    )
+    connection.exec_driver_sql("DROP TABLE payment_receipts")
+    connection.exec_driver_sql("DROP TABLE subscription_payments")
+    connection.exec_driver_sql(
+        "ALTER TABLE subscription_payments_v17 RENAME TO subscription_payments"
+    )
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX uq_subscription_payments_provider_payment_id "
+        "ON subscription_payments(provider, provider_payment_id) "
+        "WHERE provider_payment_id IS NOT NULL"
+    )
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX uq_subscription_payments_merchant_transaction_id "
+        "ON subscription_payments(provider, merchant_transaction_id) "
+        "WHERE merchant_transaction_id IS NOT NULL"
+    )
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX uq_subscription_payments_active_user_product "
+        "ON subscription_payments(user_id, product_code) "
+        "WHERE status IN ('creating', 'pending', 'waiting_for_capture')"
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX ix_subscription_payments_user_created_at "
+        "ON subscription_payments(user_id, created_at)"
+    )
+    connection.exec_driver_sql("ALTER TABLE payment_receipts_v17 RENAME TO payment_receipts")
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX uq_payment_receipts_provider_receipt_id "
+        "ON payment_receipts(provider_receipt_id) "
+        "WHERE provider_receipt_id IS NOT NULL"
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX ix_payment_receipts_delivery "
+        "ON payment_receipts(status, next_attempt_at, id)"
+    )
+    connection.exec_driver_sql(
+        """CREATE TABLE website_purchase_sessions (
+            session_token_hash TEXT NOT NULL PRIMARY KEY,
+            oauth_state_hash TEXT NOT NULL UNIQUE,
+            oidc_nonce TEXT NOT NULL,
+            pkce_verifier TEXT NOT NULL,
+            telegram_user_id BIGINT,
+            payment_id INTEGER,
+            expires_at DATETIME NOT NULL,
+            consumed_at DATETIME,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(payment_id) REFERENCES subscription_payments(id) ON DELETE SET NULL
+        )"""
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX ix_website_purchase_sessions_expiry "
+        "ON website_purchase_sessions(expires_at)"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -1088,6 +1261,7 @@ MIGRATIONS = (
     ),
     Migration(15, "durable_trial_consumption", _add_durable_trial_consumption),
     Migration(16, "payanyway_payment_identity", _add_payanyway_payment_identity),
+    Migration(17, "website_checkout_prodamus", _add_website_checkout_support),
 )
 
 

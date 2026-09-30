@@ -19,7 +19,7 @@ class SubscriptionPaymentsSchemaTests(unittest.TestCase):
         self.database = Path(self.temp_directory.name) / "payments.db"
         self.session = SqliteSession(sqlite_url(self.database))
         self.assertEqual(
-            tuple(range(1, 17)),
+            tuple(range(1, 18)),
             run_migrations(self.session.engine),
         )
         with self.session.engine.begin() as connection:
@@ -194,7 +194,7 @@ class SubscriptionPaymentsSchemaTests(unittest.TestCase):
                         '2026-09-01 12:00:00'
                     )"""
                 )
-            self.assertEqual((16,), run_migrations(migration_database.engine))
+            self.assertEqual((16, 17), run_migrations(migration_database.engine))
             with migration_database.engine.connect() as connection:
                 payment = connection.exec_driver_sql(
                     "SELECT provider, provider_payment_id, amount_minor "

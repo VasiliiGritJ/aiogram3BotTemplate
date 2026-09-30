@@ -275,7 +275,7 @@ class SubscriptionPayment(Base):
     __tablename__ = "subscription_payments"
     __table_args__ = (
         CheckConstraint(
-            "provider IN ('yookassa', 'payanyway')",
+            "provider IN ('yookassa', 'payanyway', 'prodamus')",
             name="ck_subscription_payments_provider",
         ),
         CheckConstraint(
@@ -343,6 +343,8 @@ class SubscriptionPayment(Base):
     )
     provider_payment_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
     merchant_transaction_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    # Immutable checkout contact for a website-first buyer before onboarding.
+    buyer_email: Mapped[str | None] = mapped_column(Text(), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(Text())
     product_code: Mapped[str] = mapped_column(Text())
     amount_minor: Mapped[int] = mapped_column(Integer())
@@ -374,6 +376,25 @@ class SubscriptionPayment(Base):
     grant_ends_at: Mapped[datetime | None] = mapped_column(
         DateTime(), nullable=True
     )
+
+
+class WebsitePurchaseSession(Base):
+    """Short-lived server-side state for the Telegram OIDC purchase journey."""
+
+    __tablename__ = "website_purchase_sessions"
+
+    session_token_hash: Mapped[str] = mapped_column(Text(), primary_key=True)
+    oauth_state_hash: Mapped[str] = mapped_column(Text(), unique=True)
+    oidc_nonce: Mapped[str] = mapped_column(Text())
+    pkce_verifier: Mapped[str] = mapped_column(Text())
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    payment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subscription_payments.id", ondelete="SET NULL"), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime())
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
 
 
 class PaymentReceipt(Base):

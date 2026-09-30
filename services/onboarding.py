@@ -295,16 +295,12 @@ def save_profile_and_access(
 
             existing_profile = session.get(FitnessProfile, user_id)
             existing_access = session.get(UserAccess, user_id)
-            if existing_profile is not None or existing_access is not None:
-                if existing_profile is not None and existing_access is not None:
-                    return OnboardingResult(
-                        existing_profile,
-                        existing_access,
-                        created=False,
+            if existing_profile is not None:
+                if existing_access is None:
+                    raise OnboardingPersistenceError(
+                        "Profile cannot exist without access state."
                     )
-                raise OnboardingPersistenceError(
-                    "Profile and access must either both exist or both be absent."
-                )
+                return OnboardingResult(existing_profile, existing_access, created=False)
 
             profile = FitnessProfile(
                 user_id=user_id,
@@ -321,7 +317,7 @@ def save_profile_and_access(
                 completed_at=confirmed_at,
                 updated_at=confirmed_at,
             )
-            access = UserAccess(
+            access = existing_access or UserAccess(
                 user_id=user_id,
                 trial_started_at=None,
                 trial_ends_at=None,
@@ -329,7 +325,9 @@ def save_profile_and_access(
                 subscription_ends_at=None,
                 updated_at=confirmed_at,
             )
-            session.add_all((profile, access))
+            session.add(profile)
+            if existing_access is None:
+                session.add(access)
             session.flush()
 
         return OnboardingResult(profile, access, created=True)
