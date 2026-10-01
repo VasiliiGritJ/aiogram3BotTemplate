@@ -1,5 +1,7 @@
 # DEV_WORKFLOW.md
 
+> **REFERENCE ONLY.** Active workflow rules live in [`AGENTS.md`](AGENTS.md); current operational state lives in [`NEXT_TASK.md`](NEXT_TASK.md).
+
 ## Цель
 
 Сделать разработку максимально автономной, но безопасной для начинающего владельца проекта.

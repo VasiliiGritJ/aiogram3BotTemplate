@@ -1,215 +1,81 @@
-# AGENTS.md
+# AGENTS.md — project rulebook
 
-## Назначение
+## Reading contract
 
-Этот файл задаёт постоянные правила для AI-агентов, работающих с репозиторием. Перед изменением кода необходимо также прочитать `PROJECT_SPEC.md`, `ROADMAP.md`, `DEV_WORKFLOW.md` и `NEXT_TASK.md`.
+**DEFAULT READ (every task):**
 
-Основной владелец продукта не является программистом. Поэтому агент должен не только реализовывать задачу, но и оставлять проект в понятном, воспроизводимом и безопасном состоянии.
+- `AGENTS.md`
+- `NEXT_TASK.md`
 
-## 1. Язык
+**CONDITIONAL READ:**
 
-- Общение с владельцем проекта — на русском языке.
-- Пользовательский интерфейс Telegram-бота — на русском языке, если конкретная задача не требует иного.
-- Имена Python-модулей, функций, классов и технические комментарии могут быть на английском в соответствии с обычными Python-практиками.
+- `PROJECT_SPEC.md` — only when a task affects product logic, user UX, training content, the commercial model, or needs a product decision.
 
-## 2. Источники требований
+`ROADMAP.md`, `DEV_WORKFLOW.md`, `STAGE_0.md`, and `STAGE_0_REPORT.md` are reference/history only. They are not required reading for ordinary work and cannot override the two active documents or the owner's latest instruction.
 
-Приоритет требований:
+## Purpose and precedence
 
-1. Явное последнее указание владельца проекта.
-2. `NEXT_TASK.md` для текущего технического шага.
-3. `PROJECT_SPEC.md`.
-4. `ROADMAP.md`.
-5. Этот `AGENTS.md` и `DEV_WORKFLOW.md`.
-6. Текущее поведение исходного шаблона, если оно не противоречит вышестоящим требованиям.
+The owner is not a programmer. Leave the project reproducible, safe, and understandable.
 
-Не придумывать продуктовые требования, если решение существенно влияет на UX, деньги, безопасность или здоровье пользователя. В таком случае остановиться и задать вопрос.
+Priority: latest explicit owner instruction → `NEXT_TASK.md` → applicable `PROJECT_SPEC.md` → this rulebook → current code. Historical documents are context only. Do not invent product decisions about money, health, security, or material UX; ask only when the decision is truly missing.
 
-## 3. Общий стиль разработки
+Communicate with the owner in Russian. User-facing bot text is Russian unless the task says otherwise. Python names and technical comments may follow normal English conventions.
 
-- Делать небольшие логические изменения.
-- Не переписывать весь проект без необходимости.
-- Предпочитать простую архитектуру, понятную начинающему владельцу проекта.
-- Избегать преждевременной микросервисной архитектуры и сложной инфраструктуры.
-- Для раннего MVP сохранять Python + aiogram 3 + SQLite/SQLAlchemy, пока нет объективной причины мигрировать.
-- Не добавлять новую зависимость, если задачу разумно решить стандартной библиотекой или уже установленными пакетами.
-- Если новая зависимость всё же нужна, объяснить её назначение и зафиксировать в зависимости проекта.
+## Operating model
 
-## 4. Безопасность секретов
+- Work autonomously within the approved scope: inspect, diagnose, implement, test, fix ordinary errors, and leave a clear checkpoint.
+- Treat one owner prompt as authorization for one complete safe block. Do not split it into avoidable micro-confirmations.
+- Ask for at most one owner action per stage. Bundle real risk boundaries together; if a boundary is explicitly authorized in the current scope, do not ask again.
+- Prefer small, understandable changes. Avoid speculative rewrites, microservices, and new dependencies when standard library or existing packages suffice.
+- Run independent safe checks in parallel when practical. Parallelize external dependencies where that reduces waiting without widening scope.
+- A blocker must be reduced with evidence, not merely moved to the owner. Never claim a GUI, credential, deploy path, process, or external state exists until it was actually checked.
+- After two unsuccessful attempts at the same path, stop retrying that path; diagnose the root cause and choose a different safe route or report the concrete blocker.
+- During **LAUNCH LOCK**, change only the explicitly approved launch-blocking scope. No design, refactor, or product expansion by implication.
 
-Никогда не:
+## Model choice
 
-- запрашивать публикацию `BOT_TOKEN` в чате/issue/PR;
-- коммитить `storage/.env`;
-- коммитить API-ключи, пароли, секреты YooKassa или будущего AI-провайдера;
-- печатать секреты в лог;
-- добавлять реальные секреты в примеры конфигурации.
+- Default: **Terra + High**.
+- Use **Sol + High** only for difficult architecture, database, payment, security, concurrency/race safety, or critical review work.
 
-Допустимо создавать `.env.example` только с фиктивными значениями/именами переменных.
+## Safety, secrets, and external systems
 
-Перед коммитом проверить, что секретные локальные файлы игнорируются Git.
+- Never expose, log, commit, or place real secrets in examples. Protect `.env`, `storage/.env`, tokens, provider keys, passwords, and personal credentials.
+- Before asking for or rotating a secret, prove a secure channel exists. If no secure channel is actually available, say so; do not pretend a prompt/window/credential store exists.
+- Keep runtime secrets out of the repository, shell history, logs, chat, and unapproved persistent stores. Use documented environment or production secret configuration only when authorized.
+- Production deployment must be reproducible: identify the artifact, exact deploy path, destination, and verification method. Do not rely on an unverified one-off manual path.
+- Real payments, production DB work, secret entry/change, process start/stop/restart, deployment, external API calls, system settings, destructive operations, and infrastructure changes are risk boundaries. Stop only if they are not explicitly authorized by the current scope.
+- Do not make external payments, send mass Telegram messages, or change production infrastructure without explicit scope authorization.
 
-## 5. Git и ветки
+## Data, database, and payments
 
-- Не изменять `main` напрямую без явного указания владельца.
-- Работать в отдельной ветке.
-- Не выполнять force push.
-- Не переписывать историю Git без явного запроса.
-- Не удалять ветки, теги или релизы без подтверждения.
-- Коммиты должны быть небольшими и иметь понятные сообщения.
-- Локальный commit допустим только если это явно разрешено в `NEXT_TASK.md` и все требуемые проверки зелёные.
-- Push допустим только в указанную рабочую ветку и только после явного подтверждения владельца в интерфейсе/диалоге.
-- Перед commit проверять staged-список. Не включать защищённые локальные данные или неожиданные файлы.
+- `db.db` is protected local data: never stage, reset, restore, revert, delete, or use it for experiments. Test migrations on a temporary DB or safe copy first.
+- SQLite uses synchronous SQLAlchemy; close sessions correctly and keep commits/rollbacks predictable. Store durable product state in DB, not only in UI/FSM text. Store dates consistently in UTC.
+- Schema changes must be reproducible. Before authorized real migration: stop writers, make and verify a SQLite-consistent backup, apply only approved migrations, then verify schema, `quick_check`, and FK integrity.
+- Payment amounts must not rely on `float`. Provider confirmation is authoritative only after signature/identity/amount validation. Repeated notifications must be idempotent and cannot grant access twice.
+- AI must not directly rewrite historical results or subscription state. Training and health behavior must remain conservative; do not provide diagnoses.
 
-## 6. Файлы и данные
+## Implementation and UX
 
-Без явного подтверждения владельца нельзя:
+- Use aiogram 3 idiomatically; avoid blocking synchronous network calls in async handlers.
+- FSM is for short-lived dialogue state; durable user, workout, access, and payment state belongs in DB.
+- Verify authorization on every admin/callback action.
+- Keep user messages short, clear, and free of tracebacks or technical IDs. Buttons must describe the next real action. During a workout, the current exercise and set must be visible.
+- If an existing defect blocks the approved task, fix it minimally with a regression test. Otherwise record it in the final report or `NEXT_TASK.md`; do not expand scope.
 
-- удалять `db.db`;
-- очищать таблицы;
-- удалять пользовательские данные;
-- выполнять необратимые миграции;
-- удалять существенные части исходного проекта.
+## Testing and checkpoints
 
-Изменения схемы БД должны быть воспроизводимыми. Реальную рабочую `db.db` не использовать как площадку для экспериментов: миграции сначала проверять на временной БД или копии.
+- Add targeted tests for new business logic, especially access/trial, dates, payments, idempotency, admin authorization, workout transitions, and progression.
+- Run targeted tests while developing. Fix ordinary implementation/test failures autonomously.
+- Run one relevant full suite at a meaningful green checkpoint when code changed. Do not rerun tests without a code change or new evidence requiring them.
+- Use proportionate checks: compile/import and `git diff --check` after code changes; document-only work needs Markdown/diff checks, not application tests.
 
-Локально изменённый `db.db` считать защищённым файлом: не откатывать, не добавлять в staging и не включать в commit, если текущая задача явно не говорит обратное.
+## Git and files
 
-## 7. Выполнение команд
+- Work on the approved branch; never change `main`, force-push, rewrite history, delete branches/tags/releases, or remove material project files without explicit authorization.
+- Do not use `git add .` or `git add -A`. Stage an exact whitelist and inspect the staged list.
+- Local commit is allowed only when the current scope permits it and the required checkpoint is green. Commit only expected files; never stage `db.db` or secrets.
+- `git push` requires explicit owner authorization, even after a green local commit.
 
-Агент может самостоятельно выполнять безопасные команды, необходимые для поставленной задачи, внутри репозитория:
+## Completion report
 
-- читать файлы;
-- создавать/использовать локальное виртуальное окружение;
-- устанавливать уже зафиксированные зависимости проекта;
-- запускать линтеры/форматтеры, если они приняты в проекте;
-- запускать тесты;
-- запускать локальные скрипты, не требующие секретов и не изменяющие внешние сервисы;
-- проверять импорт/компиляцию Python;
-- выполнять `git status`, `git diff`, `git log`, `git branch`, `git remote` и другие безопасные read-only Git-проверки.
-
-Для безопасных локальных действий не просить владельца принимать технические решения, если среда уже разрешает действие. Если интерфейс требует подтверждения команды, формулировать запрос кратко и точно.
-
-Остановиться перед:
-
-- действиями, требующими реального Telegram Bot Token или другого секрета;
-- реальными платежами;
-- массовой отправкой Telegram-сообщений;
-- удалением/очисткой пользовательских данных;
-- изменением системных настроек Windows/Git/VPN;
-- изменением production-инфраструктуры;
-- публикацией/деплоем;
-- push без явного подтверждения владельца;
-- любым действием, стоимость или внешний эффект которого неясны.
-
-## 8. Telegram
-
-- Использовать возможности aiogram 3 в соответствии с установленной версией.
-- Не смешивать синхронные длительные сетевые вызовы с async-обработчиками без необходимости.
-- Не хранить критичное состояние пользовательского сценария только в тексте сообщений.
-- FSM использовать для краткоживущих диалоговых состояний; долговременные данные пользователя и тренировок хранить в БД.
-- Все callback/admin-действия должны самостоятельно проверять право пользователя, а не полагаться только на то, что предыдущий экран был доступен администратору.
-
-## 9. База данных
-
-- Текущая БД — SQLite через SQLAlchemy.
-- Не использовать async API с синхронным SQLAlchemy engine.
-- Сессии должны корректно закрываться.
-- Операции записи должны завершаться commit/rollback предсказуемо.
-- Для доступа/подписки использовать данные БД, а не состояние интерфейса.
-- Даты хранить последовательно; текущая стратегия раннего MVP — UTC без смещения в SQLite, преобразование только при отображении.
-
-## 10. Тренировочная логика
-
-- Не создавать медицинские диагнозы.
-- Не выдавать потенциально опасные медицинские утверждения как факт.
-- При заявленных травмах/ограничениях продукт должен вести себя консервативно и при необходимости рекомендовать консультацию специалиста.
-- Измеримые правила прогрессии должны быть реализованы обычным кодом и тестироваться.
-- AI не должен напрямую и бесконтрольно менять исторические результаты тренировок или статус подписки.
-
-## 11. Платежи
-
-До соответствующего этапа ROADMAP не подключать YooKassa к основному сценарию.
-
-При реализации:
-
-- секреты только через окружение;
-- подтверждать оплату по данным провайдера;
-- обработка уведомлений должна быть идемпотентной;
-- повторное уведомление не должно продлевать подписку второй раз;
-- проверка доступа должна быть централизованной;
-- деньги и статусы оплаты не моделировать `float`, если появляется арифметика сумм.
-
-## 12. Тестирование
-
-Для новой бизнес-логики добавлять тесты, особенно для:
-
-- trial и проверки доступа;
-- расчётов дат подписки;
-- переходов тренировки;
-- сохранения подходов;
-- прогрессии нагрузки;
-- ограничений административного доступа;
-- идемпотентности платежных событий.
-
-Перед завершением задачи выполнять релевантные тесты. Если тест падает из-за изменений текущей задачи, агент должен самостоятельно локализовать причину, исправить её в пределах scope и повторить тесты, а не останавливать владельца на первой обычной ошибке.
-
-Если тесты невозможно запустить без секрета или внешнего сервиса — явно написать, что именно не проверено.
-
-## 13. Качество пользовательского интерфейса
-
-- Сообщения короткие и понятные.
-- Не показывать traceback конечному пользователю.
-- Не заставлять пользователя вводить технические идентификаторы.
-- Кнопки должны отражать следующее реальное действие.
-- Во время тренировки всегда должно быть видно, что пользователь делает сейчас.
-
-## 14. Поведение при обнаружении проблем исходного шаблона
-
-Если в ходе задачи обнаружена ошибка шаблона:
-
-1. оценить, мешает ли она текущему этапу;
-2. если мешает — исправить минимально и добавить тест/проверку;
-3. если не мешает — зафиксировать её в отчёте/ROADMAP, но не расширять задачу бесконтрольно.
-
-## 15. Формат завершения задачи
-
-После выполнения существенной задачи агент должен кратко сообщить на русском:
-
-- что было сделано;
-- какие файлы изменены;
-- какие команды/тесты выполнены и результат;
-- что осталось непроверенным;
-- hash локального commit, если он был создан;
-- нужен ли следующий ввод/секрет/решение владельца.
-
-Не скрывать ошибки или предупреждения ради вида «успешной» задачи.
-
-## 16. Автономный конвейер
-
-Для каждой задачи из `NEXT_TASK.md` агент работает циклом:
-
-1. Проверить текущую ветку и `git status`.
-2. Прочитать `PROJECT_SPEC.md`, `ROADMAP.md`, `DEV_WORKFLOW.md`, `NEXT_TASK.md` и релевантный код.
-3. Реализовать только scope текущей задачи.
-4. Самостоятельно запускать необходимые локальные тесты и проверки.
-5. Если собственные изменения ломают тесты — исправлять и повторять проверки, пока задача не станет зелёной или не обнаружится стоп-фактор вне scope.
-6. Проверить diff и убедиться, что защищённые/неожиданные файлы не попадут в staging.
-7. Если `NEXT_TASK.md` разрешает локальный commit — создать его только после зелёных тестов и точной проверки staged-файлов.
-8. Перед push остановиться и запросить одно явное подтверждение владельца.
-9. После push сверить локальный и удалённый hash и показать итоговый `git status`.
-
-### Стоп-факторы
-
-Агент обязан остановиться и сообщить владельцу, если:
-
-- для решения нужно выйти за scope `NEXT_TASK.md`;
-- обнаружен риск потери реальных данных;
-- нужна новая внешняя зависимость, не предусмотренная задачей;
-- нужен секрет или доступ к внешнему сервису;
-- требуется продуктово значимое решение про деньги, здоровье, безопасность или UX, которого нет в требованиях;
-- тест выявил проблему существующей системы, которую нельзя минимально исправить без расширения scope;
-- текущая ветка/remote отличаются от ожидаемых;
-- staged-список содержит неожиданные файлы.
-
-Обычные локальные ошибки реализации, синтаксиса, импортов и тестов не являются стоп-фактором: их нужно исправлять автономно в пределах задачи.
+Keep the final report short and evidence-based: stage, proven result, production changes, remaining/used boundaries, changed files and checks, local commit, push status, and the next safe step. Do not hide warnings or present an unverified result as complete.
