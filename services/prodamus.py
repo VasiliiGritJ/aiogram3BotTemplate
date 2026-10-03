@@ -6,13 +6,15 @@ only prepares a signed hosted form and accepts an already signed notification.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from hashlib import sha256
 from hmac import compare_digest, new as hmac_new
 import json
+import logging
+import re
 import secrets
 from typing import Callable, Mapping
 from urllib.parse import urlencode, urlparse
@@ -31,6 +33,7 @@ from services.receipt_email import normalize_receipt_email, receipt_email_in_ses
 
 
 PRODAMUS_PROVIDER = "prodamus"
+logger = logging.getLogger(__name__)
 
 
 class ProdamusConfigurationError(ValueError):
@@ -52,7 +55,7 @@ class ProdamusCallbackReason(StrEnum):
 @dataclass(frozen=True)
 class ProdamusConfig:
     payform_url: str
-    secret_key: str
+    secret_key: str = field(repr=False)
     notification_url: str
     success_url: str
     fail_url: str
@@ -60,7 +63,7 @@ class ProdamusConfig:
     system_code: str = ""
 
     def __post_init__(self) -> None:
-        if not isinstance(self.secret_key, str) or len(self.secret_key) < 16:
+        if not isinstance(self.secret_key, str) or len(self.secret_key.strip()) < 16:
             raise ProdamusConfigurationError("Prodamus secret is missing.")
         for value in (
             self.payform_url,
@@ -118,8 +121,12 @@ def _canonical_value(value: object) -> object:
         return {str(key): _canonical_value(value[key]) for key in sorted(value, key=str)}
     if isinstance(value, (list, tuple)):
         return [_canonical_value(item) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
+    # Hosted form transport sends scalar values as strings, including quantity.
+    # Signing must not depend on the caller's Python scalar type.
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "1" if value else ""
     return str(value)
 
 
@@ -155,6 +162,7 @@ class ProdamusService:
         active = self._find_active_order(user_id)
         if active is not None:
             self._assert_customer(active, email)
+            logger.info("prodamus event=order_reused payment_id=%d", active.id)
             return self._order_from_payment(active, email, created=False)
         try:
             with self._session_factory() as session:
@@ -164,7 +172,7 @@ class ProdamusService:
                     if existing_email is not None and existing_email != email:
                         raise PermissionError("Receipt email mismatch.")
                     transaction_id = self._transaction_id_factory()
-                    if not isinstance(transaction_id, str) or len(transaction_id) > 255:
+                    if not isinstance(transaction_id, str) or not transaction_id or len(transaction_id) > 255:
                         raise RuntimeError("Transaction identity is invalid.")
                     payment = SubscriptionPayment(
                         user_id=user_id,
@@ -183,6 +191,7 @@ class ProdamusService:
                     session.add(payment)
                     session.flush()
                     payment.confirmation_url = self._build_checkout_url(payment, email)
+                    logger.info("prodamus event=order_created payment_id=%d", payment.id)
                     return self._order_from_payment(payment, email, created=True)
         except IntegrityError:
             active = self._find_active_order(user_id)
@@ -194,13 +203,20 @@ class ProdamusService:
     def process_notification(
         self, payload: Mapping[str, object], signature: str | None
     ) -> ProdamusCallbackResult:
-        if not isinstance(signature, str) or not compare_digest(
+        if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", signature) or not compare_digest(
             build_prodamus_signature(payload, self._config.secret_key), signature.lower()
         ):
+            logger.info("prodamus event=signature_invalid")
             return ProdamusCallbackResult(False, ProdamusCallbackReason.INVALID_SIGNATURE)
+        logger.info("prodamus event=signature_valid")
         fields = _notification_fields(payload)
         if fields is None:
             return ProdamusCallbackResult(False, ProdamusCallbackReason.MALFORMED)
+        # Only the established signed success contract authorizes access.
+        # Do not guess provider terminal-status names or cancel a payable order
+        # from a browser return. Confirm negative notification formats at activation.
+        if fields["payment_status"].lower() != "success":
+            return ProdamusCallbackResult(False, ProdamusCallbackReason.STATUS_REJECTED)
         with self._session_factory() as session:
             payment = session.scalar(
                 select(SubscriptionPayment).where(
@@ -215,6 +231,7 @@ class ProdamusService:
                 return ProdamusCallbackResult(False, ProdamusCallbackReason.CUSTOMER_MISMATCH)
             if payment.amount_minor != _amount_minor(fields["sum"]):
                 return ProdamusCallbackResult(False, ProdamusCallbackReason.AMOUNT_MISMATCH)
+        logger.info("prodamus event=payment_matched payment_id=%d", payment_id)
         if not self._claim_operation(payment_id, fields["order_id"]):
             return ProdamusCallbackResult(False, ProdamusCallbackReason.OPERATION_MISMATCH)
         provider_payment = ProviderPayment(
@@ -230,14 +247,21 @@ class ProdamusService:
             is_test=False,
         )
         try:
+            # Confirmation creates an immutable receipt intent, NOT a delivered
+            # NPD receipt. Merchant-side NPD / receipt acknowledgement must be
+            # verified from Prodamus's production contract at activation.
+            # TODO(prodamus-activation): map provider receipt proof only after
+            # its exact signed format is supplied; never issue a second receipt.
             result = self._confirmation_service.confirm_authoritative_payment(
                 payment_id, provider=PRODAMUS_PROVIDER, provider_payment=provider_payment
             )
         except (IntegrityError, LookupError, PermissionError):
             return ProdamusCallbackResult(False, ProdamusCallbackReason.STATUS_REJECTED)
         if result.reason is PaymentServiceReason.ACCESS_APPLIED:
+            logger.info("prodamus event=subscription_activated payment_id=%d", payment_id)
             return ProdamusCallbackResult(True, ProdamusCallbackReason.CONFIRMED, payment_id, True)
         if result.reason is PaymentServiceReason.ACCESS_ALREADY_APPLIED:
+            logger.info("prodamus event=duplicate_ignored payment_id=%d", payment_id)
             return ProdamusCallbackResult(True, ProdamusCallbackReason.ALREADY_CONFIRMED, payment_id, False)
         return ProdamusCallbackResult(False, ProdamusCallbackReason.STATUS_REJECTED)
 
@@ -256,6 +280,16 @@ class ProdamusService:
                 and payment.status == PaymentStatus.SUCCEEDED.value
                 and payment.access_applied_at is not None
             )
+
+    def inspect_order_status(self, payment_id: int, *, user_id: int) -> PaymentStatus | None:
+        """Read the session-bound order; no redirect may change payment state."""
+        with self._session_factory() as session:
+            payment = session.get(SubscriptionPayment, payment_id)
+            if payment is None or payment.provider != PRODAMUS_PROVIDER or payment.user_id != user_id:
+                return None
+            if payment.status == PaymentStatus.SUCCEEDED.value and payment.access_applied_at is None:
+                return PaymentStatus.PENDING
+            return PaymentStatus(payment.status)
 
     def _find_active_order(self, user_id: int) -> SubscriptionPayment | None:
         with self._session_factory() as session:
@@ -292,7 +326,10 @@ class ProdamusService:
                     )
                     .values(provider_payment_id=operation_id, updated_at=self._now())
                 )
-                return claimed.rowcount == 1
+                if claimed.rowcount == 1:
+                    return True
+                session.refresh(payment)
+                return payment.provider_payment_id == operation_id
 
     def _build_checkout_url(self, payment: SubscriptionPayment, email: str) -> str:
         transaction_id = payment.merchant_transaction_id
@@ -369,8 +406,6 @@ def _notification_fields(payload: Mapping[str, object]) -> dict[str, str] | None
         if not isinstance(value, str) or not value or len(value) > 512:
             return None
         result[name] = value
-    if result["payment_status"].lower() != "success":
-        return None
     try:
         result["customer_email"] = normalize_receipt_email(result["customer_email"])
         _amount_minor(result["sum"])
@@ -380,6 +415,8 @@ def _notification_fields(payload: Mapping[str, object]) -> dict[str, str] | None
 
 
 def _amount_minor(value: str) -> int:
+    if not re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,2})?", value):
+        raise ValueError("Amount is invalid.")
     amount = Decimal(value)
     if amount <= 0 or amount.as_tuple().exponent < -2:
         raise ValueError("Amount is invalid.")
@@ -387,6 +424,8 @@ def _amount_minor(value: str) -> int:
 
 
 def _validate_https_url(value: str) -> None:
+    if not isinstance(value, str):
+        raise ProdamusConfigurationError("Prodamus URL is invalid.")
     parsed = urlparse(value)
     if (
         not isinstance(value, str)
@@ -394,6 +433,8 @@ def _validate_https_url(value: str) -> None:
         or not parsed.netloc
         or parsed.username is not None
         or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
         or any(character.isspace() or ord(character) < 32 for character in value)
     ):
         raise ProdamusConfigurationError("Prodamus URL is invalid.")

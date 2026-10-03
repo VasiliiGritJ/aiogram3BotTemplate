@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import secrets
@@ -29,7 +29,7 @@ class TelegramOidcError(ValueError):
 @dataclass(frozen=True)
 class TelegramOidcConfig:
     client_id: str
-    client_secret: str
+    client_secret: str = field(repr=False)
     redirect_uri: str
 
     def __post_init__(self) -> None:
@@ -116,7 +116,7 @@ class TelegramOidcClient:
 
     def _validate_id_token(self, token: str, expected_nonce: str) -> TelegramIdentity:
         parts = token.split(".")
-        if len(parts) != 3:
+        if len(token) > 16384 or len(parts) != 3:
             raise TelegramOidcError("Telegram ID token is invalid.")
         header = _json_part(parts[0])
         claims = _json_part(parts[1])
@@ -128,10 +128,14 @@ class TelegramOidcClient:
         valid_audience = audience == self._config.client_id or (
             isinstance(audience, list) and self._config.client_id in audience
         )
-        if not valid_audience or claims.get("nonce") != expected_nonce:
+        if (
+            not valid_audience
+            or claims.get("nonce") != expected_nonce
+            or (isinstance(audience, list) and len(audience) > 1 and claims.get("azp") != self._config.client_id)
+        ):
             raise TelegramOidcError("Telegram ID token binding is invalid.")
         now = int(self._now_factory().timestamp())
-        if not isinstance(claims.get("exp"), int) or claims["exp"] < now:
+        if type(claims.get("exp")) is not int or claims["exp"] <= now:
             raise TelegramOidcError("Telegram ID token has expired.")
         self._verify_signature(parts, header["kid"])
         subject = claims.get("sub")

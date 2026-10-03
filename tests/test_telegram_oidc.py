@@ -81,6 +81,7 @@ class TelegramOidcTests(unittest.TestCase):
         for token, nonce in (
             (self.token(nonce="other"), "nonce"),
             (self.token(expires=NOW - timedelta(seconds=1)), "nonce"),
+            (self.token(expires=NOW), "nonce"),
         ):
             with self.subTest(token=token[:10]):
                 with self.assertRaises(TelegramOidcError):

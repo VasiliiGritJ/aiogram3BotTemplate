@@ -3,6 +3,8 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
+from hashlib import sha256
+from hmac import new as hmac_new
 from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy import select
@@ -15,6 +17,7 @@ from services.prodamus import (
     ProdamusService,
     build_prodamus_signature,
 )
+from services.payment_domain import PaymentStatus
 
 
 NOW = datetime(2026, 9, 30, 12, 0)
@@ -122,6 +125,11 @@ class ProdamusTests(unittest.TestCase):
         with self.db() as session:
             receipt = session.scalar(select(PaymentReceipt))
         self.assertEqual("buyer@example.com", receipt.buyer_contact)
+        self.assertEqual(49900, receipt.amount_minor)
+        self.assertEqual("RUB", receipt.currency)
+        self.assertEqual(30, receipt.service_period_days)
+        self.assertEqual("pending", receipt.status)  # Payment is not receipt-delivery proof.
+        self.assertIsNone(receipt.provider_receipt_id)
 
     def test_invalid_signature_unknown_amount_and_customer_mismatch_fail_closed(self):
         cases = (
@@ -154,6 +162,85 @@ class ProdamusTests(unittest.TestCase):
         self.assertFalse(self.service.inspect_browser_success(order.transaction_id, user_id=1))
         _, access = self.payment_and_access()
         self.assertIsNone(access.subscription_ends_at)
+
+    def test_signature_normalizes_form_scalars_and_has_independent_vector(self):
+        payload = {"z": "https://example.invalid/", "a": [{"quantity": 1, "price": "499.00"}]}
+        expected_bytes = b'{"a":[{"price":"499.00","quantity":"1"}],"z":"https:\\/\\/example.invalid\\/"}'
+        expected = hmac_new(SECRET.encode(), expected_bytes, sha256).hexdigest()
+        self.assertEqual(expected, build_prodamus_signature(payload, SECRET))
+        payload["a"][0]["quantity"] = "1"
+        self.assertEqual(expected, build_prodamus_signature(payload, SECRET))
+
+    def test_active_subscription_and_trial_extend_from_existing_business_base(self):
+        for field in ("subscription_ends_at", "trial_ends_at"):
+            with self.subTest(field=field):
+                with self.db() as session, session.begin():
+                    access = session.get(UserAccess, 1)
+                    access.subscription_ends_at = None
+                    access.trial_ends_at = None
+                    setattr(access, field, NOW + timedelta(days=4))
+                    payment = session.scalar(select(SubscriptionPayment))
+                    if payment is not None:
+                        # Separate successful purchases; never replay an existing effect.
+                        self.service._transaction_id_factory = lambda: "prodamus-test-2"
+                payload, signature = self.signed(order_id=f"operation-{field}")
+                result = self.service.process_notification(payload, signature)
+                self.assertTrue(result.access_applied)
+                self.assertEqual(NOW + timedelta(days=34), self.payment_and_access()[1].subscription_ends_at)
+
+    def test_pending_and_negative_statuses_never_grant_or_cancel_from_guesswork(self):
+        for status in ("pending", "failed", "cancelled", "canceled", "unknown"):
+            payload, signature = self.signed(payment_status=status)
+            result = self.service.process_notification(payload, signature)
+            self.assertEqual(ProdamusCallbackReason.STATUS_REJECTED, result.reason)
+            payment, access = self.payment_and_access()
+            self.assertEqual("pending", payment.status)
+            self.assertIsNone(payment.provider_payment_id)
+            self.assertIsNone(access.subscription_ends_at)
+        # A rejected/abandoned checkout remains retryable under the same order.
+        self.assertFalse(self.order().created)
+        payload, signature = self.signed()
+        self.assertTrue(self.service.process_notification(payload, signature).accepted)
+
+    def test_terminal_failed_cancelled_expired_orders_allow_new_order_without_access(self):
+        for index, status in enumerate((PaymentStatus.FAILED, PaymentStatus.CANCELED, PaymentStatus.EXPIRED)):
+            order = self.order()
+            with self.db() as session, session.begin():
+                session.get(SubscriptionPayment, order.payment_id).status = status.value
+            self.service._transaction_id_factory = lambda: f"retry-{index}"
+            next_order = self.order()
+            self.assertTrue(next_order.created)
+            self.assertNotEqual(order.payment_id, next_order.payment_id)
+            self.assertIsNone(self.payment_and_access()[1].subscription_ends_at)
+
+    def test_invalid_amounts_and_non_ascii_signature_are_controlled_rejections(self):
+        for amount in ("NaN", "Infinity", "-499", "499.001", "4.99E2"):
+            payload, signature = self.signed(sum=amount)
+            self.assertEqual(ProdamusCallbackReason.MALFORMED, self.service.process_notification(payload, signature).reason)
+        self.assertEqual(ProdamusCallbackReason.INVALID_SIGNATURE,
+                         self.service.process_notification(self.payload(), "я" * 64).reason)
+
+    def test_success_status_is_owned_and_only_available_after_webhook(self):
+        order = self.order()
+        self.assertEqual(PaymentStatus.PENDING, self.service.inspect_order_status(order.payment_id, user_id=1))
+        self.assertIsNone(self.service.inspect_order_status(order.payment_id, user_id=2))
+        payload, signature = self.signed()
+        self.service.process_notification(payload, signature)
+        self.assertEqual(PaymentStatus.SUCCEEDED, self.service.inspect_order_status(order.payment_id, user_id=1))
+
+    def test_observability_contains_only_event_and_local_payment_id(self):
+        with self.assertLogs("services.prodamus", level="INFO") as logs:
+            payload, signature = self.signed()
+            checkout_url = self.order().checkout_url
+            self.service.process_notification(payload, "0" * 64)
+            self.service.process_notification(payload, signature)
+            self.service.process_notification(payload, signature)
+        output = "\n".join(logs.output)
+        for event in ("order_created", "signature_invalid", "signature_valid", "payment_matched",
+                      "subscription_activated", "duplicate_ignored"):
+            self.assertIn(f"event={event}", output)
+        for private in (SECRET, "buyer@example.com", signature, str(payload), checkout_url):
+            self.assertNotIn(private, output)
 
 
 if __name__ == "__main__":

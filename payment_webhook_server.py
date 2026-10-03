@@ -37,6 +37,9 @@ def main(argv: list[str] | None = None) -> None:
         host=runtime.config.bind_host,
         port=runtime.config.bind_port,
         shutdown_timeout=10,
+        # Auth codes and signed checkout/callback query strings are not log data.
+        # Application handlers emit bounded, normalized observability events.
+        access_log=None,
     )
 
 

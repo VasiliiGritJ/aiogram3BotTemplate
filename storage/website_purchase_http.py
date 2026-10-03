@@ -3,22 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
+from hmac import compare_digest
 from html import escape
+import logging
 import re
 from time import perf_counter
 
 from aiohttp import web
 
 from services.prodamus import ProdamusCallbackReason
+from services.payment_domain import PaymentStatus
 from services.website_purchase import WebsitePurchaseError
 from storage.website_purchase_runtime import WebsitePurchaseRuntime
 
 
 SESSION_COOKIE = "traineros_purchase"
+logger = logging.getLogger(__name__)
 _PRODUCT_FIELD = re.compile(r"^products\[(\d+)]\[([A-Za-z_][A-Za-z0-9_]*)]$")
 
 
 def add_website_purchase_routes(app: web.Application, runtime: WebsitePurchaseRuntime) -> None:
+    app.middlewares.append(_private_purchase_response)
     app.router.add_get("/buy", _buy_handler(runtime))
     app.router.add_get("/auth/telegram/callback", _telegram_callback_handler(runtime))
     app.router.add_post("/api/payment/create", _payment_create_handler(runtime))
@@ -30,8 +36,8 @@ def add_website_purchase_routes(app: web.Application, runtime: WebsitePurchaseRu
 def _buy_handler(runtime: WebsitePurchaseRuntime):
     async def handle(request: web.Request) -> web.Response:
         token = request.cookies.get(SESSION_COOKIE, "")
-        if runtime.service.is_authenticated(token):
-            return web.Response(text=_email_page(), content_type="text/html", charset="utf-8")
+        if await asyncio.to_thread(runtime.service.is_authenticated, token):
+            return web.Response(text=_email_page(token), content_type="text/html", charset="utf-8")
         started = await asyncio.to_thread(runtime.service.start_login)
         response = web.HTTPFound(started.authorization_url)
         _set_session_cookie(response, started.session_token)
@@ -59,39 +65,64 @@ def _payment_create_handler(runtime: WebsitePurchaseRuntime):
     async def handle(request: web.Request) -> web.Response:
         try:
             values = await request.post()
+            token = request.cookies.get(SESSION_COOKIE, "")
+            if (
+                len(values.getall("email", [])) != 1
+                or len(values.getall("csrf", [])) != 1
+                or not isinstance(values.get("csrf"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", values["csrf"])
+                or not compare_digest(values["csrf"], _csrf_token(token))
+            ):
+                raise WebsitePurchaseError("Payment request is invalid.")
             email = values.get("email")
             if not isinstance(email, str):
                 raise WebsitePurchaseError("Email is invalid.")
             order = await asyncio.to_thread(
                 runtime.service.create_order,
-                request.cookies.get(SESSION_COOKIE, ""),
+                token,
                 email,
             )
         except (WebsitePurchaseError, web.HTTPBadRequest, ValueError):
+            logger.info("website_purchase event=checkout_rejected outcome=invalid_request")
             return web.Response(status=400, text="Проверьте email и повторите попытку", content_type="text/plain")
-        raise web.HTTPFound(order.checkout_url)
+        except Exception:
+            logger.info("website_purchase event=checkout_rejected outcome=temporarily_unavailable")
+            return web.Response(status=503, text="Оплата временно недоступна. Повторите попытку позже", content_type="text/plain")
+        logger.info("website_purchase event=checkout_requested payment_id=%d", order.payment_id)
+        raise web.HTTPSeeOther(order.checkout_url)
     return handle
 
 
 def _prodamus_webhook_handler(runtime: WebsitePurchaseRuntime):
     async def handle(request: web.Request) -> web.Response:
         started = perf_counter()
+        logger.info("prodamus event=webhook_received")
+        def response(status: int, outcome: str, text: str) -> web.Response:
+            logger.info("prodamus event=webhook_result outcome=%s status=%d duration_ms=%d",
+                        outcome, status, round((perf_counter() - started) * 1000))
+            return web.Response(status=status, text=text)
+        if request.content_type != "application/x-www-form-urlencoded":
+            return response(415, "unsupported_media_type", "notification_rejected")
         try:
             values = await request.post()
             payload = _prodamus_form_payload(values)
             if payload is None:
-                return web.Response(status=400, text="notification_rejected")
+                return response(400, "malformed", "notification_rejected")
             result = await asyncio.to_thread(
                 runtime.service.process_prodamus_notification,
                 payload,
                 request.headers.get("Sign"),
             )
+        except web.HTTPRequestEntityTooLarge:
+            return response(413, "payload_too_large", "notification_rejected")
+        except (web.HTTPBadRequest, UnicodeDecodeError, ValueError):
+            return response(400, "malformed", "notification_rejected")
         except Exception:
-            return web.Response(status=503, text="temporarily_unavailable")
+            return response(503, "temporarily_unavailable", "temporarily_unavailable")
         if result.accepted:
-            return web.Response(status=200, text="ok")
+            return response(200, result.reason.value, "ok")
         status = 400 if result.reason is ProdamusCallbackReason.INVALID_SIGNATURE else 422
-        return web.Response(status=status, text="notification_rejected")
+        return response(status, result.reason.value, "notification_rejected")
     return handle
 
 
@@ -114,6 +145,8 @@ def _prodamus_form_payload(values) -> dict[str, object] | None:
             return None
         products[index][field] = value
     if products:
+        if "products" in payload:
+            return None
         if sorted(products) != list(range(len(products))):
             return None
         payload["products"] = [products[index] for index in range(len(products))]
@@ -121,16 +154,32 @@ def _prodamus_form_payload(values) -> dict[str, object] | None:
 
 
 def _return_page(runtime: WebsitePurchaseRuntime, *, success: bool):
-    text = (
+    pending_text = (
         "Оплата обрабатывается. Доступ появится после подтверждения платежа."
         if success
         else "Оплата не завершена. Можно вернуться и попробовать позже."
     )
     async def handle(request: web.Request) -> web.Response:
-        del request
+        try:
+            status = await asyncio.to_thread(
+                runtime.service.inspect_order_status, request.cookies.get(SESSION_COOKIE, "")
+            )
+        except WebsitePurchaseError:
+            status = None
+        text = pending_text
+        if status is PaymentStatus.SUCCEEDED:
+            text = "Оплата подтверждена. Доступ на 30 дней активирован."
+        elif status in {PaymentStatus.FAILED, PaymentStatus.CANCELED, PaymentStatus.EXPIRED}:
+            text = "Оплата не завершена. Можно вернуться и попробовать позже."
+        elif status is None:
+            text = "Войдите через Telegram, чтобы проверить заказ. Возврат с оплаты не подтверждает доступ."
+        elif not success:
+            text = "Подтверждения оплаты пока нет. Можно вернуться к заказу и повторить попытку."
         return web.Response(
             text=("<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\">"
-                  f"<p>{escape(text)}</p><a href=\"{escape(runtime.telegram_bot_url, quote=True)}\">Открыть @GritJBot</a>"),
+                  "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                  f"<p>{escape(text)}</p><a href=\"/buy\">Вернуться к заказу</a> "
+                  f"<a href=\"{escape(runtime.telegram_bot_url, quote=True)}\">Открыть @GritJBot</a>"),
             content_type="text/html", charset="utf-8",
         )
     return handle
@@ -142,10 +191,29 @@ def _set_session_cookie(response: web.StreamResponse, token: str) -> None:
     )
 
 
-def _email_page() -> str:
-    return """<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\">
+def _csrf_token(token: str) -> str:
+    return sha256(f"purchase-post:{token}".encode()).hexdigest()
+
+
+@web.middleware
+async def _private_purchase_response(request: web.Request, handler):
+    try:
+        response = await handler(request)
+    except web.HTTPException as error:
+        response = error
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+def _email_page(token: str) -> str:
+    return f"""<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
 <title>TRAINER.OS — доступ</title><h1>Доступ к «Мой AI Тренер»</h1>
 <p>499 ₽ за 30 дней · без автопродления</p>
-<form method=\"post\" action=\"/api/payment/create\"><label>Email для чека
+<p>После подтверждения оплаты доступ появится в @GritJBot</p>
+<form method=\"post\" action=\"/api/payment/create\">
+<input type=\"hidden\" name=\"csrf\" value=\"{_csrf_token(token)}\"><label>Email для чека
 <input required type=\"email\" name=\"email\" autocomplete=\"email\"></label>
 <button type=\"submit\">Перейти к оплате</button></form></html>"""

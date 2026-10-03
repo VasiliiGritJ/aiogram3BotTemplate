@@ -9,6 +9,14 @@
 - Browser success redirect не выдаёт доступ. Order, signature validation и entitlement всегда server-side.
 - Prodamus adapter готов локально как основной кандидат. PayAnyWay сохранён как fallback. Telegram Stars намеренно не реализован.
 
+## 8G1D-D — локальная готовность активации
+
+- Исправлен round-trip signing Prodamus (scalar → form string), добавлены безопасные события без email/секретов, CSRF формы покупки, атомарное одноразовое потребление OIDC session и чтение результата заказа только по серверной привязке.
+- Targeted: 121/121 PASS; единственный full suite: 508/508 PASS; compile/diff-check PASS. Не повторять без изменения кода или нового дефекта.
+- Точный config/route/receipt contract и sequence: `payments/PRODAMUS_ACTIVATION.md` (reference). `WEBSITE_PURCHASE_ENABLED` остаётся OFF; landing CTA не включена; внешние действия этапом не выполнялись.
+- Ожидаются assigned Prodamus payform/signing key, подтверждённый notification/ack/status contract и НПД receipt proof format. Receipt intent готов, но не считается доставленным чеком. Не угадывать terminal-status mapping и не запускать второй receipt worker.
+- Затем: Telegram OIDC settings + единое owner authorization на production secrets/config, verified backup/migration 17 если нужна, deploy/reload и один controlled 499 ₽ E2E. PayAnyWay fallback не менять по умолчанию.
+
 ## Актуальные checkpoint'ы
 
 - Stage 7 accepted: deterministic training architecture, 113 controlled exercises/techniques, environment override с полным preview и owner live acceptance.

@@ -257,12 +257,12 @@ def build_deployed_payment_webhook_runtime(
             raise RuntimeConfigurationError(
                 "Receipt provider does not match the payment provider."
             )
-        database = initialize_database_runtime(role.database_path)
         website_runtime = (
             build_website_purchase_runtime(settings)
             if website_purchase_enabled(settings)
             else None
         )
+        database = initialize_database_runtime(role.database_path)
         config = PaymentWebhookServerConfig(
             role.bind_host,
             role.bind_port,

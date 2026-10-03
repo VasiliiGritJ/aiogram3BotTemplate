@@ -8,11 +8,12 @@ from hashlib import sha256
 import secrets
 from typing import Callable
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from db.models import User, UserAccess, WebsitePurchaseSession, dbSession
 from services.access import as_utc_naive, utc_now
+from services.payment_domain import PaymentStatus
 from services.prodamus import ProdamusCallbackResult, ProdamusOrder, ProdamusService
 from services.telegram_oidc import TelegramIdentity, TelegramOidcClient, make_pkce_verifier
 
@@ -73,14 +74,23 @@ class WebsitePurchaseService:
             identity = self._oidc.exchange_code(code=code, verifier=verifier, expected_nonce=nonce)
         except ValueError as error:
             raise WebsitePurchaseError("Telegram login was rejected.") from error
+        now = self._now()  # Token exchange may outlive the purchase-session lease.
         with self._session_factory() as session:
             with session.begin():
                 record = self._get_live_session(session, session_token, now)
                 if record.oauth_state_hash != _digest(state) or record.consumed_at is not None:
                     raise WebsitePurchaseError("Telegram login was rejected.")
-                record.telegram_user_id = identity.telegram_user_id
-                record.consumed_at = now
-                record.updated_at = now
+                claimed = session.execute(
+                    update(WebsitePurchaseSession)
+                    .where(
+                        WebsitePurchaseSession.session_token_hash == _digest(session_token),
+                        WebsitePurchaseSession.consumed_at.is_(None),
+                        WebsitePurchaseSession.expires_at > now,
+                    )
+                    .values(telegram_user_id=identity.telegram_user_id, consumed_at=now, updated_at=now)
+                )
+                if claimed.rowcount != 1:
+                    raise WebsitePurchaseError("Telegram login was rejected.")
                 self._ensure_user_and_access(session, identity, now)
         return identity
 
@@ -112,6 +122,16 @@ class WebsitePurchaseService:
                 return record.telegram_user_id is not None
         except WebsitePurchaseError:
             return False
+
+    def inspect_order_status(self, session_token: str) -> PaymentStatus | None:
+        with self._session_factory() as session:
+            record = self._get_live_session(session, session_token, self._now())
+            if record.telegram_user_id is None or record.payment_id is None:
+                return None
+            user = session.scalar(select(User).where(User.tg_id == record.telegram_user_id))
+            if user is None:
+                return None
+            return self._prodamus.inspect_order_status(record.payment_id, user_id=user.id)
 
     def process_prodamus_notification(
         self, payload: dict[str, object], signature: str | None
