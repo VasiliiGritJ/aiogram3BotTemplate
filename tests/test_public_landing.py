@@ -38,7 +38,6 @@ class PublicLandingTests(unittest.TestCase):
             "REFUND_URL": "https://trainer.example/#refund",
             "SELLER_FULL_NAME": "Иванов Иван Иванович",
             "SELLER_INN": "123456789012",
-            "SELLER_DISCLOSURE_ADDRESS": "Тестовый город, тестовый адрес 1",
             "SUPPORT_EMAIL": "support@example.invalid",
             "WEBSITE_PURCHASE_URL": "https://payments.traineros.ru/buy",
         }

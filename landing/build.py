@@ -30,12 +30,9 @@ def build_production_artifact(
     output_directory: str | Path,
 ) -> Path:
     """Write an upload-ready static artifact only after production validation."""
-    if not config.seller_disclosure_address:
-        raise ValueError("Legal publication requires SELLER_DISCLOSURE_ADDRESS.")
     if not config.production_ready:
         raise LandingBuildError("Production landing configuration is incomplete.")
-    # Check before creating output/staging: the new offer must not silently
-    # omit mandatory seller disclosure. Public values are never echoed.
+    # Public summary only. Full seller residence is a private runtime value.
     legal_pages = {
         name: render_legal_document(name, config) for name in LEGAL_DOCUMENTS
     }

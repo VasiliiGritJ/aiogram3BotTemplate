@@ -60,7 +60,7 @@ class LandingLegalTests(unittest.TestCase):
             "после окончания действующего платного периода", "после окончания пробного периода",
             "18+", "электронный чек НПД", "№ 422-ФЗ", "не заменяет консультацию врача",
             "не гарантирует похудение", "не является согласием на рекламу",
-            "Иванов Иван Иванович", "123456789012", "Тестовый город",
+            "Иванов Иван Иванович", "123456789012",
             'href="https://t.me/GritJBot"', 'href="mailto:kurtbachotto@gmail.com"',
         ):
             with self.subTest(phrase=phrase):
@@ -114,23 +114,20 @@ class LandingLegalTests(unittest.TestCase):
                      "прекратите тренировку", "не запрашивает сведения о здоровье"):
             self.assertIn(text, offer)
 
-    def test_build_rejects_missing_residence_without_creating_any_output(self):
+    def test_public_build_never_reads_private_residence(self):
         values = self.values()
-        del values["SELLER_DISCLOSURE_ADDRESS"]
-        with self.assertRaisesRegex(LandingConfigurationError, "SELLER_DISCLOSURE_ADDRESS"):
-            self.config(values)
-        config = replace(self.config(), seller_disclosure_address=None)
-        self.assertFalse(config.production_ready)
-        with self.assertRaisesRegex(ValueError, "SELLER_DISCLOSURE_ADDRESS"):
-            render_production_landing(config)
-        for filename in LEGAL_DOCUMENTS:
-            with self.subTest(filename=filename), self.assertRaisesRegex(ValueError, "SELLER_DISCLOSURE_ADDRESS"):
-                render_legal_document(filename, config)
+        def read(name):
+            if name in {"SELLER_DISCLOSURE_ADDRESS", "SELLER_RESIDENCE_PRIVATE"}:
+                raise AssertionError("Static build must not read residence")
+            return values.get(name)
+        config = build_landing_public_config(read, production=True)
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "public"
-            with self.assertRaisesRegex(ValueError, "SELLER_DISCLOSURE_ADDRESS"):
-                build_production_artifact(config, output)
-            self.assertEqual([], list(Path(directory).iterdir()))
+            output = build_production_artifact(config, Path(directory) / "public")
+            for filename in ("index.html", *LEGAL_DOCUMENTS):
+                page = (output / filename).read_text(encoding="utf-8")
+                self.assertNotIn("Тестовый город", page)
+                self.assertNotIn("SELLER_DISCLOSURE_ADDRESS", page)
+                self.assertNotIn("SELLER_RESIDENCE_PRIVATE", page)
 
     def test_legal_config_accepts_new_urls_and_normalizes_legacy_anchors(self):
         values = self.values()
@@ -144,16 +141,7 @@ class LandingLegalTests(unittest.TestCase):
             with self.assertRaises(LandingConfigurationError):
                 self.config(values)
 
-    def test_residence_validation_and_html_escaping_no_path_traversal(self):
-        values = self.values()
-        for address in ("x", "a\nbcde", "x" * 301):
-            values["SELLER_DISCLOSURE_ADDRESS"] = address
-            with self.assertRaises(LandingConfigurationError):
-                self.config(values)
-        values["SELLER_DISCLOSURE_ADDRESS"] = '<script>alert("x")</script>'
-        page = render_legal_document("offer.html", self.config(values))
-        self.assertNotIn('<script>', page)
-        self.assertIn("&lt;script&gt;", page)
+    def test_legal_renderer_rejects_path_traversal(self):
         with self.assertRaises(ValueError):
             render_legal_document("../db.db", self.config())
 
@@ -197,7 +185,7 @@ class LandingLegalTests(unittest.TestCase):
             self.assertTrue((output / "legal.css").is_file())
             index = (output / "index.html").read_text(encoding="utf-8")
             self.assertNotIn("data-purchase-cta", index)
-            self.assertIn("Место жительства: Тестовый город", index)
+            self.assertNotIn("Тестовый город", index)
 
 
 if __name__ == "__main__":

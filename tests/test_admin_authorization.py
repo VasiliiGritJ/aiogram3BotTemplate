@@ -7,6 +7,20 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 
+class AdminPrivacyTests(unittest.TestCase):
+    def test_failed_message_does_not_send_exception_data_to_telegram(self):
+        async def scenario():
+            message = _Message(7)
+            state = _State()
+            state.data["tg_id"] = 123
+            with patch.object(mailing_ui.bot, "copy_message", new=AsyncMock(
+                    side_effect=RuntimeError("private user payload"))):
+                await mailing_ui.mailingUserGoCall(message, state)
+            self.assertNotIn("private user payload", str(message.answers))
+            self.assertNotIn("Traceback", str(message.answers))
+        asyncio.run(scenario())
+
+
 class _Dispatcher:
     def callback_query(self, *args, **kwargs):
         return lambda handler: handler

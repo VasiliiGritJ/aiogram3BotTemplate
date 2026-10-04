@@ -28,8 +28,6 @@ _WEBSITE_PURCHASE_CTA = (
 
 def render_production_landing(config: LandingPublicConfig) -> str:
     """Return publishable HTML only after all required public facts are present."""
-    if not config.seller_disclosure_address:
-        raise ValueError("Legal publication requires SELLER_DISCLOSURE_ADDRESS.")
     if not config.production_ready:
         raise ValueError("Production landing configuration is incomplete.")
     assert config.public_site_url is not None
@@ -54,8 +52,6 @@ def render_production_landing(config: LandingPublicConfig) -> str:
         f"ИНН: {escape(config.seller_inn)}. "
         f"Контакт: {escape(config.support_email)}."
     )
-    if config.seller_disclosure_address:
-        seller += f" Место жительства: {escape(config.seller_disclosure_address)}."
     support = (
         "По вопросам доступа, оплаты, чека или возврата: "
         f"{escape(config.support_email)}."
@@ -96,8 +92,6 @@ def render_legal_document(filename: str, config: LandingPublicConfig) -> str:
     """Render only known legal templates; never publish missing seller facts."""
     if filename not in LEGAL_DOCUMENTS:
         raise ValueError("Unknown landing legal document.")
-    if not config.seller_disclosure_address:
-        raise ValueError("Legal publication requires SELLER_DISCLOSURE_ADDRESS.")
     if not config.production_ready:
         raise ValueError("Production landing configuration is incomplete.")
     assert config.public_site_url is not None
@@ -105,7 +99,6 @@ def render_legal_document(filename: str, config: LandingPublicConfig) -> str:
     values = {
         "SELLER_FULL_NAME": config.seller_full_name,
         "SELLER_INN": config.seller_inn,
-        "SELLER_DISCLOSURE_ADDRESS": config.seller_disclosure_address,
         "SUPPORT_EMAIL": config.support_email,
         "PUBLIC_SITE_URL": config.public_site_url,
         "TELEGRAM_BOT_URL": config.telegram_bot_url,

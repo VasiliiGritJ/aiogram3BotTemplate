@@ -16,6 +16,14 @@ from services.prodamus import ProdamusCallbackReason, ProdamusCallbackResult, Pr
 from services.website_purchase import WebsitePurchaseError
 
 
+from services.private_offer import PrivateOffer, OFFER_VERSION
+from tests import test_landing_legal as legal_fixtures
+
+
+def fixture_offer():
+    return PrivateOffer(legal_fixtures.LandingLegalTests().config(), "Private fixture residence")
+
+
 class _Service:
     pass
 
@@ -69,7 +77,7 @@ class WebsitePurchaseHttpTests(unittest.TestCase):
 
 
     def runtime(self, service):
-        return WebsitePurchaseRuntime(service, "https://payments.traineros.ru", "https://t.me/GritJBot")
+        return WebsitePurchaseRuntime(service, "https://payments.traineros.ru", "https://t.me/GritJBot", fixture_offer())
 
     def test_redirect_reads_server_status_not_query_and_never_creates_or_confirms(self):
         service = Mock()
@@ -103,7 +111,7 @@ class WebsitePurchaseHttpTests(unittest.TestCase):
             self.assertEqual(400, response.status)
         service.create_order.assert_not_called()
         with self.assertRaises(web.HTTPSeeOther) as redirect:
-            asyncio.run(handler(_Request({"email": "buyer@example.com", "csrf": _csrf_token("session-fixture")})))
+            asyncio.run(handler(_Request({"email": "buyer@example.com", "csrf": _csrf_token("session-fixture"), "offer_version": OFFER_VERSION})))
         self.assertEqual("https://trainer.payform.ru", redirect.exception.location)
         service.create_order.assert_called_once_with("session-fixture", "buyer@example.com")
 
@@ -153,7 +161,7 @@ class WebsitePurchaseHttpTests(unittest.TestCase):
         for text in ("499 ₽", "30 дней", "без автопродления", "Email для чека", _csrf_token("session-fixture")):
             self.assertIn(text, response.text)
         self.assertNotIn("session-fixture", response.text)
-        self.assertEqual("no-store", response.headers["Cache-Control"])
+        self.assertEqual("private, no-store", response.headers["Cache-Control"])
         self.assertEqual("no-referrer", response.headers["Referrer-Policy"])
         service.start_login.assert_not_called()
 

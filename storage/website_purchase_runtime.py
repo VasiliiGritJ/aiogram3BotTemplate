@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from services.prodamus import ProdamusConfig, ProdamusService
 from services.telegram_oidc import TelegramOidcClient, TelegramOidcConfig
 from services.website_purchase import WebsitePurchaseService
+from services.private_offer import PrivateOffer
 from storage.runtime_config import SettingsReader
 
 
@@ -21,6 +22,7 @@ class WebsitePurchaseRuntime:
     service: WebsitePurchaseService
     base_url: str
     telegram_bot_url: str
+    offer: PrivateOffer | None = None
 
 
 def website_purchase_enabled(settings: SettingsReader) -> bool:
@@ -43,6 +45,7 @@ def build_website_purchase_runtime(settings: SettingsReader) -> WebsitePurchaseR
             raise ValueError("Prodamus NPD activation must be confirmed.")
         base_url = _https_url(settings("WEBSITE_PURCHASE_BASE_URL"), origin_only=True)
         telegram_bot_url = _https_url(settings("TELEGRAM_BOT_URL"))
+        offer = PrivateOffer.from_settings(settings)
         callback_url = f"{base_url}/auth/telegram/callback"
         config = TelegramOidcConfig(
             client_id=settings("TELEGRAM_OIDC_CLIENT_ID"),
@@ -66,6 +69,7 @@ def build_website_purchase_runtime(settings: SettingsReader) -> WebsitePurchaseR
         WebsitePurchaseService(TelegramOidcClient(config), prodamus),
         base_url,
         telegram_bot_url,
+        offer,
     )
 
 

@@ -15,6 +15,7 @@ from aiohttp import web
 from services.prodamus import ProdamusCallbackReason
 from services.payment_domain import PaymentStatus
 from services.website_purchase import WebsitePurchaseError
+from services.private_offer import OFFER_VERSION
 from storage.website_purchase_runtime import WebsitePurchaseRuntime
 
 
@@ -26,6 +27,7 @@ _PRODUCT_FIELD = re.compile(r"^products\[(\d+)]\[([A-Za-z_][A-Za-z0-9_]*)]$")
 def add_website_purchase_routes(app: web.Application, runtime: WebsitePurchaseRuntime) -> None:
     app.middlewares.append(_private_purchase_response)
     app.router.add_get("/buy", _buy_handler(runtime))
+    app.router.add_get("/purchase/offer", _offer_handler(runtime))
     app.router.add_get("/auth/telegram/callback", _telegram_callback_handler(runtime))
     app.router.add_post("/api/payment/create", _payment_create_handler(runtime))
     app.router.add_post("/webhooks/prodamus", _prodamus_webhook_handler(runtime))
@@ -37,11 +39,24 @@ def _buy_handler(runtime: WebsitePurchaseRuntime):
     async def handle(request: web.Request) -> web.Response:
         token = request.cookies.get(SESSION_COOKIE, "")
         if await asyncio.to_thread(runtime.service.is_authenticated, token):
-            return web.Response(text=_email_page(token), content_type="text/html", charset="utf-8")
+            if runtime.offer is None:
+                return web.Response(status=503, text="Условия покупки временно недоступны")
+            return web.Response(text=_email_page(token, runtime.offer.public.public_site_url), content_type="text/html", charset="utf-8")
         started = await asyncio.to_thread(runtime.service.start_login)
         response = web.HTTPFound(started.authorization_url)
         _set_session_cookie(response, started.session_token)
         raise response
+    return handle
+
+
+def _offer_handler(runtime: WebsitePurchaseRuntime):
+    async def handle(request: web.Request) -> web.Response:
+        if not await asyncio.to_thread(runtime.service.is_authenticated,
+                                      request.cookies.get(SESSION_COOKIE, "")):
+            return web.Response(status=401, text="Войдите через Telegram для просмотра оферты")
+        if runtime.offer is None:
+            return web.Response(status=503, text="Оферта временно недоступна")
+        return web.Response(text=runtime.offer.render(), content_type="text/html", charset="utf-8")
     return handle
 
 
@@ -67,7 +82,10 @@ def _payment_create_handler(runtime: WebsitePurchaseRuntime):
             values = await request.post()
             token = request.cookies.get(SESSION_COOKIE, "")
             if (
-                len(values.getall("email", [])) != 1
+                runtime.offer is None
+                or len(values.getall("offer_version", [])) != 1
+                or values.get("offer_version") != OFFER_VERSION
+                or len(values.getall("email", [])) != 1
                 or len(values.getall("csrf", [])) != 1
                 or not isinstance(values.get("csrf"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", values["csrf"])
@@ -201,19 +219,25 @@ async def _private_purchase_response(request: web.Request, handler):
         response = await handler(request)
     except web.HTTPException as error:
         response = error
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'; base-uri 'none'"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 
-def _email_page(token: str) -> str:
+def _email_page(token: str, public_site_url: str) -> str:
     return f"""<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
 <title>TRAINER.OS — доступ</title><h1>Доступ к «Мой AI Тренер»</h1>
-<p>499 ₽ за 30 дней · без автопродления</p>
+<p>499 ₽ за 30 дней · разовая покупка · без автопродления и автоматических списаний</p>
 <p>После подтверждения оплаты доступ появится в @GritJBot</p>
+<nav><a href="/purchase/offer">Полная оферта и сведения об Исполнителе</a>
+<a href="{escape(public_site_url, quote=True)}/privacy.html">Приватность</a>
+<a href="/purchase/offer#refund">Отказ и возврат</a></nav>
 <form method=\"post\" action=\"/api/payment/create\">
 <input type=\"hidden\" name=\"csrf\" value=\"{_csrf_token(token)}\"><label>Email для чека
 <input required type=\"email\" name=\"email\" autocomplete=\"email\"></label>
+<label><input required type="checkbox" name="offer_version" value="{OFFER_VERSION}">Ознакомился с полной офертой до оплаты</label>
 <button type=\"submit\">Перейти к оплате</button></form></html>"""

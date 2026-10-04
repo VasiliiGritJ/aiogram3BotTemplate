@@ -1,4 +1,3 @@
-import traceback
 from aiogram.fsm.context import FSMContext
 from aiogram import types, F
 
@@ -57,6 +56,6 @@ async def mailingUserGoCall(message: types.Message, state: FSMContext):
     try:
         await bot.copy_message(user_id, message.from_user.id, message.message_id)
         await message.answer(f'Сообщение отправлено', reply_markup=mailing_after_mpk())
-    except Exception as ex:
-        await message.answer(f'Сообщение не отправлено. Ошибка - {traceback.format_exc()}', reply_markup=mailing_after_mpk())
+    except Exception:
+        await message.answer('Сообщение не отправлено. Проверьте получателя и повторите позже.', reply_markup=mailing_after_mpk())
     await tryFinish(state)

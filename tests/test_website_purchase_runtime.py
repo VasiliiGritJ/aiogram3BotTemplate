@@ -16,6 +16,15 @@ def settings(values: dict[str, str]) -> SettingsReader:
 
 COMPLETE_CONFIG = {
     "APP_ENV": "production",
+    "PUBLIC_SITE_URL": "https://www.traineros.ru",
+    "TELEGRAM_CHANNEL_URL": "https://t.me/traineros",
+    "TERMS_URL": "https://www.traineros.ru/offer.html",
+    "PRIVACY_URL": "https://www.traineros.ru/privacy.html",
+    "REFUND_URL": "https://www.traineros.ru/#refund",
+    "SELLER_FULL_NAME": "Тестовый Исполнитель",
+    "SELLER_INN": "123456789012",
+    "SUPPORT_EMAIL": "test@example.com",
+    "SELLER_RESIDENCE_PRIVATE": "Private fixture residence",
     "WEBSITE_PURCHASE_BASE_URL": "https://payments.traineros.ru",
     "TELEGRAM_BOT_URL": "https://t.me/GritJBot",
     "TELEGRAM_OIDC_CLIENT_ID": "test-client-id",
@@ -71,20 +80,10 @@ class WebsitePurchaseRuntimeTests(unittest.TestCase):
             )
 
     def test_enabled_checkout_accepts_complete_https_server_config(self) -> None:
-        runtime = build_website_purchase_runtime(
-            settings(
-                {
-                    "WEBSITE_PURCHASE_BASE_URL": "https://payments.traineros.ru",
-                    "TELEGRAM_BOT_URL": "https://t.me/GritJBot",
-                    "TELEGRAM_OIDC_CLIENT_ID": "test-client-id",
-                    "TELEGRAM_OIDC_CLIENT_SECRET": "test-secret",
-                    "PRODAMUS_PAYFORM_URL": "https://payform.prodamus.ru/test",
-                    "PRODAMUS_SECRET_KEY": "test-provider-secret",
-                }
-            )
-        )
+        runtime = build_website_purchase_runtime(settings(COMPLETE_CONFIG))
         self.assertEqual("https://payments.traineros.ru", runtime.base_url)
         self.assertEqual("https://t.me/GritJBot", runtime.telegram_bot_url)
+        self.assertNotIn("Private fixture residence", repr(runtime))
 
     def test_every_required_production_value_fails_closed_when_missing(self):
         for name in COMPLETE_CONFIG:
