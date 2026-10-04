@@ -1,7 +1,5 @@
 """Fitness onboarding handlers."""
 
-from html import escape
-
 from aiogram import F, types
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -14,7 +12,6 @@ from handlers.markups import (
     onboarding_experience_mkp,
     onboarding_frequency_mkp,
     onboarding_goal_mkp,
-    onboarding_limitations_mkp,
     onboarding_sex_mkp,
 )
 from handlers.workout_execution import workout_menu_markup
@@ -27,7 +24,6 @@ from services.onboarding import (
     OnboardingData,
     OnboardingPersistenceError,
     OnboardingValidationError,
-    normalize_limitations,
     parse_age,
     parse_height_cm,
     parse_session_duration_minutes,
@@ -43,6 +39,7 @@ from services.workout_plans import (
 )
 from storage.config import dp
 from storage.states import Onboarding
+from services.training_safety import TRAINING_SAFETY_NOTICE
 
 
 async def start_onboarding(
@@ -57,6 +54,7 @@ async def start_onboarding(
     await state.set_state(Onboarding.goal)
     text = (
         "Давайте составим ваш фитнес-профиль.\n\n"
+        f"{TRAINING_SAFETY_NOTICE}\n\n"
         "Какая у вас основная цель?\n\n"
         f"Набрать мышечную массу — {GOAL_DESCRIPTIONS['muscle_gain']}.\n"
         f"Стать сильнее — {GOAL_DESCRIPTIONS['strength']}.\n"
@@ -121,12 +119,12 @@ async def onboarding_weight(message: types.Message, state: FSMContext):
         return
 
     await state.update_data(weight_kg=weight_kg)
-    await state.set_state(Onboarding.limitations)
+    await state.set_state(Onboarding.confirmation)
+    data = await state.get_data()
+    data.pop("limitations", None)
+    await state.set_data(data)
     await message.answer(
-        "Травмы или ограничения (необязательно). "
-        "Кратко опишите их или выберите «Нет ограничений».\n\n"
-        "Бот не ставит диагнозы. При сомнениях обсудите нагрузку со специалистом.",
-        reply_markup=onboarding_limitations_mkp(),
+        _summary(data), reply_markup=onboarding_confirmation_mkp(),
     )
 
 
@@ -277,7 +275,6 @@ async def onboarding_duration(call: types.CallbackQuery, state: FSMContext):
 
 
 def _summary(data: dict) -> str:
-    limitations = data["limitations"] or "Нет"
     return (
         "Проверьте анкету:\n\n"
         f"Возраст: {data['age']}\n"
@@ -288,22 +285,18 @@ def _summary(data: dict) -> str:
         f"Опыт: {EXPERIENCE_LABELS[data['experience_level']]}\n"
         f"Место: {TRAINING_ENVIRONMENT_LABELS[data['training_environment']]}\n"
         f"Тренировок в неделю: {data['workouts_per_week']}\n"
-        f"Длительность: {data['session_duration_minutes']} мин\n"
-        f"Ограничения: {escape(limitations)}\n\n"
+        f"Длительность: {data['session_duration_minutes']} мин\n\n"
+        f"{TRAINING_SAFETY_NOTICE}\n\n"
         "После подтверждения данные будут сохранены."
     )
 
 
 @dp.message(Onboarding.limitations)
 async def onboarding_limitations(message: types.Message, state: FSMContext):
-    try:
-        limitations = normalize_limitations(message.text or "")
-    except OnboardingValidationError as error:
-        await message.answer(str(error))
-        return
-
-    await state.update_data(limitations=limitations)
+    # Recover old in-flight states without reading or retaining their message.
     data = await state.get_data()
+    data.pop("limitations", None)
+    await state.set_data(data)
     await state.set_state(Onboarding.confirmation)
     await message.answer(_summary(data), reply_markup=onboarding_confirmation_mkp())
 
@@ -316,8 +309,9 @@ async def onboarding_no_limitations(
     call: types.CallbackQuery,
     state: FSMContext,
 ):
-    await state.update_data(limitations=normalize_limitations("нет"))
     data = await state.get_data()
+    data.pop("limitations", None)
+    await state.set_data(data)
     await state.set_state(Onboarding.confirmation)
     await call.message.edit_text(
         _summary(data),
@@ -332,6 +326,8 @@ async def onboarding_no_limitations(
 )
 async def onboarding_confirm(call: types.CallbackQuery, state: FSMContext):
     state_data = await state.get_data()
+    state_data.pop("limitations", None)
+    await state.set_data(state_data)
     editing_profile = bool(state_data.pop("editing_profile", False))
     user = User.get(tg_id=call.from_user.id)
     if user is None:

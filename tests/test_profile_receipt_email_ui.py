@@ -110,7 +110,7 @@ class ProfileReceiptEmailUiTests(unittest.TestCase):
             training_environment="gym",
             workouts_per_week=3,
             session_duration_minutes=60,
-            limitations=None,
+            limitations="legacy health text must not be displayed",
         )
         user = python_types.SimpleNamespace(id=7)
         with (
@@ -123,6 +123,8 @@ class ProfileReceiptEmailUiTests(unittest.TestCase):
         ):
             self.run_async(profile_ui.profileCall(call, _State()))
         self.assertIn("Email для чеков: user@example.com", call.message.edits[-1][0])
+        self.assertNotIn("legacy health text", call.message.edits[-1][0])
+        self.assertNotIn("Ограничения:", call.message.edits[-1][0])
         self.assertEqual("Изменить email для чеков", call.message.edits[-1][1].inline_keyboard[1][0].text)
 
     def test_profile_email_edit_validates_and_preserves_back_navigation(self):

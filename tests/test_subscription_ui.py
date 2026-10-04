@@ -704,7 +704,10 @@ class SubscriptionUiTests(unittest.TestCase):
             self.run_async(subscription_ui.subscription_documents(documents, _State()))
             self.run_async(subscription_ui.subscription_support(support, _State()))
         document_text, document_markup = documents.message.edits[-1]
-        self.assertIn("не заменяет медицинскую помощь", document_text)
+        self.assertIn("не является медицинской услугой", document_text)
+        self.assertIn("не выполняет диагностику или лечение", document_text)
+        self.assertIn("получите рекомендации врача", document_text)
+        self.assertIn("прекратите тренировку", document_text)
         self.assertIn("profile", self.callbacks(document_markup))
         self.assertIn("start", self.callbacks(document_markup))
         support_text, support_markup = support.message.edits[-1]

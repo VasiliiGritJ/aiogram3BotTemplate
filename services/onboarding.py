@@ -19,7 +19,6 @@ MIN_WEIGHT_KG = 30.0
 MAX_WEIGHT_KG = 500.0
 WORKOUT_FREQUENCY_OPTIONS = (2, 3, 4, 5, 6)
 SESSION_DURATION_OPTIONS = (30, 45, 60, 90)
-MAX_LIMITATIONS_LENGTH = 500
 TRIAL_DURATION = timedelta(days=3)
 NO_LIMITATIONS_VALUES = {
     "нет",
@@ -78,7 +77,8 @@ class OnboardingData:
     training_environment: str
     workouts_per_week: int
     session_duration_minutes: int
-    limitations: str | None
+    # Legacy callers may supply None, never medical text.
+    limitations: str | None = None
 
 
 @dataclass(frozen=True)
@@ -188,8 +188,8 @@ def validate_onboarding_data(data: OnboardingData) -> OnboardingData:
         raise OnboardingValidationError("Рост вне допустимого диапазона.")
     if not math.isfinite(data.weight_kg) or not MIN_WEIGHT_KG <= data.weight_kg <= MAX_WEIGHT_KG:
         raise OnboardingValidationError("Вес вне допустимого диапазона.")
-    if data.limitations is not None and len(data.limitations) > MAX_LIMITATIONS_LENGTH:
-        raise OnboardingValidationError("Описание ограничений слишком длинное.")
+    if data.limitations is not None:
+        raise OnboardingValidationError("Сведения о здоровье в анкете не принимаются.")
     return data
 
 
@@ -197,15 +197,7 @@ def normalize_limitations(value: str) -> str | None:
     normalized = value.strip()
     if normalized.casefold() in NO_LIMITATIONS_VALUES:
         return None
-    if not normalized:
-        raise OnboardingValidationError(
-            "Кратко опишите ограничения или напишите «нет»."
-        )
-    if len(normalized) > MAX_LIMITATIONS_LENGTH:
-        raise OnboardingValidationError(
-            f"Сократите описание до {MAX_LIMITATIONS_LENGTH} символов."
-        )
-    return normalized
+    raise OnboardingValidationError("Сведения о здоровье в анкете не принимаются.")
 
 
 def get_fitness_profile(
@@ -256,7 +248,7 @@ def update_existing_profile(
             profile.training_environment = data.training_environment
             profile.workouts_per_week = data.workouts_per_week
             profile.session_duration_minutes = data.session_duration_minutes
-            profile.limitations = data.limitations
+            # Do not read or overwrite historical health values.
             profile.updated_at = changed_at
             session.flush()
 
@@ -313,7 +305,6 @@ def save_profile_and_access(
                 training_environment=data.training_environment,
                 workouts_per_week=data.workouts_per_week,
                 session_duration_minutes=data.session_duration_minutes,
-                limitations=data.limitations,
                 completed_at=confirmed_at,
                 updated_at=confirmed_at,
             )

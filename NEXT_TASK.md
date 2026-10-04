@@ -17,6 +17,17 @@
 - Ожидаются assigned Prodamus payform/signing key, подтверждённый notification/ack/status contract и НПД receipt proof format. Receipt intent готов, но не считается доставленным чеком. Не угадывать terminal-status mapping и не запускать второй receipt worker.
 - Затем: Telegram OIDC settings + единое owner authorization на production secrets/config, verified backup/migration 17 если нужна, deploy/reload и один controlled 499 ₽ E2E. PayAnyWay fallback не менять по умолчанию.
 
+## 8G1D-E2 — legal closure, локальный checkpoint / публикация BLOCKED
+
+- Подготовлены `landing/offer.html`, `privacy.html`, `consent.html`; footer и legal summaries ведут на полные документы. Hero/checkout/backend не изменены. Новая сборка включает документы и `legal.css`; прежние `/#terms` и `/#privacy` сохраняются как summaries.
+- Health MVP-путь убран: вопрос о травмах/ограничениях отсутствует; domain отклоняет непустой legacy payload, старые FSM значения очищаются даже при ошибке подтверждения. Профиль/план не читают старое поле, ORM не выбирает его по умолчанию. Новые свободные примечания программы не сохраняются, произвольные сообщения/медиа не пересылаются администраторам. Обычные фитнес-параметры и доступ/trial/payment semantics сохранены; schema/migrations не менялись.
+- Отдельное обычное согласие не охватывает здоровье и не собирается статической страницей. Необходимые для услуги данные имеют договорное основание; consent-based optional processing потребует отдельной фиксации, если появится. До deploy production остаётся на прежней реализации.
+- Точные gates: `landing/LEGAL_REVIEW.md`. Нет проверенного актуального адреса в просмотренных локальных файлах; подготовлен placeholder. Не спрашивать адрес повторно в чате, взять из существующей официальной анкеты при разрешённой публикации. Нужно отдельное разрешение на PUBLIC residence disclosure, без банковских реквизитов.
+- Privacy source audit завершён: SQLite → Telegram UI; email/order → provider/НПД; email support → Gmail; внешний AI не вызывается. Не подтверждены документы уведомления РКН/трансграничной передачи и оценка локализации Telegram/email, рабочий retention/deletion процесс, основание хранения исторических health records/backups, если они есть. Нельзя объявлять эти обязанности выполненными или отсутствующими по одному только repo. Real DB и production не исследовались/не менялись.
+- Новый обязательный public config: `SELLER_DISCLOSURE_ADDRESS`; имя/ИНН/email/адрес подставляются из config, не из tracked PII. Без адресного disclosure production validation/render/build fail-closed. Не вводить домашний адрес в чат и не подставлять QA fixtures в production.
+- Production/legal URL ещё не опубликованы этим этапом. Не принимать шаблон Prodamus, не отправлять анкету и не включать checkout до отдельного решения. После review — согласованные реквизиты через защищённый config и separately authorized publication, затем собственная оферта для анкеты Prodamus.
+- Локальные проверки финального кода: targeted 74/74 PASS (health/onboarding/subscription/landing/legal); full suite 523/523 PASS после исправления legacy FSM, compile/diff-check PASS. Earlier E1 desktop/mobile legal QA PASS; внешний preview/deploy E2 не запускался. До полного юридического GREEN commit не создавать; изменения E1/E2 остаются uncommitted, staged list пуст. db.db — только pre-existing unstaged изменение.
+
 ## Актуальные checkpoint'ы
 
 - Stage 7 accepted: deterministic training architecture, 113 controlled exercises/techniques, environment override с полным preview и owner live acceptance.

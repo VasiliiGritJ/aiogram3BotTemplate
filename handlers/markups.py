@@ -759,16 +759,3 @@ def onboarding_confirmation_mkp():
             ],
         ]
     )
-
-
-def onboarding_limitations_mkp():
-    return types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                types.InlineKeyboardButton(
-                    text="Нет ограничений",
-                    callback_data="onboarding:limitations:none",
-                )
-            ]
-        ]
-    )

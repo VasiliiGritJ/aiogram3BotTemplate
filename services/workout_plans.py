@@ -32,6 +32,7 @@ from services.exercise_catalog import (
     validate_exercise_definition,
 )
 from services.workout_progression import ProgressionStrategy
+from services.training_safety import TRAINING_SAFETY_NOTICE
 from services.workout_warmup import build_generated_day_warmup
 
 
@@ -358,21 +359,8 @@ DAY_BLUEPRINTS = {
 }
 
 
-NO_LIMITATIONS_VALUES = {
-    "",
-    "нет",
-    "нету",
-    "нет ограничений",
-    "отсутствуют",
-    "no",
-    "none",
-    "-",
-}
-LIMITATIONS_NOTICE = (
-    "Указанные ограничения сохранены в профиле. Если нагрузка вызывает боль "
-    "или у вас есть медицинские противопоказания, скорректируйте тренировку "
-    "со специалистом."
-)
+# Deprecated import compatibility, never based on a user's health.
+LIMITATIONS_NOTICE = TRAINING_SAFETY_NOTICE
 
 
 def _template_code(
@@ -458,10 +446,6 @@ def build_template_definitions() -> tuple[TemplateDefinition, ...]:
 TEMPLATE_DEFINITIONS = build_template_definitions()
 
 
-def _has_limitations(value: str | None) -> bool:
-    return value is not None and value.strip().casefold() not in NO_LIMITATIONS_VALUES
-
-
 def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
     """Validate Stage 7 profiles and preserve safe legacy defaults."""
     fallback_notes: list[str] = []
@@ -520,9 +504,6 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
         fallback_notes.append(
             f"Длительность приведена к {duration} мин."
         )
-    has_limitations = _has_limitations(profile.limitations)
-    if has_limitations:
-        fallback_notes.append(LIMITATIONS_NOTICE)
     if training_environment == "home" and goal in {"muscle_gain", "strength"}:
         fallback_notes.append(HOME_PULL_LIMITATION_NOTICE)
 
@@ -533,7 +514,7 @@ def normalize_profile(profile: FitnessProfile) -> NormalizedProfile:
         workouts_per_week=workouts_per_week,
         session_duration_minutes=duration,
         equipment=training_environment,
-        has_limitations=has_limitations,
+        has_limitations=False,
         fallback_notes=tuple(fallback_notes),
     )
 
@@ -580,7 +561,8 @@ def _profile_signature(profile: NormalizedProfile) -> str:
         "equipment": profile.equipment,
         "experience_level": profile.experience_level,
         "goal": profile.goal,
-        "has_limitations": profile.has_limitations,
+        # Preserve old non-health hashes without reading any health value.
+        "has_limitations": False,
         "workouts_per_week": profile.workouts_per_week,
     }
     serialized = json.dumps(payload, ensure_ascii=True, sort_keys=True)

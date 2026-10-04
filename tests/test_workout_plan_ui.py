@@ -7,7 +7,6 @@ from handlers.markups import (
     onboarding_experience_mkp,
     onboarding_frequency_mkp,
     onboarding_goal_mkp,
-    onboarding_limitations_mkp,
     profile_mpk,
     start_mkp,
     subscription_mkp,
@@ -93,12 +92,6 @@ class WorkoutPlanMarkupTests(unittest.TestCase):
 
     def test_profile_has_edit_action(self) -> None:
         self.assertIn("profile:edit", self.callback_values(profile_mpk()))
-
-    def test_no_limitations_button_uses_normalized_value_flow(self) -> None:
-        self.assertEqual(
-            ["onboarding:limitations:none"],
-            self.callback_values(onboarding_limitations_mkp()),
-        )
 
     def test_stage_seven_onboarding_choices_use_stable_domain_values(self) -> None:
         self.assertEqual(

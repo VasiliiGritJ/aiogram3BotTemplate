@@ -31,6 +31,7 @@ class LandingPublicConfig:
     seller_inn: str | None = None
     support_email: str | None = None
     website_purchase_url: str | None = None
+    seller_disclosure_address: str | None = None
 
     @property
     def production_ready(self) -> bool:
@@ -45,6 +46,7 @@ class LandingPublicConfig:
                 self.seller_full_name,
                 self.seller_inn,
                 self.support_email,
+                self.seller_disclosure_address,
             )
         )
 
@@ -67,6 +69,7 @@ def build_landing_public_config(
             "SELLER_FULL_NAME",
             "SELLER_INN",
             "SUPPORT_EMAIL",
+            "SELLER_DISCLOSURE_ADDRESS",
         )
     }
     public_site_url = _validate_public_site_url(
@@ -91,12 +94,14 @@ def build_landing_public_config(
         "TERMS_URL",
         public_site_url,
         "terms",
+        page="offer.html",
     )
     privacy_url = _validate_legal_anchor_url(
         values["PRIVACY_URL"],
         "PRIVACY_URL",
         public_site_url,
         "privacy",
+        page="privacy.html",
     )
     refund_url = _validate_legal_anchor_url(
         values["REFUND_URL"],
@@ -114,6 +119,14 @@ def build_landing_public_config(
         _read_value(read_optional, "WEBSITE_PURCHASE_URL", production=False),
         production,
     )
+    seller_disclosure_address = values["SELLER_DISCLOSURE_ADDRESS"]
+    if seller_disclosure_address is not None and (
+        not 5 <= len(seller_disclosure_address) <= 300
+        or any(ord(char) < 32 for char in seller_disclosure_address)
+    ):
+        raise LandingConfigurationError(
+            "Landing configuration is invalid: SELLER_DISCLOSURE_ADDRESS."
+        )
     return LandingPublicConfig(
         public_site_url=public_site_url,
         telegram_bot_url=telegram_bot_url,
@@ -125,6 +138,7 @@ def build_landing_public_config(
         seller_inn=seller_inn,
         support_email=support_email,
         website_purchase_url=website_purchase_url,
+        seller_disclosure_address=seller_disclosure_address,
     )
 
 
@@ -216,6 +230,8 @@ def _validate_legal_anchor_url(
     name: str,
     public_site_url: str | None,
     anchor: str,
+    *,
+    page: str | None = None,
 ) -> str | None:
     value = _validate_https_url(value, name, production=public_site_url is not None)
     if value is None:
@@ -223,9 +239,14 @@ def _validate_legal_anchor_url(
     if public_site_url is None:
         return value
     expected_url = f"{public_site_url}/#{anchor}"
-    if value != expected_url:
+    allowed_urls = {expected_url}
+    if page is not None:
+        allowed_urls.add(f"{public_site_url}/{page}")
+    if value not in allowed_urls:
         raise LandingConfigurationError(f"Landing configuration is invalid: {name}.")
-    return value
+    # Accept the previous single-page contract, but link new builds to the
+    # complete documents. Existing /#terms and /#privacy remain reachable.
+    return f"{public_site_url}/{page}" if page is not None else value
 
 
 def _validate_seller_name(value: str | None, production: bool) -> str | None:

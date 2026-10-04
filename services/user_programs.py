@@ -21,7 +21,7 @@ from db.models import (
     WorkoutTemplate,
     dbSession,
 )
-from services.exercise_catalog import EXERCISE_DEFINITIONS, ExerciseDefinition
+from services.exercise_catalog import EXERCISE_DEFINITIONS, ExerciseDefinition, exercise_definition_by_code
 from services.workout_plans import (
     WorkoutCatalogError,
     WorkoutPlanView,
@@ -37,6 +37,13 @@ MAX_EXERCISES_PER_DAY = 15
 MAX_SETS = 20
 MAX_REPS = 100
 USER_TEMPLATE_CODE = "v4_user_defined_standard"
+
+
+def _controlled_name(code: str) -> str:
+    definition = exercise_definition_by_code(code)
+    if definition is None:
+        raise WorkoutCatalogError("Draft references an unknown controlled exercise.")
+    return definition.name
 
 
 class AdaptationMode(StrEnum):
@@ -100,8 +107,11 @@ class UserProgramDraft:
             "days": [
                 {
                     "day_number": day.day_number,
-                    "title": day.title,
-                    "exercises": [exercise.__dict__ for exercise in day.exercises],
+                    "title": f"День {day.day_number}",
+                    "exercises": [
+                        {**exercise.__dict__, "exercise_name": _controlled_name(exercise.exercise_code)}
+                        for exercise in day.exercises
+                    ],
                 }
                 for day in self.days
             ],
@@ -114,9 +124,11 @@ class UserProgramDraft:
             days=tuple(
                 UserProgramDayDraft(
                     day_number=int(day["day_number"]),
-                    title=str(day["title"]),
+                    title=f"День {int(day['day_number'])}",
                     exercises=tuple(
-                        UserProgramExerciseDraft(**exercise)
+                        UserProgramExerciseDraft(
+                            **{**exercise, "exercise_name": _controlled_name(exercise["exercise_code"])}
+                        )
                         for exercise in day["exercises"]
                     ),
                 )
@@ -240,10 +252,8 @@ class DeterministicRussianProgramParser:
                         f"Можно сохранить не более {MAX_DAYS} дней.",
                     ))
                     continue
-                title = weekday or (
-                    f"День {day_match.group(1)}"
-                    + (f" — {day_match.group(2).strip()}" if day_match.group(2) else "")
-                )
+                # Drop arbitrary annotations, including medical explanations.
+                title = weekday or f"День {day_match.group(1)}"
                 current = {"title": title, "exercises": [], "codes": set()}
                 days.append(current)
                 continue
@@ -347,7 +357,7 @@ class DeterministicRussianProgramParser:
                 ParseIssueCode.AMBIGUOUS_EXERCISE, None, "Название подходит к нескольким упражнениям.",
                 tuple(sorted(self._definitions[code].name for code in candidates)[:5]),
             )
-        return ParseIssue(ParseIssueCode.UNRESOLVED_EXERCISE, None, f"Не удалось распознать упражнение «{name.strip()}».")
+        return ParseIssue(ParseIssueCode.UNRESOLVED_EXERCISE, None, "Не удалось распознать упражнение. Используйте название из каталога.")
 
 
 def format_user_program_preview(draft: UserProgramDraft) -> str:
@@ -432,7 +442,7 @@ def assign_user_program(
             definitions = {item.code: item for item in EXERCISE_DEFINITIONS}
             for day in draft.days:
                 stored_day = UserWorkoutPlanDay(
-                    plan_id=plan.id, day_number=day.day_number, title=day.title
+                    plan_id=plan.id, day_number=day.day_number, title=f"День {day.day_number}"
                 )
                 session.add(stored_day)
                 session.flush()

@@ -9,6 +9,7 @@ from landing.site_config import LandingPublicConfig
 
 
 _TEMPLATE = Path(__file__).with_name("index.html")
+LEGAL_DOCUMENTS = ("offer.html", "privacy.html", "consent.html")
 _SELLER_PLACEHOLDER = (
     "ФИО, ИНН и контакт продавца публикуются в production-версии сайта только "
     "после заполнения и проверки публичной конфигурации. До этого страница не "
@@ -27,6 +28,8 @@ _WEBSITE_PURCHASE_CTA = (
 
 def render_production_landing(config: LandingPublicConfig) -> str:
     """Return publishable HTML only after all required public facts are present."""
+    if not config.seller_disclosure_address:
+        raise ValueError("Legal publication requires SELLER_DISCLOSURE_ADDRESS.")
     if not config.production_ready:
         raise ValueError("Production landing configuration is incomplete.")
     assert config.public_site_url is not None
@@ -51,6 +54,8 @@ def render_production_landing(config: LandingPublicConfig) -> str:
         f"ИНН: {escape(config.seller_inn)}. "
         f"Контакт: {escape(config.support_email)}."
     )
+    if config.seller_disclosure_address:
+        seller += f" Место жительства: {escape(config.seller_disclosure_address)}."
     support = (
         "По вопросам доступа, оплаты, чека или возврата: "
         f"{escape(config.support_email)}."
@@ -64,7 +69,10 @@ def render_production_landing(config: LandingPublicConfig) -> str:
         .replace('href="#telegram-launch"', f'href="{escape(config.telegram_bot_url, quote=True)}"')
         .replace('https://t.me/traineros', escape(config.telegram_channel_url, quote=True))
         .replace('href="#terms"', f'href="{escape(config.terms_url, quote=True)}"')
+        .replace('href="offer.html"', f'href="{escape(config.terms_url, quote=True)}"')
         .replace('href="#privacy"', f'href="{escape(config.privacy_url, quote=True)}"')
+        .replace('href="privacy.html"', f'href="{escape(config.privacy_url, quote=True)}"')
+        .replace('href="consent.html"', f'href="{escape(legal_base_url, quote=True)}consent.html"')
         .replace('href="#refund"', f'href="{escape(config.refund_url, quote=True)}"')
         .replace(
             'href="#payment"',
@@ -81,4 +89,32 @@ def render_production_landing(config: LandingPublicConfig) -> str:
         .replace(_SELLER_PLACEHOLDER, seller)
         .replace(_SUPPORT_PLACEHOLDER, support)
         .replace(_LAUNCH_STATUS_PLACEHOLDER, "ПУБЛИЧНАЯ ССЫЛКА НА БОТА АКТИВНА")
+    )
+
+
+def render_legal_document(filename: str, config: LandingPublicConfig) -> str:
+    """Render only known legal templates; never publish missing seller facts."""
+    if filename not in LEGAL_DOCUMENTS:
+        raise ValueError("Unknown landing legal document.")
+    if not config.seller_disclosure_address:
+        raise ValueError("Legal publication requires SELLER_DISCLOSURE_ADDRESS.")
+    if not config.production_ready:
+        raise ValueError("Production landing configuration is incomplete.")
+    assert config.public_site_url is not None
+    assert config.support_email is not None
+    values = {
+        "SELLER_FULL_NAME": config.seller_full_name,
+        "SELLER_INN": config.seller_inn,
+        "SELLER_DISCLOSURE_ADDRESS": config.seller_disclosure_address,
+        "SUPPORT_EMAIL": config.support_email,
+        "PUBLIC_SITE_URL": config.public_site_url,
+        "TELEGRAM_BOT_URL": config.telegram_bot_url,
+    }
+    html = _TEMPLATE.with_name(filename).read_text(encoding="utf-8")
+    for name, value in values.items():
+        assert value is not None
+        html = html.replace("{{" + name + "}}", escape(value, quote=True))
+    return html.replace(
+        "<!-- canonical-url -->",
+        f'<link rel="canonical" href="{escape(config.public_site_url, quote=True)}/{filename}">',
     )

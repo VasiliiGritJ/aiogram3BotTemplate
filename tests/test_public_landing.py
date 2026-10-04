@@ -38,6 +38,7 @@ class PublicLandingTests(unittest.TestCase):
             "REFUND_URL": "https://trainer.example/#refund",
             "SELLER_FULL_NAME": "Иванов Иван Иванович",
             "SELLER_INN": "123456789012",
+            "SELLER_DISCLOSURE_ADDRESS": "Тестовый город, тестовый адрес 1",
             "SUPPORT_EMAIL": "support@example.invalid",
             "WEBSITE_PURCHASE_URL": "https://payments.traineros.ru/buy",
         }
@@ -312,7 +313,8 @@ class PublicLandingTests(unittest.TestCase):
         for section in ("terms", "privacy", "refund", "seller", "support"):
             with self.subTest(section=section):
                 self.assertIn(f'id="{section}"', page)
-                self.assertIn(f'href="#{section}"', page)
+                target = {"terms": "offer.html", "privacy": "privacy.html"}.get(section, f"#{section}")
+                self.assertIn(f'href="{target}"', page)
         self.assertIn('id="payment"', page)
         self.assertIn("не является медицинской помощью", page)
         self.assertIn("Данные банковских карт обрабатывает платёжный провайдер", page)
@@ -350,8 +352,8 @@ class PublicLandingTests(unittest.TestCase):
         self.assertTrue(config.production_ready)
         self.assertEqual(OFFICIAL_TELEGRAM_BOT_URL, config.telegram_bot_url)
         self.assertEqual(OFFICIAL_TELEGRAM_CHANNEL_URL, config.telegram_channel_url)
-        self.assertEqual("https://trainer.example/#terms", config.terms_url)
-        self.assertEqual("https://trainer.example/#privacy", config.privacy_url)
+        self.assertEqual("https://trainer.example/offer.html", config.terms_url)
+        self.assertEqual("https://trainer.example/privacy.html", config.privacy_url)
         self.assertEqual("https://trainer.example/#refund", config.refund_url)
         self.assertEqual("support@example.invalid", config.support_email)
         for name, value in (
@@ -385,8 +387,8 @@ class PublicLandingTests(unittest.TestCase):
         self.assertIn('href="https://payments.traineros.ru/buy"', page)
         self.assertIn('<link rel="canonical" href="https://trainer.example">', page)
         self.assertIn('<meta property="og:url" content="https://trainer.example">', page)
-        self.assertIn('href="https://trainer.example/#terms"', page)
-        self.assertIn('href="https://trainer.example/#privacy"', page)
+        self.assertIn('href="https://trainer.example/offer.html"', page)
+        self.assertIn('href="https://trainer.example/privacy.html"', page)
         self.assertIn('href="https://trainer.example/#refund"', page)
         self.assertIn('href="https://trainer.example/#payment"', page)
         self.assertIn('href="https://trainer.example/#seller"', page)
@@ -456,8 +458,8 @@ class PublicLandingTests(unittest.TestCase):
 
         footer_targets = {href for href, _ in parser.links}
         for target in (
-            "https://trainer.example/#terms",
-            "https://trainer.example/#privacy",
+            "https://trainer.example/offer.html",
+            "https://trainer.example/privacy.html",
             "https://trainer.example/#refund",
             "https://trainer.example/#payment",
             "https://trainer.example/#seller",

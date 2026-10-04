@@ -114,8 +114,7 @@ class OnboardingValidationTests(unittest.TestCase):
         self.assertIsNone(normalize_limitations(" НЕТУ "))
         self.assertIsNone(normalize_limitations(" no "))
         self.assertIsNone(normalize_limitations("None"))
-        self.assertEqual("Болит колено", normalize_limitations(" Болит колено "))
-        self.assert_invalid(normalize_limitations, "", "x" * 501)
+        self.assert_invalid(normalize_limitations, " Болит колено ", "", "x" * 501)
 
 
 class OnboardingPersistenceTests(unittest.TestCase):
@@ -222,11 +221,15 @@ class OnboardingPersistenceTests(unittest.TestCase):
         first_confirmation = datetime(2026, 8, 9, 12, 0)
         save_profile_and_trial(
             self.user_id,
-            self.valid_data(limitations="ytp"),
+            self.valid_data(),
             first_confirmation,
             self.database,
         )
         activate_trial_once(self.user_id, first_confirmation, self.database)
+        # Historical fixture only; never collected by the new onboarding.
+        with self.database() as session:
+            session.get(FitnessProfile, self.user_id).limitations = "legacy health text"
+            session.commit()
         plan_with_limitations = assign_workout_plan(self.user_id, self.database)
 
         with self.database() as session:
@@ -249,15 +252,16 @@ class OnboardingPersistenceTests(unittest.TestCase):
             access_count = session.scalar(select(func.count(UserAccess.user_id)))
             access_after = session.get(UserAccess, self.user_id)
             profile_after = session.get(FitnessProfile, self.user_id)
+            legacy_value = profile_after.limitations
 
         self.assertEqual(1, profile_count)
         self.assertEqual(1, access_count)
-        self.assertIsNone(updated.limitations)
-        self.assertIsNone(profile_after.limitations)
+        self.assertNotIn("limitations", updated.__dict__)
+        self.assertEqual("legacy health text", legacy_value)
         self.assertEqual(trial_started_before, access_after.trial_started_at)
         self.assertEqual(trial_ends_before, access_after.trial_ends_at)
         self.assertTrue(plan_with_limitations.created)
-        self.assertIn(LIMITATIONS_NOTICE, plan_with_limitations.fallback_notes)
+        self.assertNotIn(LIMITATIONS_NOTICE, plan_with_limitations.fallback_notes)
         self.assertFalse(plan.created)
         self.assertNotIn(LIMITATIONS_NOTICE, plan.fallback_notes)
 
@@ -273,7 +277,7 @@ class OnboardingPersistenceTests(unittest.TestCase):
         self.assertEqual(confirmed_at + timedelta(days=3), repeated.access.trial_ends_at)
         self.assertEqual(confirmed_at, repeated.access.trial_consumed_at)
 
-    def test_editing_profile_keeps_actual_limitation_description(self) -> None:
+    def test_health_payload_is_rejected_without_profile_write(self) -> None:
         confirmed_at = datetime(2026, 8, 9, 12, 0)
         save_profile_and_trial(
             self.user_id,
@@ -282,19 +286,25 @@ class OnboardingPersistenceTests(unittest.TestCase):
             self.database,
         )
 
-        update_existing_profile(
-            self.user_id,
-            self.valid_data(
-                limitations=normalize_limitations(" Болит колено ")
-            ),
-            confirmed_at + timedelta(days=1),
-            self.database,
-        )
+        with self.assertRaises(OnboardingValidationError):
+            update_existing_profile(
+                self.user_id,
+                self.valid_data(limitations="health fixture", weight_kg=90),
+                confirmed_at + timedelta(days=1), self.database,
+            )
 
         with self.database() as session:
             profile = session.get(FitnessProfile, self.user_id)
+            self.assertIsNone(profile.limitations)
+            self.assertEqual(80.5, profile.weight_kg)
 
-        self.assertEqual("Болит колено", profile.limitations)
+    def test_health_payload_cannot_create_profile_or_access(self) -> None:
+        with self.assertRaises(OnboardingValidationError):
+            save_profile_and_trial(self.user_id, self.valid_data(limitations="health fixture"),
+                                   datetime(2026, 8, 9), self.database)
+        with self.database() as session:
+            self.assertIsNone(session.get(FitnessProfile, self.user_id))
+            self.assertIsNone(session.get(UserAccess, self.user_id))
 
 
 if __name__ == "__main__":

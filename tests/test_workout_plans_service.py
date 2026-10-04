@@ -186,7 +186,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
         result = assign_workout_plan(self.user_id, self.database)
 
         self.assertTrue(result.plan.days)
-        self.assertIn(LIMITATIONS_NOTICE, result.fallback_notes)
+        self.assertNotIn(LIMITATIONS_NOTICE, result.fallback_notes)
 
     def test_arbitrary_limitation_does_not_block_plan(self) -> None:
         with self.database() as session:
@@ -198,7 +198,7 @@ class WorkoutPlanServiceTests(unittest.TestCase):
 
         self.assertTrue(result.created)
         self.assertTrue(result.plan.days)
-        self.assertIn(LIMITATIONS_NOTICE, result.fallback_notes)
+        self.assertNotIn(LIMITATIONS_NOTICE, result.fallback_notes)
 
     def test_absent_limitations_assign_plan_without_notice(self) -> None:
         result = assign_workout_plan(self.user_id, self.database)

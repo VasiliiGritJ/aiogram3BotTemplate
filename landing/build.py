@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from landing.render import render_production_landing
+from landing.render import LEGAL_DOCUMENTS, render_legal_document, render_production_landing
 from landing.site_config import (
     LandingConfigurationError,
     LandingPublicConfig,
@@ -18,7 +18,7 @@ from storage.runtime_config import process_environment_settings
 
 _LANDING_ROOT = Path(__file__).parent
 _ASSET_DIRECTORY = _LANDING_ROOT / "assets"
-_STATIC_FILES = ("styles.css", "app.js")
+_STATIC_FILES = ("styles.css", "app.js", "legal.css")
 
 
 class LandingBuildError(RuntimeError):
@@ -30,8 +30,15 @@ def build_production_artifact(
     output_directory: str | Path,
 ) -> Path:
     """Write an upload-ready static artifact only after production validation."""
+    if not config.seller_disclosure_address:
+        raise ValueError("Legal publication requires SELLER_DISCLOSURE_ADDRESS.")
     if not config.production_ready:
         raise LandingBuildError("Production landing configuration is incomplete.")
+    # Check before creating output/staging: the new offer must not silently
+    # omit mandatory seller disclosure. Public values are never echoed.
+    legal_pages = {
+        name: render_legal_document(name, config) for name in LEGAL_DOCUMENTS
+    }
 
     output = Path(output_directory).expanduser().resolve()
     if output.exists():
@@ -53,6 +60,8 @@ def build_production_artifact(
             render_production_landing(config),
             encoding="utf-8",
         )
+        for filename, page in legal_pages.items():
+            (staging / filename).write_text(page, encoding="utf-8")
         for filename in _STATIC_FILES:
             shutil.copy2(_LANDING_ROOT / filename, staging / filename)
         shutil.copytree(_ASSET_DIRECTORY, staging / "assets")
