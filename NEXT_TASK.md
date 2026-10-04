@@ -17,6 +17,13 @@
 - Ожидаются assigned Prodamus payform/signing key, подтверждённый notification/ack/status contract и НПД receipt proof format. Receipt intent готов, но не считается доставленным чеком. Не угадывать terminal-status mapping и не запускать второй receipt worker.
 - Затем: Telegram OIDC settings + единое owner authorization на production secrets/config, verified backup/migration 17 если нужна, deploy/reload и один controlled 499 ₽ E2E. PayAnyWay fallback не менять по умолчанию.
 
+## 8G1D-G — собственная оферта / анкета Prodamus
+
+- Финальный source оферты от 04.10.2026: цифровой Telegram-сервис, 499 ₽ / 30 дней, разовая 100% предоплата, без автопродления/автосписаний, НПД-чек, 18+, lawful refund/claims, короткий medical disclaimer. Удалены положения про товары, ПК, акты и банковские/паспортные данные клиента. Privacy/consent отдельные, application code не менялся; legal/landing 25/25 PASS, diff-check PASS.
+- Prodamus показал, что приложенная оферта будет опубликована на платёжной странице. После отдельного подтверждения owner приватное вложение удалено и заменено собственной 3-страничной версией БЕЗ домашнего адреса. Адрес остаётся только в регистрационной анкете; полное раскрытие потребителю до оплаты — через existing protected purchase flow. Временная адресная PDF-копия удалена; tracked source адрес не содержит. PDF content/bounds/visual/links PASS.
+- **Анкета успешно отправлена 04.10.2026** с собственной офертой, не шаблоном. Owner подтвердил оферту Prodamus ред. 13.1 от 29.09.2026, обязательное согласие на ПД и замену вложения. Free «Старт для самозанятых»: 0 ₽, опубликованная стандартная комиссия карт РФ/СБП 3,8%; реклама/рекуррентные/платные extras не подключались. UI: проверка 1–3 рабочих дня, затем доступ/инструкции на email; application ID не показан. Требуется подтвердить почту по письму Prodamus. Изменение buyer-support email в мастере не удалось подтвердить (сохранённая карточка показывала прежний email); после выдачи кабинета проверить контакт и привести к `kurtbachotto@gmail.com`, который уже правильный в оферте.
+- Далее: подтверждение почты → production credentials/contract → отдельно авторизованная activation → /buy → controlled 499 ₽ E2E. Production deploy/payment/DB/push этим этапом не выполнялись. Не начинать новый РКН/трансграничный audit и не писать в поддержку Prodamus без нового scope.
+
 ## 8G1D-E3 — private offer / privacy publication gate
 
 - Owner решил: домашний/регистрационный адрес НЕ публиковать на открытом сайте. Не спрашивать повторно. E2 технически сохранён в `6b1b8ad`; прежние 523 теста не повторялись до новых изменений.

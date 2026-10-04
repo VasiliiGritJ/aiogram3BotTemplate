@@ -58,7 +58,7 @@ class LandingLegalTests(unittest.TestCase):
             "автоматического продления нет", "автоматические списания не производятся",
             "после подтверждённой оплаты", "webhook", "30 × 24 часа", "UTC",
             "после окончания действующего платного периода", "после окончания пробного периода",
-            "18+", "электронный чек НПД", "№ 422-ФЗ", "не заменяет консультацию врача",
+            "18 лет", "электронный чек НПД", "№ 422-ФЗ", "не заменяет консультацию врача",
             "не гарантирует похудение", "не является согласием на рекламу",
             "Иванов Иван Иванович", "123456789012",
             'href="https://t.me/GritJBot"', 'href="mailto:kurtbachotto@gmail.com"',
@@ -68,6 +68,12 @@ class LandingLegalTests(unittest.TestCase):
         self.assertNotIn("{{", page)
         self.assertNotIn("Prodamus", page)
         self.assertNotIn("PayAnyWay", page)
+        for obsolete in ("Физические товары", "упаковк", "курьер", "ноутбук",
+                         "акт приёма-передачи", "паспорт", "реквизиты карты"):
+            with self.subTest(obsolete=obsolete):
+                self.assertNotIn(obsolete, page)
+        self.assertIn("новое самостоятельное действие Заказчика", page)
+        self.assertIn("Изменения для будущих покупок не ухудшают", page)
 
     def test_refund_does_not_waive_statutory_rights_or_extend_legal_deadlines(self):
         page = render_legal_document("offer.html", self.config())
@@ -110,8 +116,9 @@ class LandingLegalTests(unittest.TestCase):
                      "не удаляет запись из базы", "не разрешает бессрочно"):
             self.assertIn(text, privacy)
         offer = render_legal_document("offer.html", self.config())
-        for text in ("не выполняет диагностику или лечение", "получите рекомендации врача",
-                     "прекратите тренировку", "не запрашивает сведения о здоровье"):
+        for text in ("не осуществляет диагностику или лечение",
+                     "следует получить рекомендации врача до начала тренировок",
+                     "не является медицинской услугой"):
             self.assertIn(text, offer)
 
     def test_public_build_never_reads_private_residence(self):
