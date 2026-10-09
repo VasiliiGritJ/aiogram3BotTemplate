@@ -34,8 +34,13 @@ Communicate with the owner in Russian. User-facing bot text is Russian unless th
 
 ## Model choice
 
-- Default: **Terra + High**.
-- Use **Sol + High** only for difficult architecture, database, payment, security, concurrency/race safety, or critical review work.
+- **GPT-6 Luna + Low/Medium:** low-risk mechanical work, narrow edits, searches, formatting, and simple targeted checks.
+- **GPT-6.1 Sol + Medium:** default for primary development, including diagnosis → fix → targeted tests, normal multi-file engineering, integrations, and documentation.
+- **GPT-6.1 Sol + High:** payments, authentication/OIDC, database migrations, security, idempotency/races, production wiring, and other critical engineering tasks.
+- **GPT-6 Astra + Medium/High:** escalation for especially complex work and final critical review; not a default.
+- **xhigh/max:** exceptional only when High is insufficient or a concrete benefit is established.
+- **GPT-6 Sol:** legacy predecessor to GPT-6.1 Sol; do not select for new work without a reason.
+- **GPT-5.6 Sol/Terra/Luna:** fallback or legacy only. Terra is not the project default.
 
 ## External systems and production boundaries
 
