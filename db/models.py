@@ -1,16 +1,35 @@
 from datetime import datetime
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+
+from db.runtime import SQLitePolicy, create_sqlite_engine, sqlite_url
 
 class Base(DeclarativeBase):
     pass
 
 class SqliteSession:
-    def __init__(self):
-        self._engine = create_engine("sqlite:///db.db")
-        self._session = sessionmaker(bind=self._engine)
-        # self._session = Session()
+    def __init__(
+        self,
+        database_url: str = "sqlite:///db.db",
+        policy: SQLitePolicy = SQLitePolicy(),
+    ):
+        self._database_url = database_url
+        self._policy = policy
+        self._engine = create_sqlite_engine(database_url, policy)
+        self._session = sessionmaker(bind=self._engine, expire_on_commit=False)
+
+    @property
+    def engine(self):
+        return self._engine
     
     def __call__(self):
         return self._session()
@@ -18,12 +37,32 @@ class SqliteSession:
     def __getattr__(self, name):
         return getattr(self._session, name)
     
-    async def create_all(self):
-        async with self._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        await self._engine.dispose()
+    def create_all(self) -> None:
+        """Create mapped tables synchronously; migrations remain authoritative."""
+        Base.metadata.create_all(self._engine)
+
+    def migrate(self) -> tuple[int, ...]:
+        from db.migrations import run_migrations
+
+        return run_migrations(self._engine)
+
+    def dispose(self) -> None:
+        self._engine.dispose()
+
+    def reconfigure(self, database_url: str) -> None:
+        """Point the process-wide session factory at a validated bootstrap DB."""
+        if not isinstance(database_url, str) or not database_url.startswith("sqlite:///"):
+            raise ValueError("A SQLite database URL is required.")
+        self.dispose()
+        self._database_url = database_url
+        self._engine = create_sqlite_engine(database_url, self._policy)
+        self._session.configure(bind=self._engine)
 
 dbSession = SqliteSession()
+
+
+def configure_database(database_path: str) -> None:
+    dbSession.reconfigure(sqlite_url(database_path))
 
 
 from sqlalchemy import exc
@@ -31,7 +70,7 @@ from sqlalchemy.schema import ForeignKey
 from sqlalchemy.types import Text, BigInteger 
 from sqlalchemy.sql import select, insert, update as sqlalchemy_update
 from sqlalchemy.sql.functions import func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.orm.strategy_options import load_only
 
 
@@ -141,7 +180,7 @@ class User(Base, ModelAdmin):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    tg_id: Mapped[int] = mapped_column(BigInteger())
+    tg_id: Mapped[int] = mapped_column(BigInteger(), unique=True)
     fullname: Mapped[str] = mapped_column(Text())
     username: Mapped[str] = mapped_column(Text())
     inviter_id: Mapped[int] = mapped_column(BigInteger())
@@ -172,5 +211,870 @@ class Payments(Base, ModelAdmin):
     )
 
 
-# engine = create_engine("sqlite:///db.db")
-# Base.metadata.create_all(engine)
+class FitnessProfile(Base):
+    __tablename__ = "fitness_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "goal IN ('muscle_gain', 'strength', 'fat_loss')",
+            name="ck_fitness_profiles_goal",
+        ),
+        CheckConstraint(
+            "experience_level IN ('beginner', 'intermediate', 'advanced')",
+            name="ck_fitness_profiles_experience_level",
+        ),
+        CheckConstraint(
+            "training_environment IS NULL OR training_environment IN "
+            "('gym', 'functional_gym', 'street', 'home')",
+            name="ck_fitness_profiles_training_environment",
+        ),
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    age: Mapped[int] = mapped_column(Integer())
+    sex: Mapped[str] = mapped_column(Text())
+    height_cm: Mapped[int] = mapped_column(Integer())
+    weight_kg: Mapped[float] = mapped_column(Float())
+    goal: Mapped[str] = mapped_column(Text())
+    experience_level: Mapped[str] = mapped_column(Text())
+    training_environment: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
+    workouts_per_week: Mapped[int] = mapped_column(Integer())
+    session_duration_minutes: Mapped[int] = mapped_column(Integer())
+    # Legacy-only: ordinary profile queries do not fetch health text.
+    limitations: Mapped[str | None] = mapped_column(Text(), nullable=True, deferred=True)
+    receipt_email: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+
+
+class UserAccess(Base):
+    __tablename__ = "user_access"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    trial_started_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    trial_consumed_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    subscription_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    subscription_ends_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+
+
+class SubscriptionPayment(Base):
+    __tablename__ = "subscription_payments"
+    __table_args__ = (
+        CheckConstraint(
+            "provider IN ('yookassa', 'payanyway', 'prodamus')",
+            name="ck_subscription_payments_provider",
+        ),
+        CheckConstraint(
+            "amount_minor > 0",
+            name="ck_subscription_payments_amount_minor",
+        ),
+        CheckConstraint(
+            "length(currency) = 3 AND currency = upper(currency)",
+            name="ck_subscription_payments_currency",
+        ),
+        CheckConstraint(
+            "period_days > 0",
+            name="ck_subscription_payments_period_days",
+        ),
+        CheckConstraint(
+            "status IN ('creating', 'pending', 'waiting_for_capture', "
+            "'succeeded', 'canceled', 'expired', 'failed')",
+            name="ck_subscription_payments_status",
+        ),
+        CheckConstraint(
+            "grant_ends_at IS NULL OR grant_started_at IS NULL "
+            "OR grant_ends_at >= grant_started_at",
+            name="ck_subscription_payments_grant_order",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_subscription_payments_idempotency_key",
+        ),
+        Index(
+            "uq_subscription_payments_provider_payment_id",
+            "provider",
+            "provider_payment_id",
+            unique=True,
+            sqlite_where=text("provider_payment_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_subscription_payments_merchant_transaction_id",
+            "provider",
+            "merchant_transaction_id",
+            unique=True,
+            sqlite_where=text("merchant_transaction_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_subscription_payments_active_user_product",
+            "user_id",
+            "product_code",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('creating', 'pending', 'waiting_for_capture')"
+            ),
+        ),
+        Index(
+            "ix_subscription_payments_user_created_at",
+            "user_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    provider: Mapped[str] = mapped_column(
+        Text(), server_default="yookassa"
+    )
+    provider_payment_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    merchant_transaction_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    # Immutable checkout contact for a website-first buyer before onboarding.
+    buyer_email: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(Text())
+    product_code: Mapped[str] = mapped_column(Text())
+    amount_minor: Mapped[int] = mapped_column(Integer())
+    currency: Mapped[str] = mapped_column(Text())
+    period_days: Mapped[int] = mapped_column(Integer())
+    status: Mapped[str] = mapped_column(Text(), server_default="creating")
+    confirmation_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    provider_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    cancellation_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    access_applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    grant_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    grant_ends_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+
+
+class PaymentRefund(Base):
+    """Confirmed full Prodamus refund; never overwrites the original paid grant."""
+
+    __tablename__ = "payment_refunds"
+    __table_args__ = (
+        CheckConstraint("amount_minor = 49900 AND currency = 'RUB'", name="ck_payment_refunds_full_amount"),
+        CheckConstraint("length(evidence_sha256) = 64", name="ck_payment_refunds_evidence"),
+        CheckConstraint("length(provider_refund_id) > 0", name="ck_payment_refunds_reference"),
+    )
+
+    payment_id: Mapped[int] = mapped_column(
+        ForeignKey("subscription_payments.id", ondelete="RESTRICT"), primary_key=True
+    )
+    provider_refund_id: Mapped[str] = mapped_column(Text(), unique=True)
+    evidence_sha256: Mapped[str] = mapped_column(Text())
+    amount_minor: Mapped[int] = mapped_column(Integer())
+    currency: Mapped[str] = mapped_column(Text())
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime())
+    reconciled_at: Mapped[datetime] = mapped_column(DateTime())
+    access_end_before: Mapped[datetime] = mapped_column(DateTime())
+    access_end_after: Mapped[datetime] = mapped_column(DateTime())
+
+
+class WebsitePurchaseSession(Base):
+    """Short-lived server-side state for the Telegram OIDC purchase journey."""
+
+    __tablename__ = "website_purchase_sessions"
+
+    session_token_hash: Mapped[str] = mapped_column(Text(), primary_key=True)
+    oauth_state_hash: Mapped[str] = mapped_column(Text(), unique=True)
+    oidc_nonce: Mapped[str] = mapped_column(Text())
+    pkce_verifier: Mapped[str] = mapped_column(Text())
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger(), nullable=True)
+    payment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subscription_payments.id", ondelete="SET NULL"), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime())
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+
+
+class PaymentReceipt(Base):
+    __tablename__ = "payment_receipts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'succeeded', "
+            "'retryable_failed', 'permanent_failed', 'voided')",
+            name="ck_payment_receipts_status",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_payment_receipts_attempts"),
+        CheckConstraint("amount_minor > 0", name="ck_payment_receipts_amount_minor"),
+        CheckConstraint(
+            "length(currency) = 3 AND currency = upper(currency)",
+            name="ck_payment_receipts_currency",
+        ),
+        CheckConstraint(
+            "service_period_days > 0",
+            name="ck_payment_receipts_period_days",
+        ),
+        CheckConstraint(
+            "length(item_description) > 0",
+            name="ck_payment_receipts_description",
+        ),
+        UniqueConstraint(
+            "subscription_payment_id",
+            name="uq_payment_receipts_subscription_payment",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_payment_receipts_idempotency"),
+        Index(
+            "uq_payment_receipts_provider_receipt_id",
+            "provider_receipt_id",
+            unique=True,
+            sqlite_where=text("provider_receipt_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_payment_receipts_delivery",
+            "status",
+            "next_attempt_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    subscription_payment_id: Mapped[int] = mapped_column(
+        ForeignKey("subscription_payments.id", ondelete="RESTRICT")
+    )
+    idempotency_key: Mapped[str] = mapped_column(Text())
+    status: Mapped[str] = mapped_column(Text(), server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer(), server_default="0")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    claim_token: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    provider_receipt_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    product_code: Mapped[str] = mapped_column(Text())
+    amount_minor: Mapped[int] = mapped_column(Integer())
+    currency: Mapped[str] = mapped_column(Text())
+    service_period_days: Mapped[int] = mapped_column(Integer())
+    item_description: Mapped[str] = mapped_column(Text())
+    payment_reference: Mapped[str] = mapped_column(Text())
+    buyer_contact: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    income_received_at: Mapped[datetime] = mapped_column(DateTime())
+    created_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+    succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(Text(), nullable=True)
+
+
+class Exercise(Base):
+    __tablename__ = "exercises"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(Text(), unique=True)
+    name: Mapped[str] = mapped_column(Text())
+    muscle_group: Mapped[str] = mapped_column(Text())
+    primary_muscle_group: Mapped[str] = mapped_column(Text())
+    equipment: Mapped[str] = mapped_column(Text())
+    variant: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    alternative_name: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    hint: Mapped[str] = mapped_column(Text())
+    restriction_tags: Mapped[str] = mapped_column(Text(), server_default="")
+    secondary_muscle_groups: Mapped[str] = mapped_column(
+        Text(), server_default=""
+    )
+    training_environments: Mapped[str] = mapped_column(
+        Text(), server_default="gym"
+    )
+    experience_levels: Mapped[str] = mapped_column(
+        Text(), server_default="beginner,intermediate,advanced"
+    )
+    movement_pattern: Mapped[str] = mapped_column(
+        Text(), server_default="isolation"
+    )
+    progression_type: Mapped[str] = mapped_column(
+        Text(), server_default="external_load_reps"
+    )
+    equivalence_group: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
+
+
+class WorkoutTemplate(Base):
+    __tablename__ = "workout_templates"
+    __table_args__ = (
+        CheckConstraint(
+            "goal IN ('muscle_gain', 'fat_loss')",
+            name="ck_workout_templates_goal",
+        ),
+        CheckConstraint(
+            "experience_level IN ('beginner', 'some_experience')",
+            name="ck_workout_templates_experience_level",
+        ),
+        CheckConstraint(
+            "workouts_per_week BETWEEN 1 AND 4",
+            name="ck_workout_templates_workouts_per_week",
+        ),
+        CheckConstraint(
+            "duration_bucket IN ('short', 'standard')",
+            name="ck_workout_templates_duration_bucket",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(Text(), unique=True)
+    name: Mapped[str] = mapped_column(Text())
+    goal: Mapped[str] = mapped_column(Text())
+    experience_level: Mapped[str] = mapped_column(Text())
+    workouts_per_week: Mapped[int] = mapped_column(Integer())
+    duration_bucket: Mapped[str] = mapped_column(Text())
+    equipment: Mapped[str] = mapped_column(Text())
+
+
+class WorkoutTemplateDay(Base):
+    __tablename__ = "workout_template_days"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_id",
+            "day_number",
+            name="uq_workout_template_days_order",
+        ),
+        CheckConstraint(
+            "day_number >= 1",
+            name="ck_workout_template_days_day_number",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    template_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_templates.id", ondelete="CASCADE")
+    )
+    day_number: Mapped[int] = mapped_column(Integer())
+    title: Mapped[str] = mapped_column(Text())
+
+
+class WorkoutTemplateExercise(Base):
+    __tablename__ = "workout_template_exercises"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_day_id",
+            "exercise_order",
+            name="uq_workout_template_exercises_order",
+        ),
+        CheckConstraint(
+            "exercise_order >= 1",
+            name="ck_workout_template_exercises_order",
+        ),
+        CheckConstraint("sets >= 1", name="ck_workout_template_exercises_sets"),
+        CheckConstraint(
+            "reps_min >= 1 AND reps_max >= reps_min",
+            name="ck_workout_template_exercises_reps",
+        ),
+        CheckConstraint(
+            "rest_seconds >= 0",
+            name="ck_workout_template_exercises_rest",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    template_day_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_template_days.id", ondelete="CASCADE")
+    )
+    exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("exercises.id", ondelete="RESTRICT")
+    )
+    exercise_order: Mapped[int] = mapped_column(Integer())
+    sets: Mapped[int] = mapped_column(Integer())
+    reps_min: Mapped[int] = mapped_column(Integer())
+    reps_max: Mapped[int] = mapped_column(Integer())
+    rest_seconds: Mapped[int] = mapped_column(Integer())
+
+
+class UserWorkoutPlan(Base):
+    __tablename__ = "user_workout_plans"
+    __table_args__ = (
+        CheckConstraint(
+            "plan_source IN ('generated', 'user_defined')",
+            name="ck_user_workout_plans_source",
+        ),
+        CheckConstraint(
+            "adaptation_mode IN ('strict', 'replacements', 'adaptive')",
+            name="ck_user_workout_plans_adaptation_mode",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
+    template_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_templates.id", ondelete="RESTRICT")
+    )
+    profile_signature: Mapped[str] = mapped_column(Text())
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    plan_source: Mapped[str] = mapped_column(Text(), server_default="generated")
+    adaptation_mode: Mapped[str] = mapped_column(Text(), server_default="adaptive")
+
+
+class UserWorkoutPlanDay(Base):
+    __tablename__ = "user_workout_plan_days"
+    __table_args__ = (
+        UniqueConstraint(
+            "plan_id",
+            "day_number",
+            name="uq_user_workout_plan_days_order",
+        ),
+        CheckConstraint(
+            "day_number >= 1",
+            name="ck_user_workout_plan_days_day_number",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey("user_workout_plans.id", ondelete="CASCADE")
+    )
+    day_number: Mapped[int] = mapped_column(Integer())
+    title: Mapped[str] = mapped_column(Text())
+
+
+class UserWorkoutPlanBlock(Base):
+    __tablename__ = "user_workout_plan_blocks"
+    __table_args__ = (
+        UniqueConstraint("plan_day_id", "block_order", name="uq_plan_blocks_order"),
+        CheckConstraint("block_order >= 1", name="ck_plan_blocks_order"),
+        CheckConstraint(
+            "workout_format IN ('standard_sets', 'amrap', 'emom', 'for_time', "
+            "'circuit_rounds')",
+            name="ck_plan_blocks_format",
+        ),
+        CheckConstraint(
+            "duration_seconds IS NULL OR duration_seconds > 0",
+            name="ck_plan_blocks_duration",
+        ),
+        CheckConstraint(
+            "target_rounds IS NULL OR target_rounds > 0",
+            name="ck_plan_blocks_rounds",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_day_id: Mapped[int] = mapped_column(
+        ForeignKey("user_workout_plan_days.id", ondelete="CASCADE")
+    )
+    block_order: Mapped[int] = mapped_column(Integer())
+    title: Mapped[str] = mapped_column(Text())
+    workout_format: Mapped[str] = mapped_column(Text())
+    duration_seconds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    target_rounds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+
+
+class UserWorkoutPlanExercise(Base):
+    __tablename__ = "user_workout_plan_exercises"
+    __table_args__ = (
+        UniqueConstraint(
+            "plan_day_id",
+            "exercise_order",
+            name="uq_user_workout_plan_exercises_order",
+        ),
+        CheckConstraint(
+            "exercise_order >= 1",
+            name="ck_user_workout_plan_exercises_order",
+        ),
+        CheckConstraint("sets >= 1", name="ck_user_workout_plan_exercises_sets"),
+        CheckConstraint(
+            "reps_min >= 1 AND reps_max >= reps_min",
+            name="ck_user_workout_plan_exercises_reps",
+        ),
+        CheckConstraint(
+            "rest_seconds >= 0",
+            name="ck_user_workout_plan_exercises_rest",
+        ),
+        CheckConstraint(
+            "progression_strategy IS NULL OR progression_strategy IN ("
+            "'hypertrophy_load_reps', 'strength_load_reps', 'bodyweight_reps')",
+            name="ck_user_workout_plan_exercises_progression_strategy",
+        ),
+        CheckConstraint(
+            "format_reps IS NULL OR format_reps >= 1",
+            name="ck_user_workout_plan_exercises_format_reps",
+        ),
+        CheckConstraint(
+            "station_order IS NULL OR station_order >= 1",
+            name="ck_user_workout_plan_exercises_station_order",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_day_id: Mapped[int] = mapped_column(
+        ForeignKey("user_workout_plan_days.id", ondelete="CASCADE")
+    )
+    plan_block_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plan_blocks.id", ondelete="SET NULL"), nullable=True
+    )
+    exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("exercises.id", ondelete="RESTRICT")
+    )
+    exercise_order: Mapped[int] = mapped_column(Integer())
+    exercise_name: Mapped[str] = mapped_column(Text())
+    primary_muscle_group: Mapped[str] = mapped_column(Text())
+    sets: Mapped[int] = mapped_column(Integer())
+    reps_min: Mapped[int] = mapped_column(Integer())
+    reps_max: Mapped[int] = mapped_column(Integer())
+    rest_seconds: Mapped[int] = mapped_column(Integer())
+    hint: Mapped[str] = mapped_column(Text())
+    progression_strategy: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    format_reps: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    station_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+
+
+class WorkoutSession(Base):
+    __tablename__ = "workout_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('in_progress', 'completed', 'cancelled')",
+            name="ck_workout_sessions_status",
+        ),
+        CheckConstraint(
+            "day_number >= 1",
+            name="ck_workout_sessions_day_number",
+        ),
+        CheckConstraint(
+            "(status = 'in_progress' AND finished_at IS NULL) OR "
+            "(status IN ('completed', 'cancelled') AND finished_at IS NOT NULL)",
+            name="ck_workout_sessions_finished_at",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR finished_at >= started_at",
+            name="ck_workout_sessions_time_order",
+        ),
+        CheckConstraint(
+            "plan_source IN ('generated', 'user_defined')",
+            name="ck_workout_sessions_plan_source",
+        ),
+        CheckConstraint(
+            "adaptation_mode IN ('strict', 'replacements', 'adaptive')",
+            name="ck_workout_sessions_adaptation_mode",
+        ),
+        CheckConstraint(
+            "effective_training_environment IS NULL OR "
+            "effective_training_environment IN "
+            "('gym', 'functional_gym', 'street', 'home')",
+            name="ck_workout_sessions_effective_training_environment",
+        ),
+        Index(
+            "uq_workout_sessions_active_user",
+            "user_id",
+            unique=True,
+            sqlite_where=text("status = 'in_progress'"),
+        ),
+        Index(
+            "ix_workout_sessions_user_finished_at",
+            "user_id",
+            "finished_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE")
+    )
+    source_plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plans.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_plan_day_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plan_days.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    day_number: Mapped[int] = mapped_column(Integer())
+    day_title: Mapped[str] = mapped_column(Text())
+    status: Mapped[str] = mapped_column(
+        Text(), server_default="in_progress"
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+    plan_source: Mapped[str] = mapped_column(Text(), server_default="generated")
+    adaptation_mode: Mapped[str] = mapped_column(Text(), server_default="adaptive")
+    effective_training_environment: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
+
+    exercises: Mapped[list["WorkoutSessionExercise"]] = relationship(
+        back_populates="workout_session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="WorkoutSessionExercise.exercise_order",
+    )
+
+
+class WorkoutSessionExercise(Base):
+    __tablename__ = "workout_session_exercises"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "exercise_order",
+            name="uq_workout_session_exercises_order",
+        ),
+        CheckConstraint(
+            "exercise_order >= 1",
+            name="ck_workout_session_exercises_order",
+        ),
+        CheckConstraint(
+            "planned_target_sets >= 1",
+            name="ck_workout_session_exercises_planned_sets",
+        ),
+        CheckConstraint(
+            "planned_target_reps_min >= 1 "
+            "AND planned_target_reps_max >= planned_target_reps_min",
+            name="ck_workout_session_exercises_planned_reps",
+        ),
+        CheckConstraint(
+            "planned_rest_seconds >= 0",
+            name="ck_workout_session_exercises_planned_rest",
+        ),
+        CheckConstraint(
+            "selected_target_sets >= 1",
+            name="ck_workout_session_exercises_selected_sets",
+        ),
+        CheckConstraint(
+            "selected_target_reps_min >= 1 "
+            "AND selected_target_reps_max >= selected_target_reps_min",
+            name="ck_workout_session_exercises_selected_reps",
+        ),
+        CheckConstraint(
+            "selected_rest_seconds >= 0",
+            name="ck_workout_session_exercises_selected_rest",
+        ),
+        CheckConstraint(
+            "planned_progression_strategy IS NULL OR "
+            "planned_progression_strategy IN ('hypertrophy_load_reps', "
+            "'strength_load_reps', 'bodyweight_reps')",
+            name="ck_workout_session_exercises_planned_progression_strategy",
+        ),
+        CheckConstraint(
+            "selected_progression_strategy IS NULL OR "
+            "selected_progression_strategy IN ('hypertrophy_load_reps', "
+            "'strength_load_reps', 'bodyweight_reps')",
+            name="ck_workout_session_exercises_selected_progression_strategy",
+        ),
+        CheckConstraint(
+            "planned_format_reps IS NULL OR planned_format_reps >= 1",
+            name="ck_workout_session_exercises_planned_format_reps",
+        ),
+        CheckConstraint(
+            "selected_format_reps IS NULL OR selected_format_reps >= 1",
+            name="ck_workout_session_exercises_selected_format_reps",
+        ),
+        CheckConstraint(
+            "planned_station_order IS NULL OR planned_station_order >= 1",
+            name="ck_workout_session_exercises_planned_station_order",
+        ),
+        CheckConstraint(
+            "selected_station_order IS NULL OR selected_station_order >= 1",
+            name="ck_workout_session_exercises_selected_station_order",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_sessions.id", ondelete="CASCADE")
+    )
+    source_plan_exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plan_exercises.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    session_block_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workout_session_blocks.id", ondelete="SET NULL"), nullable=True
+    )
+    exercise_order: Mapped[int] = mapped_column(Integer())
+
+    planned_exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("exercises.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    planned_exercise_name: Mapped[str] = mapped_column(Text())
+    planned_primary_muscle_group: Mapped[str] = mapped_column(Text())
+    planned_target_sets: Mapped[int] = mapped_column(Integer())
+    planned_target_reps_min: Mapped[int] = mapped_column(Integer())
+    planned_target_reps_max: Mapped[int] = mapped_column(Integer())
+    planned_rest_seconds: Mapped[int] = mapped_column(Integer())
+    planned_hint: Mapped[str] = mapped_column(Text())
+    planned_progression_strategy: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
+    planned_format_reps: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    planned_station_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+
+    selected_exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("exercises.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    selected_exercise_name: Mapped[str] = mapped_column(Text())
+    selected_primary_muscle_group: Mapped[str] = mapped_column(Text())
+    selected_target_sets: Mapped[int] = mapped_column(Integer())
+    selected_target_reps_min: Mapped[int] = mapped_column(Integer())
+    selected_target_reps_max: Mapped[int] = mapped_column(Integer())
+    selected_rest_seconds: Mapped[int] = mapped_column(Integer())
+    selected_hint: Mapped[str] = mapped_column(Text())
+    selected_progression_strategy: Mapped[str | None] = mapped_column(
+        Text(), nullable=True
+    )
+    selected_format_reps: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    selected_station_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+
+    workout_session: Mapped["WorkoutSession"] = relationship(
+        back_populates="exercises"
+    )
+    set_results: Mapped[list["WorkoutSetResult"]] = relationship(
+        back_populates="session_exercise",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="WorkoutSetResult.set_number",
+    )
+
+
+class WorkoutSetResult(Base):
+    __tablename__ = "workout_set_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_exercise_id",
+            "set_number",
+            name="uq_workout_set_results_set_number",
+        ),
+        CheckConstraint(
+            "set_number >= 1",
+            name="ck_workout_set_results_set_number",
+        ),
+        CheckConstraint(
+            "actual_weight_kg >= 0",
+            name="ck_workout_set_results_weight",
+        ),
+        CheckConstraint(
+            "actual_reps >= 1",
+            name="ck_workout_set_results_reps",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_session_exercises.id", ondelete="CASCADE")
+    )
+    set_number: Mapped[int] = mapped_column(Integer())
+    actual_weight_kg: Mapped[float] = mapped_column(Float())
+    actual_reps: Mapped[int] = mapped_column(Integer())
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(), server_default=func.now()
+    )
+
+    session_exercise: Mapped["WorkoutSessionExercise"] = relationship(
+        back_populates="set_results"
+    )
+
+
+class WorkoutSessionBlock(Base):
+    __tablename__ = "workout_session_blocks"
+    __table_args__ = (
+        UniqueConstraint("session_id", "block_order", name="uq_session_blocks_order"),
+        CheckConstraint("block_order >= 1", name="ck_session_blocks_order"),
+        CheckConstraint(
+            "workout_format IN ('standard_sets', 'amrap', 'emom', 'for_time', "
+            "'circuit_rounds')",
+            name="ck_session_blocks_format",
+        ),
+        CheckConstraint(
+            "duration_seconds IS NULL OR duration_seconds > 0",
+            name="ck_session_blocks_duration",
+        ),
+        CheckConstraint(
+            "target_rounds IS NULL OR target_rounds > 0",
+            name="ck_session_blocks_rounds",
+        ),
+        CheckConstraint("completed_rounds >= 0", name="ck_session_blocks_completed_rounds"),
+        CheckConstraint("partial_reps >= 0", name="ck_session_blocks_partial_reps"),
+        CheckConstraint("completed_minutes >= 0", name="ck_session_blocks_completed_minutes"),
+        CheckConstraint("missed_minutes >= 0", name="ck_session_blocks_missed_minutes"),
+        CheckConstraint(
+            "elapsed_seconds IS NULL OR elapsed_seconds >= 0",
+            name="ck_session_blocks_elapsed",
+        ),
+        CheckConstraint("final_score IS NULL OR final_score >= 0", name="ck_session_blocks_score"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_sessions.id", ondelete="CASCADE")
+    )
+    source_plan_block_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user_workout_plan_blocks.id", ondelete="SET NULL"), nullable=True
+    )
+    block_order: Mapped[int] = mapped_column(Integer())
+    title: Mapped[str] = mapped_column(Text())
+    workout_format: Mapped[str] = mapped_column(Text())
+    duration_seconds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    target_rounds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(), nullable=True)
+    completed_rounds: Mapped[int] = mapped_column(Integer(), server_default="0")
+    partial_station_order: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    partial_reps: Mapped[int] = mapped_column(Integer(), server_default="0")
+    completed_minutes: Mapped[int] = mapped_column(Integer(), server_default="0")
+    missed_minutes: Mapped[int] = mapped_column(Integer(), server_default="0")
+    elapsed_seconds: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    final_score: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())
+
+
+class WorkoutFormatIntervalResult(Base):
+    __tablename__ = "workout_format_interval_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_block_id", "minute_number", name="uq_format_interval_minute"
+        ),
+        CheckConstraint("minute_number >= 1", name="ck_format_interval_minute"),
+        CheckConstraint("station_order >= 1", name="ck_format_interval_station"),
+        CheckConstraint("completed IN (0, 1)", name="ck_format_interval_completed"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_block_id: Mapped[int] = mapped_column(
+        ForeignKey("workout_session_blocks.id", ondelete="CASCADE")
+    )
+    minute_number: Mapped[int] = mapped_column(Integer())
+    station_order: Mapped[int] = mapped_column(Integer())
+    completed: Mapped[int] = mapped_column(Integer())
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(), server_default=func.now())

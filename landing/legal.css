@@ -1,0 +1,33 @@
+/* Legal pages share Trainer OS materials without changing the frozen landing. */
+:root { color-scheme: dark; --ink: #edf2f6; --muted: #b5c1cf; --lime: #c7ff3d; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #090b0f; color: var(--ink); font: 17px/1.7 system-ui, sans-serif; }
+.legal-document { width: min(920px, 100% - 40px); margin: 40px auto; border: 1px solid #526174; border-radius: 8px; background: #12161d; overflow: hidden; box-shadow: 0 20px 70px #0006; }
+.document-bar { padding: 12px 24px; background: linear-gradient(#343e4d, #1d2633); border-bottom: 1px solid #607083; font: 700 13px/1.6 ui-monospace, monospace; letter-spacing: .06em; }
+.document-content { padding: 28px 36px; overflow-wrap: anywhere; }
+.document-content > :first-child { margin-top: 0; }
+h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.2; letter-spacing: -.02em; }
+h2 { font-size: 23px; line-height: 1.35; margin-top: 38px; scroll-margin-top: 20px; }
+a { color: var(--lime); text-underline-offset: .2em; }
+a:hover { color: #e6ffb0; }
+a:focus-visible { outline: 2px solid var(--lime); outline-offset: 4px; border-radius: 2px; }
+nav { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+nav a { padding: 4px 0; }
+.document-meta { color: var(--muted); font-size: 14px; }
+.document-summary { padding: 16px 20px; border: 1px solid #718e35; background: #c7ff3d09; }
+.document-note { border-left: 3px solid #88bdff; padding-left: 16px; color: var(--muted); }
+li + li { margin-top: 8px; }
+footer { margin-top: 36px; padding-top: 20px; border-top: 1px solid #526174; }
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  .legal-document { width: calc(100% - 24px); margin: 12px auto; }
+  .document-content { padding: 24px 18px; }
+  .document-bar { padding: 12px 18px; }
+  h2 { font-size: 21px; }
+}
+@media print {
+  body, .legal-document { background: white; color: black; }
+  .legal-document { width: 100%; margin: 0; border: 0; box-shadow: none; }
+  a, .document-meta, .document-note { color: black; }
+  .document-bar, nav { display: none; }
+}

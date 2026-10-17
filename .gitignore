@@ -1,2 +1,8 @@
 storage/.env
 .venv/
+__pycache__/
+*.py[cod]
+*.db-wal
+*.db-shm
+/backups/
+/tmp/

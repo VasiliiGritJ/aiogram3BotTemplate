@@ -1,22 +1,29 @@
-from dataclasses import dataclass
-from environs import Env
+"""Mutable process registry configured only by an explicit bot bootstrap."""
+
 from aiogram import Bot, Dispatcher, Router
-from aiogram.client.default import DefaultBotProperties
 
-def get_value_from_env(variable) -> str:
-    env = Env()
-    env.read_env("storage/.env")
-    return env(variable)
+from storage.runtime_config import BotRoleConfig, RuntimeConfigurationError
+from storage.telegram_session import create_telegram_bot
 
-bot_token = get_value_from_env("BOT_TOKEN")
-bot = Bot(bot_token, default=DefaultBotProperties(parse_mode='html'))
+
 dp = Dispatcher()
 router = Router()
+bot: Bot | None = None
+admins: list[int] = []
+systemdServiceName = ""
+DEBUG_MODE = False
+botUrl = "t.me/"
+telegram_proxy_url: str | None = None
 
 
-botUrl = "t.me/"                             # url бота, например t.me/somebot
-admins = []                                  # список ID админов (например - [123456, 7891011, 121314])
-
-systemdServiceName = "some_bot"              # имя сервиса systemd для перезапуска через админ панель, например some_bot
-
-DEBUG_MODE = False                          # Режим отладки (True/False), при True - в логах будет больше информации для отладки
+def configure_bot_role(config: BotRoleConfig) -> Bot:
+    global bot, systemdServiceName, DEBUG_MODE, telegram_proxy_url
+    if bot is not None:
+        raise RuntimeConfigurationError("Bot role is already configured.")
+    configured_bot = create_telegram_bot(config.bot_token, config.telegram_proxy_url)
+    bot = configured_bot
+    admins[:] = config.admin_ids
+    systemdServiceName = config.systemd_service_name
+    DEBUG_MODE = config.debug_mode
+    telegram_proxy_url = config.telegram_proxy_url
+    return configured_bot

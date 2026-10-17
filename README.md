@@ -1,65 +1,196 @@
-# Шаблон Telegram-бота на Aiogram 3
+# AI Trainer Telegram Bot
 
-## 📚 Описание
-Это полнофункциональный шаблон Telegram-бота на **aiogram 3.x** (текущая версия в requirements — 3.24.0). Включает админ‑панель, интеграцию оплаты, поддержку БД и модульную архитектуру для масштабируемой разработки.
+Русскоязычный Telegram-бот персонального фитнес-тренера на Python 3.12,
+aiogram 3, SQLAlchemy и SQLite. Проект включает детерминированные тренировочные
+программы, журнал и прогрессию, trial/подписку и отдельный HTTP runtime
+для уведомлений выбранного платёжного провайдера.
 
-## 🚀 Возможности
-- **Админ‑панель**: управление пользователями, рассылками и админ‑задачами.
-- **Оплата**: поддержка YooKassa (опционально).
-- **Напоминания**: планирование и отправка напоминаний.
-- **Профили пользователей**: хранение данных в базе.
-- **FSM‑состояния**: удобное управление состояниями диалога.
-- **Конфигурация окружения**: хранение секретов в `.env`.
+## Локальная разработка
 
-## 🛠️ Установка
+1. Создайте виртуальное окружение и установите зависимости из
+   `storage/requirements.txt`.
+2. Скопируйте `storage/.env.example` в локальный `storage/.env` и замените
+   заглушки. Этот файл игнорируется Git и никогда не должен коммититься.
+3. Примените миграции через maintenance-команду после создания проверенного
+   backup (см. ниже).
+4. Запустите bot role явно через локальный loader:
 
-1. Клонируйте репозиторий:
-   ```bash
-   git clone https://github.com/mlt-melt/aiogram3BotTemplate.git
-   cd aiogram3BotTemplate
+   ```powershell
+   .venv\Scripts\python.exe bot.py
    ```
 
-2. Установите зависимости:
-   ```bash
-   pip install -r storage/requirements.txt
-   ```
+Webhook в локальном test mode запускается отдельно и только по явному флагу:
 
-3. Создайте файл `.env` в `storage/` и добавьте токены бота и (опционально) YooKassa.
-
-4. Заполните `storage/config.py`: укажите URL бота и список ID администраторов.
-
-5. Запустите бота:
-   ```bash
-   python bot.py
-   ```
-
-## 📄 Конфигурация
-Настройки находятся в `.env` и `storage/config.py`.
-
-### Пример `.env`:
-```
-BOT_TOKEN=tg_bot_token
-YOOKASSA_SHOP_ID=your_shop_id
-YOOKASSA_SECRET_TOKEN=your_secret_token
+```powershell
+.venv\Scripts\python.exe payment_webhook_server.py --local-env
 ```
 
-## 💻 Использование
-- Запуск: `python bot.py`
-- Команды админ‑панели: `/admin`
-- Обработчики и команды находятся в `handlers/`
+Обычный `import bot` или импорт `storage.config` не читает `.env`, не создаёт
+Telegram client и не запускает сеть.
 
-## 🧠 Технологии
-- **Python**
-- **Aiogram 3.x**
-- **SQLite**
-- **YooKassa API**
+## Runtime roles и конфигурация
 
-## 📊 База данных
-- Используется SQLite база `db.db` для данных пользователей и сессий.
+Production получает настройки только из переменных окружения процесса.
+Наличие credentials само по себе не включает production: одновременно требуются
+`APP_ENV=production`, `PAYMENTS_MODE=production` и явный
+`PAYMENT_PROVIDER=payanyway|yookassa`. Для PayAnyWay режим входит в подпись
+запроса и PayURL; для YooKassa тип магазина проверяется fail-closed до создания
+платежа.
 
-## 👤 Автор
-**Melt**  
-[GitHub Profile](https://github.com/mlt-melt)
+Bot role (`python bot.py --production`) требует:
 
-## 📜 Лицензия
-Проект распространяется по лицензии MIT.
+- `APP_ENV`, абсолютный `DATABASE_PATH`;
+- `BOT_TOKEN`; опционально `TELEGRAM_PROXY_URL`;
+- опциональные `ADMIN_IDS`, `SYSTEMD_SERVICE_NAME`, `DEBUG_MODE`;
+- `PAYMENTS_MODE`, явный `PAYMENT_PROVIDER` и настройки выбранного провайдера:
+  `PAYANYWAY_MNT_ID`, `PAYANYWAY_INTEGRITY_CODE`, `PAYANYWAY_SUCCESS_URL`,
+  `PAYANYWAY_FAIL_URL`, `PAYANYWAY_RETURN_URL` либо прежние YooKassa values;
+- для paid production launch обязательны публичные HTTPS-значения
+  `PUBLIC_SITE_URL`, `TERMS_URL`, `PRIVACY_URL`, `REFUND_URL` и валидный
+  `SUPPORT_EMAIL`. Их отсутствие или некорректный формат останавливают startup
+  до создания платежа. В test/development режиме незаданные публичные ссылки
+  безопасно не показываются.
+
+Webhook role (`python payment_webhook_server.py`) требует:
+
+- `APP_ENV=production`, абсолютный `DATABASE_PATH`;
+- все payment-переменные выше;
+- `PAYMENT_WEBHOOK_BIND_HOST`, `PAYMENT_WEBHOOK_BIND_PORT`,
+  `PAYMENT_WEBHOOK_PATH`, `PAYMENT_WEBHOOK_PUBLIC_URL`. Публичный URL обязан
+  быть HTTPS и иметь тот же path, который слушает приватный HTTP role через
+  reverse proxy.
+
+Для PayAnyWay один и тот же endpoint принимает настроенный в кабинете Pay URL
+методом GET или POST form-urlencoded. Только валидная подпись PayURL меняет
+платёж и доступ; browser Success/Fail/Return URL ведут на статический landing и
+сами по себе подписку не активируют.
+
+Maintenance role не читает Telegram/YooKassa credentials: ему передаётся только
+явный путь к БД. Ошибки bootstrap не содержат значения секретов.
+
+## NPD income receipts
+
+Для выбранного launch route самозанятого платёж и чек разделены. YooKassa
+подтверждает оплату, а отдельный provider-neutral outbox хранит неизменяемое
+намерение зарегистрировать доходный чек НПД через «Мой налог» или будущего
+уполномоченного оператора. Это не моделируется как онлайн-касса/ККТ по 54-ФЗ и не
+является юридической гарантией: итоговую merchant/налоговую схему нужно подтвердить
+перед запуском.
+
+`RECEIPTS_MODE=disabled|test|production` задаётся явно. Локальная разработка без
+receipt provider сохраняет `disabled`. Production runtime fail-closed, пока не
+выбраны `RECEIPT_PROVIDER`, авторизованный adapter и его отдельные secrets. В Git
+нет и не должно быть реальных receipt credentials.
+
+Успешная авторитетно подтверждённая оплата атомарно выдаёт доступ и создаёт ровно
+один receipt intent. Повторный webhook/reconcile не создаёт новый чек и не
+продлевает доступ повторно. Ошибка доставки чека сохраняется для bounded retry, но
+не меняет подтверждённую оплату обратно на failed. Исторические платежи migration
+автоматически не фискализирует.
+
+Текущий server-side продукт: 499 RUB за 30 дней без автопродления. Неизменяемое
+описание receipt item: `Доступ к сервису «Мой AI Тренер» на 30 дней`; внутренний
+код `monthly_30d_v1` не используется как пользовательское описание. До перехода
+к оплате бот показывает стоимость, период, отсутствие автопродления, известный
+email для чека и ссылки на условия, приватность, возврат и поддержку. Реальные
+URL и контакт поддержки не коммитятся: production values передаются только
+окружением процессов.
+
+Email для доставки чеков не входит в fitness onboarding. При первом переходе к
+оплате бот запрашивает его один раз, валидирует и сохраняет в профиле как
+`receipt_email`; позже его можно посмотреть или изменить в разделе профиля. Этот
+адрес используется только для платёжных/receipt-сообщений текущего MVP, без
+маркетинговых рассылок. Новый receipt intent получает неизменяемый snapshot
+адреса; изменение профиля не переписывает уже созданный intent. Для PayAnyWay
+email передаётся как CUSTOMER, а неизменяемая серверная позиция — как INVENTORY.
+Полный подписанный MNT_RESPONSE возвращает эти значения для НПД; отдельный
+outbox остаётся durable audit intent и не блокирует выдачу доступа.
+
+## SQLite: два процесса
+
+Поддерживаемая MVP-схема — один bot process и один webhook process с одной
+persistent SQLite DB. Все SQLAlchemy connections централизованно получают:
+
+- `foreign_keys=ON`;
+- `busy_timeout=5000` мс и connection timeout 5 секунд;
+- WAL journal и `synchronous=NORMAL`.
+
+WAL позволяет коротким bot/webhook-транзакциям читать и писать без обычной
+блокировки reader-versus-writer. Каждый service operation создаёт собственную
+SQLAlchemy Session; Session не разделяется между потоками или процессами.
+Платёжная идемпотентность и атомарная выдача доступа остаются на уровне БД/service.
+
+SQLite не является целью для нескольких application replicas или высокой
+постоянной write-нагрузки. При появлении нескольких bot/webhook replicas,
+регулярном исчерпании busy timeout или необходимости HA следующий шаг —
+PostgreSQL, а не увеличение таймаутов.
+
+## Миграции, backup и restore
+
+Перед production migration:
+
+1. Остановить bot и webhook writers.
+2. Проверить абсолютный путь активной БД.
+3. Создать новый backup вне репозитория и вне каталога активной БД.
+4. Применить только pending migrations.
+5. Проверить `quick_check`, foreign keys и полный набор schema versions.
+6. Запускать webhook/bot только после PASS.
+
+Maintenance helper использует SQLite Backup API, поэтому snapshot включает
+закоммиченные данные WAL. Нельзя заменять его копированием одного `db.db` при
+активном WAL.
+
+```powershell
+.venv\Scripts\python.exe -m db.maintenance validate --database D:\data\trainer.db
+.venv\Scripts\python.exe -m db.maintenance backup --database D:\data\trainer.db --destination D:\backups\trainer-YYYYMMDD.db
+.venv\Scripts\python.exe -m db.maintenance migrate --database D:\data\trainer.db --backup D:\backups\trainer-pre-migration-YYYYMMDD.db --writers-stopped
+.venv\Scripts\python.exe -m db.maintenance restore-copy --backup D:\backups\trainer-YYYYMMDD.db --destination D:\restore-drill\trainer.db
+```
+
+Backup/restore destination должен быть новым: существующий файл не
+перезаписывается. При ошибке миграции процессы остаются остановленными; helper не
+делает автоматический restore. Восстановление выполняется оператором в новый файл
+после проверки причины и integrity.
+
+## Production startup и health
+
+Рекомендуемый порядок: migration gate → webhook process → bot process → внешний
+reverse proxy. TLS и публичный HTTPS endpoint принадлежат deploy/reverse-proxy
+слою, а webhook bind остаётся приватным.
+
+- `/health/live` подтверждает, что HTTP process жив;
+- `/health/ready` доступен только у runtime, собранного после успешной проверки
+  конфигурации и схемы.
+
+Health endpoints не вызывают YooKassa, не меняют БД и не раскрывают пути или
+секреты. При shutdown webhook освобождает DB engine; bot корректно останавливает
+polling, закрывает Telegram session, DB resources и single-instance guard.
+
+Runtime `db.db`, `db.db-wal`, `db.db-shm`, backups и `storage/.env` никогда не
+должны попадать в Git staging или deployment через Git.
+
+## Публичная landing-страница
+
+Каталог `landing/` содержит лёгкую русскоязычную статическую страницу «Мой AI
+Тренер»: она нужна одновременно для маркетинга и будущей payment compliance
+review. Она не запускает bot, не содержит payment credentials и пока не
+публикуется. Страница фиксирует launch offer: 499 ₽ за 30 дней доступа без
+автопродления, а также условия, приватность, возврат, поддержку и краткое
+fitness safety disclosure.
+
+Перед будущей production-публикацией обязательны публичные `PUBLIC_SITE_URL`,
+`TELEGRAM_BOT_URL`, `TELEGRAM_CHANNEL_URL`, `TERMS_URL`, `PRIVACY_URL`,
+`REFUND_URL`, `SELLER_FULL_NAME`, `SELLER_INN` и `SUPPORT_EMAIL`. Проверка
+`python -m landing.validate --production` использует только process environment
+и fail-closed при отсутствующих или некорректных значениях; настоящие ФИО, ИНН,
+домен и support contact не коммитятся.
+
+Для upload-ready артефакта обычного HTTPS hosting/CDN используется только process
+environment и команда `python -m landing.build --output <absolute-empty-directory>`.
+Она создаёт `index.html`, `styles.css`, `app.js` и `assets/` с production-подстановками.
+Публичные Telegram-адреса зафиксированы как `https://t.me/GritJBot` и
+`https://t.me/traineros`; legal URL для одностраничной архитектуры должны быть
+`https://<domain>/#terms`, `https://<domain>/#privacy` и
+`https://<domain>/#refund`. Landing нужно опубликовать за HTTPS до финального
+PayAnyWay compliance review; интеграция PayAnyWay остаётся отдельным утверждаемым
+этапом.
