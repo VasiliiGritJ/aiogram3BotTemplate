@@ -12,6 +12,7 @@ from storage.website_purchase_http import (
 )
 from storage.website_purchase_runtime import WebsitePurchaseRuntime
 from services.payment_domain import PaymentStatus
+from services.payment_refund import RefundStatus
 from services.prodamus import ProdamusCallbackReason, ProdamusCallbackResult, ProdamusOrder
 from services.website_purchase import WebsitePurchaseError
 
@@ -84,6 +85,7 @@ class WebsitePurchaseHttpTests(unittest.TestCase):
         for state, expected in (
             (PaymentStatus.PENDING, "обрабатывается"),
             (PaymentStatus.SUCCEEDED, "подтверждена"),
+            (RefundStatus.CONFIRMED, "Доступ по этому заказу отозван"),
             (PaymentStatus.FAILED, "не завершена"),
             (PaymentStatus.CANCELED, "не завершена"),
             (None, "Войдите через Telegram"),
@@ -164,6 +166,46 @@ class WebsitePurchaseHttpTests(unittest.TestCase):
         self.assertEqual("private, no-store", response.headers["Cache-Control"])
         self.assertEqual("no-referrer", response.headers["Referrer-Policy"])
         service.start_login.assert_not_called()
+
+    def test_paid_buyer_sees_bot_link_not_another_payment_form(self):
+        service = Mock()
+        service.is_authenticated.return_value = True
+        service.has_paid_access.return_value = True
+        response = asyncio.run(_buy_handler(self.runtime(service))(_Request()))
+        self.assertEqual(200, response.status)
+        self.assertIn("Повторная оплата не требуется", response.text)
+        self.assertIn("Открыть @GritJBot", response.text)
+        self.assertNotIn("/api/payment/create", response.text)
+        service.create_order.assert_not_called()
+
+    def test_off_authenticated_checkout_is_closed_without_starting_new_login(self):
+        service = Mock()
+        service.is_authenticated.return_value = True
+        service.has_paid_access.return_value = False
+        service.checkout_available.return_value = False
+        response = asyncio.run(_buy_handler(self.runtime(service))(_Request()))
+        self.assertEqual(503, response.status)
+        service.start_login.assert_not_called()
+        service.create_order.assert_not_called()
+
+    def test_client_amount_user_and_period_cannot_reach_order_creation(self):
+        service = Mock()
+        service.create_order.return_value = ProdamusOrder(1, "fixture", "https://fixture.payform.ru", "buyer@example.com", True)
+        values = {"email": "buyer@example.com", "csrf": _csrf_token("session-fixture"),
+                  "offer_version": OFFER_VERSION, "telegram_id": "999", "amount": "1", "period_days": "999"}
+        with self.assertRaises(web.HTTPSeeOther):
+            asyncio.run(_payment_create_handler(self.runtime(service))(_Request(values)))
+        service.create_order.assert_called_once_with("session-fixture", "buyer@example.com")
+
+
+    def test_session_expiring_during_buy_read_returns_safe_unauthorized(self):
+        service = Mock()
+        service.is_authenticated.return_value = True
+        service.has_paid_access.side_effect = WebsitePurchaseError("fixture-private-session")
+        response = asyncio.run(_buy_handler(self.runtime(service))(_Request()))
+        self.assertEqual(401, response.status)
+        self.assertNotIn("fixture-private-session", response.text)
+        service.create_order.assert_not_called()
 
 
 if __name__ == "__main__":

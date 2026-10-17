@@ -15,7 +15,7 @@ from db.models import SqliteSession, SubscriptionPayment, User, WebsitePurchaseS
 from services.payment_domain import PaymentStatus
 from services.prodamus import ProdamusConfig, ProdamusService, build_prodamus_signature
 from services.telegram_oidc import TelegramIdentity
-from services.website_purchase import WebsitePurchaseError, WebsitePurchaseService
+from services.website_purchase import PublicCheckoutGate, WebsitePurchaseError, WebsitePurchaseService
 
 
 SECRET = "fixture-prodamus-secret-not-production"
@@ -51,7 +51,7 @@ class WebsitePurchaseTests(unittest.TestCase):
             session_factory=self.db, now_factory=lambda: self.now,
         )
         self.service = WebsitePurchaseService(self.oidc, self.provider, session_factory=self.db,
-                                              now_factory=lambda: self.now)
+                                              now_factory=lambda: self.now, checkout_gate=PublicCheckoutGate())
 
     def tearDown(self):
         self.db.dispose()
@@ -121,6 +121,7 @@ class WebsitePurchaseTests(unittest.TestCase):
         order = self.service.create_order(token, "buyer@example.com")
         self.assertEqual(PaymentStatus.PENDING, self.service.inspect_order_status(token))
         payload = {"order_id": "operation-fixture", "order_num": order.transaction_id,
+                   "currency": "rub", "domain": "fixture.payform.ru",
                    "sum": "499.00", "customer_email": "buyer@example.com", "payment_status": "success"}
         signature = build_prodamus_signature(payload, SECRET)
         self.service.process_prodamus_notification(payload, signature)

@@ -35,7 +35,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         applied = run_migrations(session.engine)
         table_names = set(inspect(session.engine).get_table_names())
 
-        self.assertEqual(tuple(range(1, 18)), applied)
+        self.assertEqual(tuple(range(1, 19)), applied)
         self.assertTrue(
             {
                 "users",
@@ -67,9 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM schema_migrations"
             ).scalar_one()
 
-        self.assertEqual(tuple(range(1, 18)), first_run)
+        self.assertEqual(tuple(range(1, 19)), first_run)
         self.assertEqual((), second_run)
-        self.assertEqual(17, applied_count)
+        self.assertEqual(18, applied_count)
 
     def test_migration_three_preserves_stage_one_data(self) -> None:
         session = self.make_session("stage-one.db")
@@ -114,7 +114,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "FROM user_access WHERE user_id = 1"
             ).one()
 
-        self.assertEqual(tuple(range(3, 18)), applied)
+        self.assertEqual(tuple(range(3, 19)), applied)
         self.assertEqual(("muscle_gain", 3), profile)
         self.assertEqual(
             (
@@ -435,7 +435,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "FROM user_access ORDER BY user_id"
             ).fetchall()
 
-        self.assertEqual(tuple(range(8, 18)), run_migrations(session.engine))
+        self.assertEqual(tuple(range(8, 19)), run_migrations(session.engine))
         self.assertEqual((), run_migrations(session.engine, target_version=9))
 
         with session.engine.connect() as connection:
@@ -685,7 +685,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "(2, NULL, NULL)"
             )
 
-        self.assertEqual((15, 16, 17), run_migrations(session.engine))
+        self.assertEqual((15, 16, 17, 18), run_migrations(session.engine))
         self.assertEqual((), run_migrations(session.engine))
         with session.engine.connect() as connection:
             rows = connection.exec_driver_sql(
@@ -822,7 +822,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT * FROM payments ORDER BY id"
             ).fetchall()
 
-        self.assertEqual(tuple(range(1, 18)), applied)
+        self.assertEqual(tuple(range(1, 19)), applied)
         self.assertEqual(users_before, users_after)
         self.assertEqual(payments_before, payments_after)
 

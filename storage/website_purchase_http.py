@@ -14,7 +14,9 @@ from aiohttp import web
 
 from services.prodamus import ProdamusCallbackReason
 from services.payment_domain import PaymentStatus
-from services.website_purchase import WebsitePurchaseError
+from services.payment_refund import RefundStatus
+from services.website_purchase import WebsitePurchaseError, WebsiteLoginError, WebsiteLoginFailure
+from services.telegram_oidc import TelegramOidcFailure
 from services.private_offer import OFFER_VERSION
 from storage.website_purchase_runtime import WebsitePurchaseRuntime
 
@@ -39,12 +41,29 @@ def _buy_handler(runtime: WebsitePurchaseRuntime):
     async def handle(request: web.Request) -> web.Response:
         token = request.cookies.get(SESSION_COOKIE, "")
         if await asyncio.to_thread(runtime.service.is_authenticated, token):
+            try:
+                paid = await asyncio.to_thread(runtime.service.has_paid_access, token)
+                available = paid is True or await asyncio.to_thread(runtime.service.checkout_available, token)
+            except WebsitePurchaseError:
+                # The session can expire between these independent DB reads.
+                return web.Response(status=401, text="Сессия истекла. Откройте страницу покупки заново")
+            if paid is True:
+                return web.Response(
+                    text=("<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\">"
+                          "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                          "<p>Доступ уже оплачен. Повторная оплата не требуется.</p>"
+                          f'<a href="{escape(runtime.telegram_bot_url, quote=True)}">Открыть @GritJBot</a>'),
+                    content_type="text/html", charset="utf-8",
+                )
+            if not available:
+                return web.Response(status=503, text="Покупка временно недоступна")
             if runtime.offer is None:
                 return web.Response(status=503, text="Условия покупки временно недоступны")
             return web.Response(text=_email_page(token, runtime.offer.public.public_site_url), content_type="text/html", charset="utf-8")
         started = await asyncio.to_thread(runtime.service.start_login)
         response = web.HTTPFound(started.authorization_url)
         _set_session_cookie(response, started.session_token)
+        logger.warning("website_login event=login_started")
         raise response
     return handle
 
@@ -63,6 +82,13 @@ def _offer_handler(runtime: WebsitePurchaseRuntime):
 def _telegram_callback_handler(runtime: WebsitePurchaseRuntime):
     async def handle(request: web.Request) -> web.Response:
         token = request.cookies.get(SESSION_COOKIE, "")
+        # Standalone webhook uses Python's default WARNING threshold. Keep these
+        # temporary value-free launch diagnostics visible without global logging.
+        logger.warning(
+            "website_login event=callback_observed cookie_present=%s state_present=%s code_present=%s provider_error_present=%s",
+            bool(token), bool(request.query.get("state")), bool(request.query.get("code")),
+            bool(request.query.get("error")),
+        )
         try:
             await asyncio.to_thread(
                 runtime.service.complete_login,
@@ -70,8 +96,23 @@ def _telegram_callback_handler(runtime: WebsitePurchaseRuntime):
                 request.query.get("state", ""),
                 request.query.get("code", ""),
             )
-        except WebsitePurchaseError:
+        except WebsitePurchaseError as error:
+            # Only fixed enums and stage names are log data. Never log exceptions,
+            # callback values, browser headers, identity or provider payloads.
+            stage, reason, oidc_reason = "unknown", "unclassified", "unclassified"
+            if isinstance(error, WebsiteLoginError):
+                if error.stage in {"session_before_exchange", "exchange_or_identity", "session_after_exchange", "session_claim"}:
+                    stage = error.stage
+                if isinstance(error.reason, WebsiteLoginFailure):
+                    reason = error.reason.value
+                if isinstance(error.oidc_reason, TelegramOidcFailure):
+                    oidc_reason = error.oidc_reason.value
+            logger.warning("website_login event=callback_rejected stage=%s reason=%s oidc_reason=%s", stage, reason, oidc_reason)
             return web.Response(status=400, text="Вход через Telegram не подтверждён", content_type="text/plain")
+        except Exception:
+            logger.warning("website_login event=callback_rejected stage=unknown reason=internal_error oidc_reason=unclassified")
+            return web.Response(status=503, text="Вход временно недоступен", content_type="text/plain")
+        logger.warning("website_login event=login_completed")
         raise web.HTTPFound("/buy")
     return handle
 
@@ -185,7 +226,9 @@ def _return_page(runtime: WebsitePurchaseRuntime, *, success: bool):
         except WebsitePurchaseError:
             status = None
         text = pending_text
-        if status is PaymentStatus.SUCCEEDED:
+        if status is RefundStatus.CONFIRMED:
+            text = "Возврат оплаты подтверждён. Доступ по этому заказу отозван."
+        elif status is PaymentStatus.SUCCEEDED:
             text = "Оплата подтверждена. Доступ на 30 дней активирован."
         elif status in {PaymentStatus.FAILED, PaymentStatus.CANCELED, PaymentStatus.EXPIRED}:
             text = "Оплата не завершена. Можно вернуться и попробовать позже."

@@ -354,7 +354,7 @@ class PaymentService:
                     payment.cancellation_code = provider_payment.cancellation_code
                     payment.last_checked_at = self._now()
                     payment.updated_at = self._now()
-                    if transition.status is PaymentStatus.SUCCEEDED:
+                    if transition.status is PaymentStatus.SUCCEEDED and payment.confirmed_at is None:
                         payment.confirmed_at = self._now()
                 elif PaymentStatus(payment.status) is not PaymentStatus.SUCCEEDED:
                     return self._result_from_payment(

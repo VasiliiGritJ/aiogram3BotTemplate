@@ -18,7 +18,7 @@ from services.telegram_oidc import (
     TelegramOidcConfig,
     TelegramOidcError,
 )
-from services.website_purchase import WebsitePurchaseError, WebsitePurchaseService
+from services.website_purchase import PublicCheckoutGate, WebsitePurchaseError, WebsitePurchaseService
 
 
 NOW = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
@@ -48,11 +48,12 @@ class TelegramOidcTests(unittest.TestCase):
             "https://payments.traineros.ru/auth/telegram/callback",
         )
 
-    def token(self, *, nonce="nonce", subject="777", expires=NOW + timedelta(minutes=5)):
+    def token(self, *, nonce="nonce", subject="1234123412341234123", telegram_id=777, expires=NOW + timedelta(minutes=5)):
         header = _b64(json.dumps({"alg": "RS256", "kid": "telegram-test-key"}, separators=(",", ":")).encode())
         claims = _b64(json.dumps({
             "iss": "https://oauth.telegram.org", "aud": "123456", "exp": int(expires.timestamp()),
-            "nonce": nonce, "sub": subject, "name": "Telegram Buyer", "preferred_username": "buyer",
+            "nonce": nonce, "sub": subject, "id": telegram_id,
+            "name": "Telegram Buyer", "preferred_username": "buyer",
         }, separators=(",", ":")).encode())
         signed = f"{header}.{claims}".encode()
         signature = self.private_key.sign(signed, padding.PKCS1v15(), hashes.SHA256())
@@ -77,6 +78,44 @@ class TelegramOidcTests(unittest.TestCase):
         self.assertEqual(777, identity.telegram_user_id)
         self.assertEqual("buyer", identity.username)
 
+    def test_signed_profile_id_not_oidc_subject_is_telegram_identity(self):
+        for subject in ("1234123412341234123", "opaque-subject"):
+            with self.subTest(subject=subject):
+                identity = self.client(self.token(subject=subject)).exchange_code(
+                    code="code", verifier="v" * 43, expected_nonce="nonce"
+                )
+                self.assertEqual(777, identity.telegram_user_id)
+
+    def test_missing_or_invalid_telegram_profile_id_fails_closed(self):
+        for telegram_id in (None, True, "00777", " 777", "+777", "777.0", 777.0, "٧٧٧", 0, -1, 2**63):
+            with self.subTest(telegram_id=telegram_id):
+                with self.assertRaises(TelegramOidcError):
+                    self.client(self.token(telegram_id=telegram_id)).exchange_code(
+                        code="code", verifier="v" * 43, expected_nonce="nonce"
+                    )
+
+    def test_signed_integer_and_canonical_decimal_profile_id_have_same_identity(self):
+        for value in (1, 777, 2**53 + 1, 2**63 - 1):
+            for representation in (value, str(value)):
+                with self.subTest(case="signed-profile-id", type=type(representation).__name__):
+                    identity = self.client(self.token(subject="different-opaque-subject", telegram_id=representation)).exchange_code(
+                        code="fixture-code", verifier="v" * 43, expected_nonce="nonce"
+                    )
+                    self.assertIs(type(identity.telegram_user_id), int)
+                    self.assertEqual(value, identity.telegram_user_id)
+
+    def test_decimal_profile_id_does_not_bypass_nonce_expiry_or_signature(self):
+        for token, nonce in (
+            (self.token(telegram_id="777", nonce="wrong"), "nonce"),
+            (self.token(telegram_id="777", expires=NOW), "nonce"),
+        ):
+            with self.assertRaises(TelegramOidcError):
+                self.client(token).exchange_code(code="fixture-code",verifier="v" * 43,expected_nonce=nonce)
+        parts=self.token(telegram_id="777").split(".")
+        parts[2]=_b64(b"invalid-signature")
+        with self.assertRaises(TelegramOidcError):
+            self.client(".".join(parts)).exchange_code(code="fixture-code",verifier="v" * 43,expected_nonce="nonce")
+
     def test_invalid_or_expired_id_token_is_rejected(self):
         for token, nonce in (
             (self.token(nonce="other"), "nonce"),
@@ -91,7 +130,7 @@ class TelegramOidcTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         database = SqliteSession(sqlite_url(Path(temp.name) / "oidc.db"))
         try:
-            self.assertEqual(tuple(range(1, 18)), run_migrations(database.engine))
+            self.assertEqual(tuple(range(1, 19)), run_migrations(database.engine))
             prodamus = ProdamusService(
                 ProdamusConfig(
                     "https://trainer.payform.ru/", "test-prodamus-secret-key-not-production",
@@ -104,12 +143,13 @@ class TelegramOidcTests(unittest.TestCase):
             service = WebsitePurchaseService(
                 self.client(self.token()), prodamus, session_factory=database,
                 now_factory=lambda: NOW.replace(tzinfo=None),
+                checkout_gate=PublicCheckoutGate(),
             )
             started = service.start_login()
             query = parse_qs(urlparse(started.authorization_url).query)
             state = query["state"][0]
             nonce = query["nonce"][0]
-            service._oidc._token_request = lambda fields: {"id_token": self.token(nonce=nonce)}
+            service._oidc._token_request = lambda fields: {"id_token": self.token(nonce=nonce, telegram_id="777")}
             identity = service.complete_login(started.session_token, state, "code")
             self.assertEqual(777, identity.telegram_user_id)
             with self.assertRaises(WebsitePurchaseError):
@@ -120,6 +160,8 @@ class TelegramOidcTests(unittest.TestCase):
                 "order_id": "provider-oidc-operation-1",
                 "order_num": order.transaction_id,
                 "sum": "499.00",
+                "currency": "rub",
+                "domain": "trainer.payform.ru",
                 "customer_email": "buyer@example.com",
                 "payment_status": "success",
             }

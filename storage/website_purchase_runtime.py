@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 from urllib.parse import urlparse
 
 from services.prodamus import ProdamusConfig, ProdamusService
 from services.telegram_oidc import TelegramOidcClient, TelegramOidcConfig
-from services.website_purchase import WebsitePurchaseService
+from services.website_purchase import WebsitePurchaseService, ControlledCheckoutGate, PublicCheckoutGate
 from services.private_offer import PrivateOffer
 from storage.runtime_config import SettingsReader
 
@@ -46,11 +47,13 @@ def build_website_purchase_runtime(settings: SettingsReader) -> WebsitePurchaseR
         base_url = _https_url(settings("WEBSITE_PURCHASE_BASE_URL"), origin_only=True)
         telegram_bot_url = _https_url(settings("TELEGRAM_BOT_URL"))
         offer = PrivateOffer.from_settings(settings)
+        checkout_gate = _checkout_gate(settings)
         callback_url = f"{base_url}/auth/telegram/callback"
         config = TelegramOidcConfig(
             client_id=settings("TELEGRAM_OIDC_CLIENT_ID"),
             client_secret=settings("TELEGRAM_OIDC_CLIENT_SECRET"),
             redirect_uri=callback_url,
+            proxy_url=settings.optional("TELEGRAM_OIDC_PROXY_URL"),
         )
         prodamus = ProdamusService(ProdamusConfig(
             payform_url=_https_url(settings("PRODAMUS_PAYFORM_URL")),
@@ -66,11 +69,29 @@ def build_website_purchase_runtime(settings: SettingsReader) -> WebsitePurchaseR
             "Website purchase configuration is incomplete."
         ) from None
     return WebsitePurchaseRuntime(
-        WebsitePurchaseService(TelegramOidcClient(config), prodamus),
+        WebsitePurchaseService(TelegramOidcClient(config), prodamus, checkout_gate=checkout_gate),
         base_url,
         telegram_bot_url,
         offer,
     )
+
+
+def _checkout_gate(settings: SettingsReader) -> ControlledCheckoutGate | PublicCheckoutGate:
+    mode = settings.optional("WEBSITE_CHECKOUT_MODE") or "off"
+    if mode == "off":
+        return ControlledCheckoutGate()
+    if mode == "public":
+        return PublicCheckoutGate()
+    if mode != "controlled":
+        raise ValueError("Checkout mode is invalid.")
+    identity = settings("WEBSITE_CHECKOUT_TELEGRAM_USER_ID")
+    expiry = settings("WEBSITE_CHECKOUT_EXPIRES_AT")
+    if not identity.isascii() or not identity.isdecimal() or len(identity) > 19 or identity.startswith("0"):
+        raise ValueError("Checkout identity is invalid.")
+    deadline = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+    if deadline.tzinfo is None or deadline.utcoffset().total_seconds() != 0:
+        raise ValueError("Checkout deadline must be UTC.")
+    return ControlledCheckoutGate(int(identity), deadline)
 
 
 def _https_url(value: str, *, origin_only: bool = False) -> str:

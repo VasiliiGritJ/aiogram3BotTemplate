@@ -1236,6 +1236,27 @@ def _add_website_checkout_support(connection: Connection) -> None:
     )
 
 
+def _add_confirmed_payment_refunds(connection: Connection) -> None:
+    """Add audit-only refund history without rebuilding any existing table."""
+    connection.exec_driver_sql(
+        """CREATE TABLE payment_refunds (
+            payment_id INTEGER NOT NULL PRIMARY KEY,
+            provider_refund_id TEXT NOT NULL UNIQUE,
+            evidence_sha256 TEXT NOT NULL,
+            amount_minor INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            confirmed_at DATETIME NOT NULL,
+            reconciled_at DATETIME NOT NULL,
+            access_end_before DATETIME NOT NULL,
+            access_end_after DATETIME NOT NULL,
+            CONSTRAINT ck_payment_refunds_full_amount CHECK (amount_minor = 49900 AND currency = 'RUB'),
+            CONSTRAINT ck_payment_refunds_evidence CHECK (length(evidence_sha256) = 64),
+            CONSTRAINT ck_payment_refunds_reference CHECK (length(provider_refund_id) > 0),
+            FOREIGN KEY(payment_id) REFERENCES subscription_payments(id) ON DELETE RESTRICT
+        )"""
+    )
+
+
 MIGRATIONS = (
     Migration(1, "baseline_existing_schema", _create_baseline_schema),
     Migration(2, "fitness_profile_and_access", _create_fitness_foundation),
@@ -1262,6 +1283,7 @@ MIGRATIONS = (
     Migration(15, "durable_trial_consumption", _add_durable_trial_consumption),
     Migration(16, "payanyway_payment_identity", _add_payanyway_payment_identity),
     Migration(17, "website_checkout_prodamus", _add_website_checkout_support),
+    Migration(18, "confirmed_full_payment_refunds", _add_confirmed_payment_refunds),
 )
 
 

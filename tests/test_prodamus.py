@@ -32,7 +32,7 @@ class ProdamusTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.db = SqliteSession(sqlite_url(Path(self.temp.name) / "prodamus.db"))
-        self.assertEqual(tuple(range(1, 18)), run_migrations(self.db.engine))
+        self.assertEqual(tuple(range(1, 19)), run_migrations(self.db.engine))
         with self.db.engine.begin() as connection:
             connection.exec_driver_sql(
                 "INSERT INTO users(id, tg_id, fullname, username, inviter_id) "
@@ -69,6 +69,8 @@ class ProdamusTests(unittest.TestCase):
             "order_id": "provider-operation-1",
             "order_num": order.transaction_id,
             "sum": "499.00",
+            "currency": "rub",
+            "domain": "trainer.payform.ru",
             "customer_email": "buyer@example.com",
             "payment_status": "success",
         }
@@ -156,6 +158,36 @@ class ProdamusTests(unittest.TestCase):
         self.assertEqual(NOW + timedelta(days=30), access.subscription_ends_at)
         with self.db() as session:
             self.assertEqual(1, len(session.scalars(select(PaymentReceipt)).all()))
+
+    def test_signed_wrong_currency_or_channel_cannot_claim_payment_or_access(self):
+        for changes, reason in (
+            ({"currency": "usd"}, ProdamusCallbackReason.CURRENCY_MISMATCH),
+            ({"currency": "eur"}, ProdamusCallbackReason.CURRENCY_MISMATCH),
+            ({"domain": "other.payform.ru"}, ProdamusCallbackReason.DOMAIN_MISMATCH),
+            ({"domain": "trainer.payform.ru.attacker.invalid"}, ProdamusCallbackReason.DOMAIN_MISMATCH),
+            ({"domain": "https://trainer.payform.ru"}, ProdamusCallbackReason.DOMAIN_MISMATCH),
+        ):
+            with self.subTest(changes=changes):
+                payload, signature = self.signed(**changes)
+                result = self.service.process_notification(payload, signature)
+                self.assertFalse(result.accepted)
+                self.assertEqual(reason, result.reason)
+                payment, access = self.payment_and_access()
+                self.assertIsNone(payment.provider_payment_id)
+                self.assertIsNone(access.subscription_ends_at)
+                with self.db() as session:
+                    self.assertIsNone(session.scalar(select(PaymentReceipt)))
+
+    def test_currency_and_channel_are_required_signed_fields(self):
+        for name in ("currency", "domain"):
+            with self.subTest(name=name):
+                payload = self.payload()
+                del payload[name]
+                signature = build_prodamus_signature(payload, SECRET)
+                result = self.service.process_notification(payload, signature)
+                self.assertFalse(result.accepted)
+                self.assertEqual(ProdamusCallbackReason.MALFORMED, result.reason)
+                self.assertIsNone(self.payment_and_access()[1].subscription_ends_at)
 
     def test_browser_return_cannot_grant_access(self):
         order = self.order()

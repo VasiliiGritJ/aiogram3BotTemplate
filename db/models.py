@@ -379,6 +379,29 @@ class SubscriptionPayment(Base):
     )
 
 
+class PaymentRefund(Base):
+    """Confirmed full Prodamus refund; never overwrites the original paid grant."""
+
+    __tablename__ = "payment_refunds"
+    __table_args__ = (
+        CheckConstraint("amount_minor = 49900 AND currency = 'RUB'", name="ck_payment_refunds_full_amount"),
+        CheckConstraint("length(evidence_sha256) = 64", name="ck_payment_refunds_evidence"),
+        CheckConstraint("length(provider_refund_id) > 0", name="ck_payment_refunds_reference"),
+    )
+
+    payment_id: Mapped[int] = mapped_column(
+        ForeignKey("subscription_payments.id", ondelete="RESTRICT"), primary_key=True
+    )
+    provider_refund_id: Mapped[str] = mapped_column(Text(), unique=True)
+    evidence_sha256: Mapped[str] = mapped_column(Text())
+    amount_minor: Mapped[int] = mapped_column(Integer())
+    currency: Mapped[str] = mapped_column(Text())
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime())
+    reconciled_at: Mapped[datetime] = mapped_column(DateTime())
+    access_end_before: Mapped[datetime] = mapped_column(DateTime())
+    access_end_after: Mapped[datetime] = mapped_column(DateTime())
+
+
 class WebsitePurchaseSession(Base):
     """Short-lived server-side state for the Telegram OIDC purchase journey."""
 

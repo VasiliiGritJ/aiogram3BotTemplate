@@ -7,7 +7,7 @@ only prepares a signed hosted form and accepts an already signed notification.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from hashlib import sha256
@@ -23,10 +23,11 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from db.models import SubscriptionPayment, User, UserAccess, dbSession
+from db.models import PaymentRefund, SubscriptionPayment, User, UserAccess, dbSession
 from services.access import as_utc_naive, utc_now
 from services.commercial_product import LAUNCH_COMMERCIAL_PRODUCT
 from services.payment_domain import PaymentStatus
+from services.payment_refund import RefundStatus
 from services.payment_provider import ProviderPayment
 from services.payment_service import PaymentService, PaymentServiceReason
 from services.receipt_email import normalize_receipt_email, receipt_email_in_session
@@ -47,6 +48,8 @@ class ProdamusCallbackReason(StrEnum):
     MALFORMED = "malformed"
     PAYMENT_NOT_FOUND = "payment_not_found"
     AMOUNT_MISMATCH = "amount_mismatch"
+    CURRENCY_MISMATCH = "currency_mismatch"
+    DOMAIN_MISMATCH = "domain_mismatch"
     CUSTOMER_MISMATCH = "customer_mismatch"
     OPERATION_MISMATCH = "operation_mismatch"
     STATUS_REJECTED = "status_rejected"
@@ -157,17 +160,51 @@ class ProdamusService:
             provider_name=PRODAMUS_PROVIDER,
         )
 
-    def create_order(self, user_id: int, customer_email: str) -> ProdamusOrder:
+    def create_order(self, user_id: int, customer_email: str, *, single_order: bool = False,
+                     creation_deadline: datetime | None = None,
+                     expected_payment_id: int | None = None,
+                     public_checkout: bool = False) -> ProdamusOrder:
         email = normalize_receipt_email(customer_email)
-        active = self._find_active_order(user_id)
-        if active is not None:
-            self._assert_customer(active, email)
-            logger.info("prodamus event=order_reused payment_id=%d", active.id)
-            return self._order_from_payment(active, email, created=False)
         try:
             with self._session_factory() as session:
                 with session.begin():
+                    # Serialize quota/paid-state/active-order checks and insert
+                    # across independent browser sessions and worker instances.
+                    session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                    now = self._now()
+                    if creation_deadline is not None and now >= as_utc_naive(creation_deadline):
+                        raise PermissionError("Checkout creation lease expired.")
                     self._assert_user_and_access(session, user_id)
+                    access = session.get(UserAccess, user_id)
+                    if (public_checkout and access.subscription_ends_at is not None
+                            and access.subscription_ends_at > now):
+                        raise PermissionError("Access is already paid.")
+                    if expected_payment_id is not None:
+                        bound = session.get(SubscriptionPayment, expected_payment_id)
+                        if (bound is None or bound.user_id != user_id or bound.provider != PRODAMUS_PROVIDER
+                                or bound.status != PaymentStatus.PENDING.value):
+                            raise PermissionError("Purchase session order cannot be reused.")
+                    active = session.scalar(select(SubscriptionPayment).where(
+                        SubscriptionPayment.user_id == user_id,
+                        SubscriptionPayment.product_code == self._product.product_code,
+                        SubscriptionPayment.status.in_(("creating", "pending", "waiting_for_capture")),
+                    ))
+                    if active is not None:
+                        self._assert_reusable_order(active, email, now, public_checkout)
+                        if expected_payment_id is not None and active.id != expected_payment_id:
+                            raise PermissionError("Purchase session order mismatch.")
+                        logger.info("prodamus event=order_reused payment_id=%d", active.id)
+                        return self._order_from_payment(active, email, created=False)
+                    if expected_payment_id is not None:
+                        raise PermissionError("Purchase session order is no longer pending.")
+                    if single_order:
+                        existing = session.scalar(select(SubscriptionPayment).where(
+                            SubscriptionPayment.user_id == user_id,
+                            SubscriptionPayment.provider == PRODAMUS_PROVIDER,
+                            SubscriptionPayment.product_code == self._product.product_code,
+                        ).order_by(SubscriptionPayment.id))
+                        if existing is not None:
+                            raise PermissionError("Controlled checkout order limit reached.")
                     existing_email = receipt_email_in_session(session, user_id)
                     if existing_email is not None and existing_email != email:
                         raise PermissionError("Receipt email mismatch.")
@@ -185,8 +222,8 @@ class ProdamusService:
                         currency=self._product.currency,
                         period_days=self._product.period_days,
                         status=PaymentStatus.PENDING.value,
-                        created_at=self._now(),
-                        updated_at=self._now(),
+                        created_at=now,
+                        updated_at=now,
                     )
                     session.add(payment)
                     session.flush()
@@ -194,11 +231,23 @@ class ProdamusService:
                     logger.info("prodamus event=order_created payment_id=%d", payment.id)
                     return self._order_from_payment(payment, email, created=True)
         except IntegrityError:
-            active = self._find_active_order(user_id)
-            if active is None:
-                raise
-            self._assert_customer(active, email)
-            return self._order_from_payment(active, email, created=False)
+            # No retry with an unlocked stale snapshot after a failed insert.
+            raise PermissionError("Payment order could not be safely created.") from None
+
+    def _assert_reusable_order(self, payment: SubscriptionPayment, email: str,
+                               now: datetime, public_checkout: bool) -> None:
+        self._assert_customer(payment, email)
+        if (payment.provider != PRODAMUS_PROVIDER or payment.status != PaymentStatus.PENDING.value
+                or (payment.amount_minor, payment.currency, payment.period_days)
+                != (self._product.amount_minor, self._product.currency, self._product.period_days)
+                or not payment.merchant_transaction_id or not payment.confirmation_url):
+            raise PermissionError("Pending payment requires reconciliation.")
+        if public_checkout and (payment.created_at > now or now - payment.created_at >= timedelta(hours=24)):
+            # Application resumption window only, NOT provider expiry/cancellation.
+            # Keep potentially payable history and block a second checkout.
+            raise PermissionError("Pending payment requires reconciliation.")
+        if payment.confirmation_url != self._build_checkout_url(payment, email):
+            raise PermissionError("Pending payment checkout mismatch.")
 
     def process_notification(
         self, payload: Mapping[str, object], signature: str | None
@@ -217,6 +266,10 @@ class ProdamusService:
         # from a browser return. Confirm negative notification formats at activation.
         if fields["payment_status"].lower() != "success":
             return ProdamusCallbackResult(False, ProdamusCallbackReason.STATUS_REJECTED)
+        if fields["currency"].lower() != self._product.currency.lower():
+            return ProdamusCallbackResult(False, ProdamusCallbackReason.CURRENCY_MISMATCH)
+        if fields["domain"].lower() != urlparse(self._config.payform_url).hostname:
+            return ProdamusCallbackResult(False, ProdamusCallbackReason.DOMAIN_MISMATCH)
         with self._session_factory() as session:
             payment = session.scalar(
                 select(SubscriptionPayment).where(
@@ -279,14 +332,17 @@ class ProdamusService:
                 payment is not None
                 and payment.status == PaymentStatus.SUCCEEDED.value
                 and payment.access_applied_at is not None
+                and session.get(PaymentRefund, payment.id) is None
             )
 
-    def inspect_order_status(self, payment_id: int, *, user_id: int) -> PaymentStatus | None:
+    def inspect_order_status(self, payment_id: int, *, user_id: int) -> PaymentStatus | RefundStatus | None:
         """Read the session-bound order; no redirect may change payment state."""
         with self._session_factory() as session:
             payment = session.get(SubscriptionPayment, payment_id)
             if payment is None or payment.provider != PRODAMUS_PROVIDER or payment.user_id != user_id:
                 return None
+            if session.get(PaymentRefund, payment.id) is not None:
+                return RefundStatus.CONFIRMED
             if payment.status == PaymentStatus.SUCCEEDED.value and payment.access_applied_at is None:
                 return PaymentStatus.PENDING
             return PaymentStatus(payment.status)
@@ -397,7 +453,7 @@ def _query_pairs(fields: Mapping[str, object]) -> list[tuple[str, str]]:
 
 
 def _notification_fields(payload: Mapping[str, object]) -> dict[str, str] | None:
-    required = ("order_id", "order_num", "sum", "customer_email", "payment_status")
+    required = ("order_id", "order_num", "sum", "currency", "domain", "customer_email", "payment_status")
     if not isinstance(payload, Mapping):
         return None
     result: dict[str, str] = {}
